@@ -22,6 +22,8 @@ public struct SweepMeasurementResult {
     public let loopbackGain: Double?
     /// Peak level of each mic recording, dBFS, to warn about clipping or too little level.
     public let micPeakLevels: [Double]
+    /// Peak level of the loopback recording, dBFS. A clipped loopback distorts every impulse response.
+    public let loopbackPeakLevel: Double?
 }
 
 public enum SweepProcessing {
@@ -66,13 +68,15 @@ public enum SweepProcessing {
             return scale == 1 ? ir : ir.map { $0 * scale }
         }
 
-        let peaks = mics.map { m -> Double in
-            let p = m.map(abs).max() ?? 0
+        func peakDB(_ x: [Double]) -> Double {
+            let p = x.map(abs).max() ?? 0
             return p > 0 ? 20 * log10(p) : -.infinity
         }
+        let peaks = mics.map(peakDB)
         return SweepMeasurementResult(sampleRate: sweep.sampleRate, impulseResponses: irs,
                                       timingReference: loopback == nil ? .generated : .loopback,
-                                      loopbackLatency: latency, loopbackGain: gain, micPeakLevels: peaks)
+                                      loopbackLatency: latency, loopbackGain: gain, micPeakLevels: peaks,
+                                      loopbackPeakLevel: loopback.map(peakDB))
     }
 
     private static func energy(_ x: [Double]) -> Double {

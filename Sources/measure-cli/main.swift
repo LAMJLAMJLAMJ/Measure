@@ -220,7 +220,12 @@ func measure(_ args: Arguments) async throws {
 
     if let latency = result.loopbackLatency {
         print("Timing: loopback reference, round-trip latency \(fmt(latency, 1)) samples (\(fmt(latency / fs * 1000, 2)) ms)")
-        if let gain = result.loopbackGain { print("Loopback level: \(fmt(20 * log10(gain), 1)) dB (levels below are relative to the sweep's full scale)") }
+        if let gain = result.loopbackGain {
+            print("Loopback level: \(fmt(20 * log10(gain), 1)) dB (levels below are relative to the sweep's full scale)")
+        }
+        if let peak = result.loopbackPeakLevel, peak > -1 {
+            print("WARNING: the loopback input clipped (peak \(fmt(peak, 1)) dBFS), which distorts every impulse response. Lower --level or the loopback input gain.")
+        }
     } else {
         print("Timing: generated sweep (no loopback), so delays include the interface latency")
     }

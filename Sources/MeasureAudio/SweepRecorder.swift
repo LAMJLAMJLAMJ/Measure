@@ -112,11 +112,16 @@ public final class SweepRecorder {
         try await waitUntil(timeout: 5) { state.pointee.capturedFrames >= prerollFrames }
         try check(AudioOutputUnitStart(output), "starting output")
 
-        // Run until the signal has played and the input has caught up with it.
+        // Run until the signal has played and the input has caught up with it. The input must run past
+        // where the signal started (which depends on when the output's first buffer was requested)
+        // by the signal's length, plus a little for the interface's latency.
         let timeout = Double(signal.count) / sampleRate + 10
         try await waitUntil(timeout: timeout) {
-            state.pointee.playedFrames >= signal.count
-                && state.pointee.capturedFrames >= min(capacity, prerollFrames + signal.count + Int(0.1 * sampleRate))
+            let now = state.pointee
+            guard now.playedFrames >= signal.count, now.firstOutputHostTime > 0 else { return false }
+            let start = self.startOffset(firstInput: now.firstInputHostTime, firstOutput: now.firstOutputHostTime,
+                                         sampleRate: sampleRate, fallback: prerollFrames)
+            return now.capturedFrames >= min(capacity, start + signal.count + Int(0.05 * sampleRate))
         }
         AudioOutputUnitStop(output)
         AudioOutputUnitStop(input)
@@ -127,12 +132,8 @@ public final class SweepRecorder {
         // Align: drop the input captured before the first played sample, using the host clock
         // timestamps of the first input and output buffers.
         let s = state.pointee
-        var offset = prerollFrames
-        if s.firstInputHostTime > 0, s.firstOutputHostTime > s.firstInputHostTime {
-            let seconds = hostTicksToSeconds(s.firstOutputHostTime - s.firstInputHostTime)
-            offset = Int((seconds * sampleRate).rounded())
-        }
-        offset = max(0, min(offset, s.capturedFrames))
+        let offset = max(0, min(startOffset(firstInput: s.firstInputHostTime, firstOutput: s.firstOutputHostTime,
+                                            sampleRate: sampleRate, fallback: prerollFrames), s.capturedFrames))
         let length = min(signal.count, s.capturedFrames - offset)
 
         var tracks: [[Double]] = []
@@ -217,6 +218,12 @@ public final class SweepRecorder {
             if Date() > deadline { throw AudioEngineError.timedOut }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+    }
+
+    /// Input frame at which playback started: the host-clock gap between the first input and output buffers.
+    private func startOffset(firstInput: UInt64, firstOutput: UInt64, sampleRate: Double, fallback: Int) -> Int {
+        guard firstInput > 0, firstOutput > firstInput else { return fallback }
+        return Int((hostTicksToSeconds(firstOutput - firstInput) * sampleRate).rounded())
     }
 
     /// Actual sample rate from the (sample time, host time) pairs the callbacks stored.

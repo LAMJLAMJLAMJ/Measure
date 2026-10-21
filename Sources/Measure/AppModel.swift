@@ -124,11 +124,11 @@ final class AppModel {
             } else {
                 timingNote = ""
             }
-            let made: [Trace] = await Task.detached(priority: .userInitiated) {
+            let (made, loopbackPeak): ([Trace], Double?) = await Task.detached(priority: .userInitiated) {
                 let result = SweepProcessing.process(mics: recording.mics, loopback: recording.loopback,
                                                      sweep: sweep, played: recording.played,
                                                      clockRatio: recording.clockRatio ?? 1)
-                return result.impulseResponses.enumerated().map { i, ir in
+                let traces = result.impulseResponses.enumerated().map { i, ir -> Trace in
                     let slot = s.mics[i]
                     let label = s.position.isEmpty ? "Mic \(i + 1)" : "\(s.position) · Mic \(i + 1)"
                     let info = TraceInfo(name: label, date: date, source: .sweep, sampleRate: s.sampleRate,
@@ -138,12 +138,15 @@ final class AppModel {
                                          peakLevel: result.micPeakLevels[i], colorIndex: count + i)
                     return Trace(info: info, impulseResponse: ir)
                 }
+                return (traces, result.loopbackPeakLevel)
             }.value
 
             for trace in made { add(trace) }
             selection = made.first?.id
             let peaks = made.compactMap(\.info.peakLevel)
-            if let worst = peaks.max(), worst > -1 {
+            if let loop = loopbackPeak, loop > -1 {
+                status = "Done, but the loopback input clipped (peak \(String(format: "%.1f", loop)) dBFS). Lower the level or the loopback gain."
+            } else if let worst = peaks.max(), worst > -1 {
                 status = "Done, but a mic clipped (peak \(String(format: "%.1f", worst)) dBFS). Lower the level."
             } else if let quiet = peaks.min(), quiet < -50 {
                 status = "Done, but the level was low (peak \(String(format: "%.1f", quiet)) dBFS). Raise the level or gain."
