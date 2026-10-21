@@ -1,5 +1,8 @@
 import Foundation
 import MeasureDSP
+#if os(macOS)
+import MeasureAudio
+#endif
 
 let usage = """
 measure-cli: command-line front end for the Measure analysis core
@@ -16,6 +19,17 @@ USAGE
 
   measure-cli delay <signal.wav> <reference.wav> [--channel N] [--ref-channel N]
       Delay of a signal relative to a reference, in samples and milliseconds.
+
+  measure-cli devices
+      List audio devices with their channels and sample rates (macOS).
+
+  measure-cli measure --out DEVICE [--out-ch 1] [--in DEVICE] [--mics 1,2] [--loopback N] [--loopback-out N]
+                      [--fs 48000] [--from 20] [--to 20000] [--length 3] [--silence 2] [--level -12]
+                      [--save PREFIX] [--third]
+      Play a sweep and record up to 4 mics (macOS). DEVICE is a number from `devices`, its UID, or part
+      of its name. --in defaults to the output device. With --loopback (an input wired to the sweep
+      output) delays are absolute; --loopback-out also plays the sweep on a second output to cable to it.
+      --save writes PREFIX-raw.wav and PREFIX-mic1.wav, ...
 
 Channels are numbered from 1.
 """
@@ -75,6 +89,13 @@ func analyze(_ args: Arguments) throws {
     let audio = try WAV.read(contentsOf: url)
     let ir = try channel(audio, try args.channel("channel"), of: url)
 
+    let options = roomOptions(args)
+    let result = RoomAcoustics.analyze(impulseResponse: ir, sampleRate: audio.sampleRate, options: options)
+    print("\(url.lastPathComponent): \(Int(audio.sampleRate)) Hz, \(fmt(audio.duration, 2)) s, onset at sample \(result.onsetIndex)")
+    try printResults(result, csv: args.options["csv"])
+}
+
+func roomOptions(_ args: Arguments) -> RoomAcoustics.Options {
     var options = RoomAcoustics.Options()
     if args.flags.contains("third") {
         options.resolution = .thirdOctave
@@ -83,17 +104,17 @@ func analyze(_ args: Arguments) throws {
     }
     options.timeReversedFiltering = args.flags.contains("reverse-filter")
     options.noiseCompensation = !args.flags.contains("no-compensation")
+    return options
+}
 
-    let result = RoomAcoustics.analyze(impulseResponse: ir, sampleRate: audio.sampleRate, options: options)
+/// Prints the ISO 3382 table, and writes it as CSV when a path is given.
+func printResults(_ result: RoomAcousticsResult, csv: String? = nil) throws {
     let rows = result.bands + [result.broadband]
-
     let header = ["Band", "EDT s", "T20 s", "T30 s", "C50 dB", "C80 dB", "D50 %", "Ts ms", "PNR dB"]
     let table = rows.map { p in
         [p.band?.description ?? "Broadband", fmt(p.edt), fmt(p.t20), fmt(p.t30), fmt(p.c50, 1), fmt(p.c80, 1),
          fmt(p.d50 * 100, 1), fmt(p.ts * 1000, 0), fmt(p.peakToNoise, 0)]
     }
-
-    print("\(url.lastPathComponent): \(Int(audio.sampleRate)) Hz, \(fmt(audio.duration, 2)) s, onset at sample \(result.onsetIndex)")
     let widths = header.indices.map { c in max(header[c].count, table.map { $0[c].count }.max() ?? 0) }
     func line(_ cells: [String]) -> String {
         cells.enumerated().map { c, s in
@@ -104,7 +125,7 @@ func analyze(_ args: Arguments) throws {
     print(line(header))
     table.forEach { print(line($0)) }
 
-    if let csv = args.options["csv"] {
+    if let csv {
         let text = ([header] + table).map { $0.joined(separator: ",") }.joined(separator: "\n") + "\n"
         try text.write(toFile: csv, atomically: true, encoding: .utf8)
         print("Wrote \(csv)")
@@ -152,6 +173,79 @@ func delay(_ args: Arguments) throws {
     print("Delay: \(fmt(d, 2)) samples = \(fmt(d / sig.sampleRate * 1000, 3)) ms")
 }
 
+#if os(macOS)
+func devices() throws {
+    let list = try AudioDevices.all()
+    for (i, d) in list.enumerated() {
+        let rates = d.availableSampleRates.map { String(format: "%g", $0 / 1000) }.joined(separator: "/")
+        print("\(i + 1). \(d.name)  [\(d.transport)]")
+        print("     in \(d.inputChannels), out \(d.outputChannels), now \(Int(d.sampleRate)) Hz, supports \(rates) kHz, latency in \(d.inputLatency) / out \(d.outputLatency) frames")
+        print("     uid \(d.uid)")
+    }
+    if list.isEmpty { print("No audio devices found") }
+}
+
+func channelList(_ s: String?, default value: [Int]) throws -> [Int] {
+    guard let s else { return value }
+    let parts = s.split(separator: ",").map { Int($0.trimmingCharacters(in: .whitespaces)) }
+    guard !parts.isEmpty, parts.allSatisfy({ ($0 ?? 0) >= 1 }) else {
+        throw CLIError(description: "--mics needs channel numbers from 1, like 1,2")
+    }
+    return parts.map { $0! - 1 }
+}
+
+func measure(_ args: Arguments) async throws {
+    guard let outName = args.options["out"] else { throw CLIError(description: "measure needs --out DEVICE\n\n\(usage)") }
+    let out = try AudioDevices.find(outName)
+    let inDevice = try args.options["in"].map(AudioDevices.find) ?? out
+    let mics = try channelList(args.options["mics"], default: [0])
+    let loopback = try args.options["loopback"].map { _ in try args.channel("loopback") }
+    let loopbackOut = try args.options["loopback-out"].map { _ in try args.channel("loopback-out") }
+    let fs = try args.double("fs", default: 48_000)
+
+    let sweep = ExponentialSweep(startFrequency: try args.double("from", default: 20),
+                                 endFrequency: try args.double("to", default: min(20_000, fs / 2)),
+                                 duration: try args.double("length", default: 3),
+                                 sampleRate: fs,
+                                 amplitude: pow(10, try args.double("level", default: -12) / 20))
+    let played = sweep.samples(silence: try args.double("silence", default: 2))
+    let routing = SweepRouting(outputDevice: out, outputChannel: try args.channel("out-ch"),
+                               inputDevice: inDevice, micChannels: mics, loopbackChannel: loopback,
+                               loopbackOutputChannel: loopbackOut)
+
+    print("Playing a \(fmt(sweep.duration, 1)) s sweep on \(out.name) channel \(routing.outputChannel + 1); recording \(inDevice.name) channel(s) \(mics.map { String($0 + 1) }.joined(separator: ","))" + (loopback.map { ", loopback on \($0 + 1)" } ?? ""))
+    let recording = try await SweepRecorder().record(played, sampleRate: fs, routing: routing)
+    let result = SweepProcessing.process(mics: recording.mics, loopback: recording.loopback, sweep: sweep, played: recording.played)
+
+    if let latency = result.loopbackLatency {
+        print("Timing: loopback reference, round-trip latency \(fmt(latency, 1)) samples (\(fmt(latency / fs * 1000, 2)) ms)")
+    } else {
+        print("Timing: generated sweep (no loopback), so delays include the interface latency")
+    }
+    if out.id != inDevice.id {
+        print("Note: output and input are different devices. Use an aggregate device with drift correction for stable timing.")
+    }
+
+    if let prefix = args.options["save"] {
+        let raw = AudioData(sampleRate: fs, channels: recording.mics + [recording.loopback].compactMap { $0 })
+        try WAV.write(raw, to: URL(fileURLWithPath: "\(prefix)-raw.wav"))
+        print("Wrote \(prefix)-raw.wav")
+    }
+
+    for (i, ir) in result.impulseResponses.enumerated() {
+        let peak = result.micPeakLevels[i]
+        let warning = peak > -1 ? "  CLIPPING: lower --level" : peak < -50 ? "  low level: raise --level or the gain" : ""
+        let arrival = Peak.index(of: ir)
+        print("\nMic \(i + 1) (input \(mics[i] + 1)): peak \(fmt(peak, 1)) dBFS\(warning), direct sound at \(fmt(arrival / fs * 1000, 2)) ms")
+        if let prefix = args.options["save"] {
+            try WAV.write(AudioData(sampleRate: fs, mono: ir), to: URL(fileURLWithPath: "\(prefix)-mic\(i + 1).wav"))
+            print("Wrote \(prefix)-mic\(i + 1).wav")
+        }
+        try printResults(RoomAcoustics.analyze(impulseResponse: ir, sampleRate: fs, options: roomOptions(args)))
+    }
+}
+#endif
+
 let argv = CommandLine.arguments
 guard argv.count >= 2 else {
     print(usage)
@@ -164,6 +258,12 @@ do {
     case "sweep": try sweep(args)
     case "deconvolve": try deconvolve(args)
     case "delay": try delay(args)
+    #if os(macOS)
+    case "devices": try devices()
+    case "measure": try await measure(args)
+    #else
+    case "devices", "measure": throw CLIError(description: "\(argv[1]) needs macOS")
+    #endif
     case "-h", "--help", "help": print(usage)
     default:
         print("Unknown command '\(argv[1])'\n\n\(usage)")

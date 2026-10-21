@@ -6,13 +6,16 @@ let package = Package(
     platforms: [.macOS(.v14), .iOS(.v17)],
     products: [
         .library(name: "MeasureDSP", targets: ["MeasureDSP"]),
+        .library(name: "MeasureAudio", targets: ["MeasureAudio"]),
         .executable(name: "measure-cli", targets: ["measure-cli"]),
     ],
     targets: [
         // Signal processing and acoustics. No UI and no audio hardware, so it can be tested on its own.
         .target(name: "MeasureDSP"),
-        // Command-line front end for analysing files and generating sweeps.
-        .executableTarget(name: "measure-cli", dependencies: ["MeasureDSP"]),
+        // Core Audio device list and sweep playback/recording. macOS only; empty elsewhere.
+        .target(name: "MeasureAudio", dependencies: ["MeasureDSP"]),
+        // Command-line front end for analysing files, generating sweeps and measuring.
+        .executableTarget(name: "measure-cli", dependencies: ["MeasureDSP", "MeasureAudio"]),
         .testTarget(name: "MeasureDSPTests", dependencies: ["MeasureDSP"]),
     ]
 )
