@@ -9,7 +9,8 @@ The first prototype covers sweep measurement and ISO 3382 room acoustics. The fa
 | Part | Contents |
 | --- | --- |
 | `Sources/MeasureDSP` | The analysis core. It has no user interface and no audio hardware code, so it can be tested on its own. |
-| `Sources/measure-cli` | A command-line tool for analysing files and making sweeps before the app exists. |
+| `Sources/MeasureAudio` | Core Audio device list and sweep playback and recording (macOS only). |
+| `Sources/measure-cli` | A command-line tool for measuring, analysing files and making sweeps before the app exists. |
 | `Tests/MeasureDSPTests` | Tests on generated signals with known answers. Comparisons with MATLAB and the measurement database come later. |
 
 The analysis core provides:
@@ -34,6 +35,22 @@ swift build -c release    # build the command-line tool
 ```
 
 To work in Xcode, open the folder (`File > Open...` and choose `Package.swift`). Choose the `MeasureDSP` scheme and press ⌘U to run the tests.
+
+## Measuring from Terminal
+
+```sh
+# List audio devices: number, name, channels, sample rates, latency
+.build/release/measure-cli devices
+
+# Sweep out of output 1 of device 3; record mics on inputs 1 and 2, with the sweep looped back into input 8
+.build/release/measure-cli measure --out 3 --out-ch 1 --mics 1,2 --loopback 8 --level -12 --save room1
+```
+
+- **Devices:** `--out` and `--in` take the number from `devices`, the device UID, or part of its name (`--out Scarlett`). `--in` defaults to the output device.
+- **Loopback:** wire an output of the interface to one of its inputs and pass that input with `--loopback`. Delays are then absolute, because the interface latency cancels. Without a loopback, delays include the latency.
+- **Separate devices** (for example a USB mic and a Dante Virtual Soundcard output): create an aggregate device in Audio MIDI Setup with drift correction on, and measure through it.
+- **Results:** for each mic the tool prints the peak level (with a warning if it clips or is too quiet), the arrival time of the direct sound and the ISO 3382 table. `--save room1` writes `room1-raw.wav` (all recorded channels) and `room1-mic1.wav`, `room1-mic2.wav` (impulse responses).
+- **Microphone permission:** the first run asks for microphone access for Terminal. If you declined it, turn it on in System Settings > Privacy & Security > Microphone.
 
 ## Command-line tool
 
