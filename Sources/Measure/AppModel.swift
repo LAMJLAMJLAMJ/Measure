@@ -39,6 +39,11 @@ struct MeasurementSettings: Codable, Equatable {
     var position = ""
 }
 
+struct SetupError: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+}
+
 @Observable @MainActor
 final class AppModel {
     var traces: [Trace] = []
@@ -103,7 +108,16 @@ final class AppModel {
         defer { isMeasuring = false }
 
         do {
-            let sweep = ExponentialSweep(startFrequency: s.startFrequency, endFrequency: min(s.endFrequency, s.sampleRate / 2),
+            let end = min(s.endFrequency, s.sampleRate / 2)
+            if let problem = ExponentialSweep.validationError(startFrequency: s.startFrequency, endFrequency: end,
+                                                              duration: s.sweepLength, sampleRate: s.sampleRate,
+                                                              amplitude: pow(10, s.level / 20)) {
+                throw SetupError(message: problem)
+            }
+            if Set(s.mics.map(\.channel)).count != s.mics.count {
+                throw SetupError(message: "Two mics use the same input channel.")
+            }
+            let sweep = ExponentialSweep(startFrequency: s.startFrequency, endFrequency: end,
                                          duration: s.sweepLength, sampleRate: s.sampleRate,
                                          amplitude: pow(10, s.level / 20))
             let played = sweep.samples(silence: s.silence)

@@ -132,14 +132,24 @@ func printResults(_ result: RoomAcousticsResult, csv: String? = nil) throws {
     }
 }
 
+/// Builds the sweep from --from, --to, --length and --level, reporting bad values instead of crashing.
+func makeSweep(_ args: Arguments, fs: Double, defaultEnd: Double, defaultLevel: Double) throws -> ExponentialSweep {
+    let start = try args.double("from", default: 20)
+    let end = try args.double("to", default: defaultEnd)
+    let length = try args.double("length", default: 3)
+    let level = try args.double("level", default: defaultLevel)
+    let amplitude = pow(10, level / 20)
+    if let problem = ExponentialSweep.validationError(startFrequency: start, endFrequency: end, duration: length,
+                                                      sampleRate: fs, amplitude: amplitude) {
+        throw CLIError(description: problem)
+    }
+    return ExponentialSweep(startFrequency: start, endFrequency: end, duration: length, sampleRate: fs, amplitude: amplitude)
+}
+
 func sweep(_ args: Arguments) throws {
     let url = try args.file(0, "output file")
     let fs = try args.double("fs", default: 48_000)
-    let sweep = ExponentialSweep(startFrequency: try args.double("from", default: 20),
-                                 endFrequency: try args.double("to", default: 20_000),
-                                 duration: try args.double("length", default: 3),
-                                 sampleRate: fs,
-                                 amplitude: pow(10, try args.double("level", default: -6) / 20))
+    let sweep = try makeSweep(args, fs: fs, defaultEnd: 20_000, defaultLevel: -6)
     let samples = sweep.samples(silence: try args.double("silence", default: 2))
     try WAV.write(AudioData(sampleRate: fs, mono: samples), to: url)
     print("Wrote \(url.path): \(samples.count) samples at \(Int(fs)) Hz")
@@ -203,11 +213,7 @@ func measure(_ args: Arguments) async throws {
     let loopbackOut = try args.options["loopback-out"].map { _ in try args.channel("loopback-out") }
     let fs = try args.double("fs", default: 48_000)
 
-    let sweep = ExponentialSweep(startFrequency: try args.double("from", default: 20),
-                                 endFrequency: try args.double("to", default: min(20_000, fs / 2)),
-                                 duration: try args.double("length", default: 3),
-                                 sampleRate: fs,
-                                 amplitude: pow(10, try args.double("level", default: -12) / 20))
+    let sweep = try makeSweep(args, fs: fs, defaultEnd: min(20_000, fs / 2), defaultLevel: -12)
     let played = sweep.samples(silence: try args.double("silence", default: 2))
     let routing = SweepRouting(outputDevice: out, outputChannel: try args.channel("out-ch"),
                                inputDevice: inDevice, micChannels: mics, loopbackChannel: loopback,
