@@ -16,19 +16,23 @@ public struct SweepRouting {
     /// Input channel with the sweep looped back from the output, from 0. Must be on the same
     /// device as the mics for its timing to apply to them.
     public var loopbackChannel: Int?
+    /// A second output channel that also plays the sweep, to cable to the loopback input
+    /// without splitting the speaker feed. From 0.
+    public var loopbackOutputChannel: Int?
 
     public init(outputDevice: AudioDevice, outputChannel: Int, inputDevice: AudioDevice,
-                micChannels: [Int], loopbackChannel: Int? = nil) {
+                micChannels: [Int], loopbackChannel: Int? = nil, loopbackOutputChannel: Int? = nil) {
         self.outputDevice = outputDevice
         self.outputChannel = outputChannel
         self.inputDevice = inputDevice
         self.micChannels = micChannels
         self.loopbackChannel = loopbackChannel
+        self.loopbackOutputChannel = loopbackOutputChannel
     }
 
     func validate() throws {
-        guard outputChannel >= 0, outputChannel < outputDevice.outputChannels else {
-            throw AudioEngineError.channelOutOfRange(device: outputDevice.name, channel: outputChannel + 1,
+        for c in [outputChannel] + [loopbackOutputChannel].compactMap({ $0 }) where c < 0 || c >= outputDevice.outputChannels {
+            throw AudioEngineError.channelOutOfRange(device: outputDevice.name, channel: c + 1,
                                                      available: outputDevice.outputChannels)
         }
         for c in micChannels + [loopbackChannel].compactMap({ $0 }) where c < 0 || c >= inputDevice.inputChannels {
@@ -81,6 +85,7 @@ public final class SweepRecorder {
         // Room for the preroll, the signal, and a second of slack for start-up and latency.
         let capacity = prerollFrames + signal.count + Int(sampleRate)
         let state = RealtimeState.make(signal: signal, outputChannel: routing.outputChannel,
+                                       loopbackOutputChannel: routing.loopbackOutputChannel ?? -1,
                                        captureChannels: captureChannels,
                                        inputChannelCount: routing.inputDevice.inputChannels,
                                        capacity: capacity)
@@ -207,6 +212,7 @@ struct RealtimeState {
     var signalCount: Int
     var playedFrames: Int
     var outputChannel: Int
+    var loopbackOutputChannel: Int
 
     var capture: UnsafeMutablePointer<Float>
     var captureChannels: UnsafeMutablePointer<Int>
@@ -222,7 +228,7 @@ struct RealtimeState {
     var firstOutputHostTime: UInt64
     var renderError: OSStatus
 
-    static func make(signal: [Double], outputChannel: Int,
+    static func make(signal: [Double], outputChannel: Int, loopbackOutputChannel: Int,
                      captureChannels: [Int], inputChannelCount: Int, capacity: Int) -> UnsafeMutablePointer<RealtimeState> {
         let sig = UnsafeMutablePointer<Float>.allocate(capacity: max(1, signal.count))
         for i in signal.indices { sig[i] = Float(signal[i]) }
@@ -242,7 +248,8 @@ struct RealtimeState {
 
         let state = UnsafeMutablePointer<RealtimeState>.allocate(capacity: 1)
         state.initialize(to: RealtimeState(
-            signal: sig, signalCount: signal.count, playedFrames: 0, outputChannel: outputChannel,
+            signal: sig, signalCount: signal.count, playedFrames: 0,
+            outputChannel: outputChannel, loopbackOutputChannel: loopbackOutputChannel,
             capture: cap, captureChannels: chans, captureChannelCount: captureChannels.count,
             capacity: capacity, capturedFrames: 0,
             inputUnit: nil, inputBuffers: buffers, maxFrames: maxFrames,
@@ -262,7 +269,7 @@ struct RealtimeState {
     }
 }
 
-/// Fills every output channel with silence except the measurement channel, which gets the signal.
+/// Fills every output channel with silence except the measurement (and loopback) channel, which get the signal.
 private let outputCallback: AURenderCallback = { refCon, _, timeStamp, _, frameCount, ioData in
     let state = refCon.assumingMemoryBound(to: RealtimeState.self)
     guard let ioData else { return noErr }
@@ -275,7 +282,7 @@ private let outputCallback: AURenderCallback = { refCon, _, timeStamp, _, frameC
     for (channel, buffer) in buffers.enumerated() {
         guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
         let count = min(frames, Int(buffer.mDataByteSize) / MemoryLayout<Float>.size)
-        if channel == state.pointee.outputChannel {
+        if channel == state.pointee.outputChannel || channel == state.pointee.loopbackOutputChannel {
             let n = min(count, remaining)
             for i in 0..<n { data[i] = state.pointee.signal[start + i] }
             for i in n..<count { data[i] = 0 }

@@ -23,12 +23,13 @@ USAGE
   measure-cli devices
       List audio devices with their channels and sample rates (macOS).
 
-  measure-cli measure --out DEVICE [--out-ch 1] [--in DEVICE] [--mics 1,2] [--loopback N]
+  measure-cli measure --out DEVICE [--out-ch 1] [--in DEVICE] [--mics 1,2] [--loopback N] [--loopback-out N]
                       [--fs 48000] [--from 20] [--to 20000] [--length 3] [--silence 2] [--level -12]
                       [--save PREFIX] [--third]
       Play a sweep and record up to 4 mics (macOS). DEVICE is a number from `devices`, its UID, or part
       of its name. --in defaults to the output device. With --loopback (an input wired to the sweep
-      output) delays are absolute. --save writes PREFIX-raw.wav and PREFIX-mic1.wav, ...
+      output) delays are absolute; --loopback-out also plays the sweep on a second output to cable to it.
+      --save writes PREFIX-raw.wav and PREFIX-mic1.wav, ...
 
 Channels are numbered from 1.
 """
@@ -199,6 +200,7 @@ func measure(_ args: Arguments) async throws {
     let inDevice = try args.options["in"].map(AudioDevices.find) ?? out
     let mics = try channelList(args.options["mics"], default: [0])
     let loopback = try args.options["loopback"].map { _ in try args.channel("loopback") }
+    let loopbackOut = try args.options["loopback-out"].map { _ in try args.channel("loopback-out") }
     let fs = try args.double("fs", default: 48_000)
 
     let sweep = ExponentialSweep(startFrequency: try args.double("from", default: 20),
@@ -208,7 +210,8 @@ func measure(_ args: Arguments) async throws {
                                  amplitude: pow(10, try args.double("level", default: -12) / 20))
     let played = sweep.samples(silence: try args.double("silence", default: 2))
     let routing = SweepRouting(outputDevice: out, outputChannel: try args.channel("out-ch"),
-                               inputDevice: inDevice, micChannels: mics, loopbackChannel: loopback)
+                               inputDevice: inDevice, micChannels: mics, loopbackChannel: loopback,
+                               loopbackOutputChannel: loopbackOut)
 
     print("Playing a \(fmt(sweep.duration, 1)) s sweep on \(out.name) channel \(routing.outputChannel + 1); recording \(inDevice.name) channel(s) \(mics.map { String($0 + 1) }.joined(separator: ","))" + (loopback.map { ", loopback on \($0 + 1)" } ?? ""))
     let recording = try await SweepRecorder().record(played, sampleRate: fs, routing: routing)

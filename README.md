@@ -42,12 +42,12 @@ To work in Xcode, open the folder (`File > Open...` and choose `Package.swift`).
 # List audio devices: number, name, channels, sample rates, latency
 .build/release/measure-cli devices
 
-# Sweep out of output 1 of device 3; record mics on inputs 1 and 2, with the sweep looped back into input 8
-.build/release/measure-cli measure --out 3 --out-ch 1 --mics 1,2 --loopback 8 --level -12 --save room1
+# Sweep out of output 1 of device 3 (and also output 8, cabled to input 8); record mics on inputs 1 and 2
+.build/release/measure-cli measure --out 3 --out-ch 1 --loopback-out 8 --loopback 8 --mics 1,2 --level -12 --save room1
 ```
 
 - **Devices:** `--out` and `--in` take the number from `devices`, the device UID, or part of its name (`--out Scarlett`). `--in` defaults to the output device.
-- **Loopback:** wire an output of the interface to one of its inputs and pass that input with `--loopback`. Delays are then absolute, because the interface latency cancels. Without a loopback, delays include the latency.
+- **Loopback:** cable a spare output of the interface to a spare input. Use `--loopback-out` to play the sweep on that output too, and `--loopback` to record it on that input. Delays are then absolute, because the interface latency cancels. Without a loopback, delays include the latency.
 - **Separate devices** (for example a USB mic and a Dante Virtual Soundcard output): create an aggregate device in Audio MIDI Setup with drift correction on, and measure through it.
 - **Results:** for each mic the tool prints the peak level (with a warning if it clips or is too quiet), the arrival time of the direct sound and the ISO 3382 table. `--save room1` writes `room1-raw.wav` (all recorded channels) and `room1-mic1.wav`, `room1-mic2.wav` (impulse responses).
 - **Microphone permission:** the first run asks for microphone access for Terminal. If you declined it, turn it on in System Settings > Privacy & Security > Microphone.
