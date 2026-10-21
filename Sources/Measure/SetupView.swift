@@ -118,7 +118,7 @@ struct SetupView: View {
             return "With a loopback input, delays are absolute: the interface latency cancels."
         }
         if let out = model.outputDevice, let input = model.inputDevice, out.id != input.id {
-            return "Output and input are different devices. For stable timing make an aggregate device with drift correction in Audio MIDI Setup."
+            return "Output and input are different devices. Their clock difference is measured and corrected. For exact timing, cable a spare output of \(out.name) to a spare input of \(input.name) and set both loopback channels."
         }
         return "Without a loopback input, delays include the interface latency."
     }

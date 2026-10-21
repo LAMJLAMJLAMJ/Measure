@@ -215,15 +215,25 @@ func measure(_ args: Arguments) async throws {
 
     print("Playing a \(fmt(sweep.duration, 1)) s sweep on \(out.name) channel \(routing.outputChannel + 1); recording \(inDevice.name) channel(s) \(mics.map { String($0 + 1) }.joined(separator: ","))" + (loopback.map { ", loopback on \($0 + 1)" } ?? ""))
     let recording = try await SweepRecorder().record(played, sampleRate: fs, routing: routing)
-    let result = SweepProcessing.process(mics: recording.mics, loopback: recording.loopback, sweep: sweep, played: recording.played)
+    let result = SweepProcessing.process(mics: recording.mics, loopback: recording.loopback, sweep: sweep,
+                                         played: recording.played, clockRatio: recording.clockRatio ?? 1)
 
     if let latency = result.loopbackLatency {
         print("Timing: loopback reference, round-trip latency \(fmt(latency, 1)) samples (\(fmt(latency / fs * 1000, 2)) ms)")
+        if let gain = result.loopbackGain { print("Loopback level: \(fmt(20 * log10(gain), 1)) dB (levels below are relative to the sweep's full scale)") }
     } else {
         print("Timing: generated sweep (no loopback), so delays include the interface latency")
     }
-    if out.id != inDevice.id {
-        print("Note: output and input are different devices. Use an aggregate device with drift correction for stable timing.")
+    if recording.separateDevices {
+        if let ppm = recording.driftPPM, let i = recording.inputRate, let o = recording.outputRate {
+            print("Separate devices: input clock \(fmt(i, 2)) Hz, output clock \(fmt(o, 2)) Hz, difference \(fmt(ppm, 1)) ppm (corrected)")
+        } else {
+            print("Separate devices: could not measure the clock difference, so it was not corrected")
+        }
+        if recording.loopback == nil {
+            print("Note: without a loopback, arrival times between separate devices are approximate (device latencies are not known).")
+            print("      Cable an output of \(out.name) to an input of \(inDevice.name) and use --loopback-out/--loopback for exact timing.")
+        }
     }
 
     if let prefix = args.options["save"] {

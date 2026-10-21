@@ -58,6 +58,7 @@ final class AppModel {
     var errorMessage: String?
 
     @ObservationIgnored private var calibrations: [String: FrequencyResponse] = [:]
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
 
     init() {
         projectFolder = ProjectStore.defaultFolder
@@ -115,15 +116,24 @@ final class AppModel {
 
             let count = traces.count
             let date = Date()
+            let timingNote: String
+            if let ppm = recording.driftPPM {
+                timingNote = String(format: ". Separate devices, clock difference %.1f ppm corrected", ppm)
+            } else if recording.separateDevices {
+                timingNote = ". Separate devices, clock difference not corrected"
+            } else {
+                timingNote = ""
+            }
             let made: [Trace] = await Task.detached(priority: .userInitiated) {
                 let result = SweepProcessing.process(mics: recording.mics, loopback: recording.loopback,
-                                                     sweep: sweep, played: recording.played)
+                                                     sweep: sweep, played: recording.played,
+                                                     clockRatio: recording.clockRatio ?? 1)
                 return result.impulseResponses.enumerated().map { i, ir in
                     let slot = s.mics[i]
                     let label = s.position.isEmpty ? "Mic \(i + 1)" : "\(s.position) · Mic \(i + 1)"
                     let info = TraceInfo(name: label, date: date, source: .sweep, sampleRate: s.sampleRate,
                                          mic: slot.micName, position: s.position,
-                                         notes: "Input \(slot.channel), output \(s.outputChannel), \(Int(s.sweepLength)) s sweep at \(Int(s.level)) dBFS",
+                                         notes: "Input \(slot.channel), output \(s.outputChannel), \(Int(s.sweepLength)) s sweep at \(Int(s.level)) dBFS" + timingNote,
                                          timingReference: result.timingReference,
                                          peakLevel: result.micPeakLevels[i], colorIndex: count + i)
                     return Trace(info: info, impulseResponse: ir)
@@ -138,7 +148,12 @@ final class AppModel {
             } else if let quiet = peaks.min(), quiet < -50 {
                 status = "Done, but the level was low (peak \(String(format: "%.1f", quiet)) dBFS). Raise the level or gain."
             } else {
-                status = "Measured \(made.count) mic\(made.count == 1 ? "" : "s")."
+                var text = "Measured \(made.count) mic\(made.count == 1 ? "" : "s")."
+                if let ppm = recording.driftPPM { text += String(format: " Input and output clocks differ by %.1f ppm (corrected).", ppm) }
+                if recording.separateDevices && recording.loopback == nil {
+                    text += " Separate devices without a loopback: arrival times are approximate."
+                }
+                status = text
             }
         } catch {
             status = nil
@@ -167,11 +182,24 @@ final class AppModel {
         try? ProjectStore.saveInfo(info, in: projectFolder)
     }
 
+    /// Opens a project folder. Loading analyses every trace, so it runs off the main thread.
     func openProject(_ folder: URL) {
         projectFolder = folder
-        traces = ProjectStore.load(from: folder)
-        visible = Set(traces.suffix(4).map(\.id))
-        selection = traces.last?.id
+        traces = []
+        visible = []
+        selection = nil
+        status = "Loading \(folder.lastPathComponent)…"
+        loadTask?.cancel()
+        loadTask = Task {
+            let loaded = await Task.detached(priority: .userInitiated) { ProjectStore.load(from: folder) }.value
+            guard !Task.isCancelled, projectFolder == folder else { return }
+            // Keep anything measured while the project was loading.
+            let loadedIDs = Set(loaded.map(\.id))
+            traces = loaded + traces.filter { !loadedIDs.contains($0.id) }
+            visible.formUnion(loaded.suffix(4).map(\.id))
+            selection = selection ?? traces.last?.id
+            status = nil
+        }
     }
 
     /// Imports WAV impulse responses and REW text frequency responses.

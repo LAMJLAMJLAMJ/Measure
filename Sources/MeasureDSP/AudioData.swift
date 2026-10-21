@@ -88,6 +88,7 @@ public enum WAV {
 
         let bytesPerSample = bits / 8
         let frameBytes = bytesPerSample * channelCount
+        guard frameBytes > 0 else { throw WAVError.unsupportedFormat(tag: formatTag, bits: bits) }
         let frames = range.count / frameBytes
         var channels = [[Double]](repeating: [Double](repeating: 0, count: frames), count: channelCount)
 
