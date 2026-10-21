@@ -72,7 +72,7 @@ struct SetupView: View {
                 }
                 LabeledContent("Level") {
                     HStack {
-                        Slider(value: $model.settings.level, in: -40...0, step: 1)
+                        Slider(value: $model.settings.level, in: -80...0, step: 1)
                         Text("\(Int(model.settings.level)) dBFS").monospacedDigit().frame(width: 70, alignment: .trailing)
                     }
                 }

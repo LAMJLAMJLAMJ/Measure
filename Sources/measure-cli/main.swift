@@ -24,7 +24,7 @@ USAGE
       List audio devices with their channels and sample rates (macOS).
 
   measure-cli measure --out DEVICE [--out-ch 1] [--in DEVICE] [--mics 1,2] [--loopback N] [--loopback-out N]
-                      [--fs 48000] [--from 20] [--to 20000] [--length 3] [--silence 2] [--level -12]
+                      [--fs 48000] [--from 20] [--to 20000] [--length 3] [--silence 2] [--level -30]
                       [--save PREFIX] [--third]
       Play a sweep and record up to 4 mics (macOS). DEVICE is a number from `devices`, its UID, or part
       of its name. --in defaults to the output device. With --loopback (an input wired to the sweep
@@ -213,7 +213,7 @@ func measure(_ args: Arguments) async throws {
     let loopbackOut = try args.options["loopback-out"].map { _ in try args.channel("loopback-out") }
     let fs = try args.double("fs", default: 48_000)
 
-    let sweep = try makeSweep(args, fs: fs, defaultEnd: min(20_000, fs / 2), defaultLevel: -12)
+    let sweep = try makeSweep(args, fs: fs, defaultEnd: min(20_000, fs / 2), defaultLevel: -30)
     let played = sweep.samples(silence: try args.double("silence", default: 2))
     let routing = SweepRouting(outputDevice: out, outputChannel: try args.channel("out-ch"),
                                inputDevice: inDevice, micChannels: mics, loopbackChannel: loopback,

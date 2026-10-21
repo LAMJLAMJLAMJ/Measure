@@ -35,7 +35,7 @@ struct MeasurementSettings: Codable, Equatable {
     var endFrequency: Double = 20_000
     var sweepLength: Double = 3
     var silence: Double = 2
-    var level: Double = -12
+    var level: Double = -30
     var position = ""
 }
 

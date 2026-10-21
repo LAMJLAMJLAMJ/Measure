@@ -51,4 +51,13 @@ final class SweepTests: XCTestCase {
         XCTAssertNotNil(problem(20, 20_000, 0.1))     // too short
         XCTAssertNotNil(problem(.nan, 20_000))
     }
+
+    func testSweepPeakFollowsAmplitude() {
+        for db in [-60.0, -30.0, -12.0, 0.0] {
+            let amplitude = pow(10, db / 20)
+            let x = ExponentialSweep(sampleRate: 48_000, amplitude: amplitude).samples(silence: 1)
+            let peak = x.map(abs).max() ?? 0
+            XCTAssertEqual(20 * log10(peak), db, accuracy: 0.1, "sweep peak at \(db) dBFS")
+        }
+    }
 }
