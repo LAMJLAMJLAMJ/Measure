@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "MeasureDSP", targets: ["MeasureDSP"]),
         .library(name: "MeasureAudio", targets: ["MeasureAudio"]),
         .executable(name: "measure-cli", targets: ["measure-cli"]),
+        .executable(name: "Measure", targets: ["Measure"]),
     ],
     targets: [
         // Signal processing and acoustics. No UI and no audio hardware, so it can be tested on its own.
@@ -16,6 +17,8 @@ let package = Package(
         .target(name: "MeasureAudio", dependencies: ["MeasureDSP"]),
         // Command-line front end for analysing files, generating sweeps and measuring.
         .executableTarget(name: "measure-cli", dependencies: ["MeasureDSP", "MeasureAudio"]),
+        // The Mac app (SwiftUI). Run with `swift run Measure` or bundle with scripts/build-app.sh.
+        .executableTarget(name: "Measure", dependencies: ["MeasureDSP", "MeasureAudio"]),
         .testTarget(name: "MeasureDSPTests", dependencies: ["MeasureDSP"]),
     ]
 )
