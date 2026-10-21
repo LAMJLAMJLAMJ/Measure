@@ -24,7 +24,7 @@ USAGE
       List audio devices with their channels and sample rates (macOS).
 
   measure-cli measure --out DEVICE [--out-ch 1] [--in DEVICE] [--mics 1,2] [--loopback N] [--loopback-out N]
-                      [--fs 48000] [--from 20] [--to 20000] [--length 3] [--silence 2] [--level -12]
+                      [--fs 48000] [--from 20] [--to 20000] [--length 3] [--silence 2] [--level -30]
                       [--save PREFIX] [--third]
       Play a sweep and record up to 4 mics (macOS). DEVICE is a number from `devices`, its UID, or part
       of its name. --in defaults to the output device. With --loopback (an input wired to the sweep
@@ -132,14 +132,24 @@ func printResults(_ result: RoomAcousticsResult, csv: String? = nil) throws {
     }
 }
 
+/// Builds the sweep from --from, --to, --length and --level, reporting bad values instead of crashing.
+func makeSweep(_ args: Arguments, fs: Double, defaultEnd: Double, defaultLevel: Double) throws -> ExponentialSweep {
+    let start = try args.double("from", default: 20)
+    let end = try args.double("to", default: defaultEnd)
+    let length = try args.double("length", default: 3)
+    let level = try args.double("level", default: defaultLevel)
+    let amplitude = pow(10, level / 20)
+    if let problem = ExponentialSweep.validationError(startFrequency: start, endFrequency: end, duration: length,
+                                                      sampleRate: fs, amplitude: amplitude) {
+        throw CLIError(description: problem)
+    }
+    return ExponentialSweep(startFrequency: start, endFrequency: end, duration: length, sampleRate: fs, amplitude: amplitude)
+}
+
 func sweep(_ args: Arguments) throws {
     let url = try args.file(0, "output file")
     let fs = try args.double("fs", default: 48_000)
-    let sweep = ExponentialSweep(startFrequency: try args.double("from", default: 20),
-                                 endFrequency: try args.double("to", default: 20_000),
-                                 duration: try args.double("length", default: 3),
-                                 sampleRate: fs,
-                                 amplitude: pow(10, try args.double("level", default: -6) / 20))
+    let sweep = try makeSweep(args, fs: fs, defaultEnd: 20_000, defaultLevel: -6)
     let samples = sweep.samples(silence: try args.double("silence", default: 2))
     try WAV.write(AudioData(sampleRate: fs, mono: samples), to: url)
     print("Wrote \(url.path): \(samples.count) samples at \(Int(fs)) Hz")
@@ -203,11 +213,7 @@ func measure(_ args: Arguments) async throws {
     let loopbackOut = try args.options["loopback-out"].map { _ in try args.channel("loopback-out") }
     let fs = try args.double("fs", default: 48_000)
 
-    let sweep = ExponentialSweep(startFrequency: try args.double("from", default: 20),
-                                 endFrequency: try args.double("to", default: min(20_000, fs / 2)),
-                                 duration: try args.double("length", default: 3),
-                                 sampleRate: fs,
-                                 amplitude: pow(10, try args.double("level", default: -12) / 20))
+    let sweep = try makeSweep(args, fs: fs, defaultEnd: min(20_000, fs / 2), defaultLevel: -30)
     let played = sweep.samples(silence: try args.double("silence", default: 2))
     let routing = SweepRouting(outputDevice: out, outputChannel: try args.channel("out-ch"),
                                inputDevice: inDevice, micChannels: mics, loopbackChannel: loopback,
@@ -215,15 +221,30 @@ func measure(_ args: Arguments) async throws {
 
     print("Playing a \(fmt(sweep.duration, 1)) s sweep on \(out.name) channel \(routing.outputChannel + 1); recording \(inDevice.name) channel(s) \(mics.map { String($0 + 1) }.joined(separator: ","))" + (loopback.map { ", loopback on \($0 + 1)" } ?? ""))
     let recording = try await SweepRecorder().record(played, sampleRate: fs, routing: routing)
-    let result = SweepProcessing.process(mics: recording.mics, loopback: recording.loopback, sweep: sweep, played: recording.played)
+    let result = SweepProcessing.process(mics: recording.mics, loopback: recording.loopback, sweep: sweep,
+                                         played: recording.played, clockRatio: recording.clockRatio ?? 1)
 
     if let latency = result.loopbackLatency {
         print("Timing: loopback reference, round-trip latency \(fmt(latency, 1)) samples (\(fmt(latency / fs * 1000, 2)) ms)")
+        if let gain = result.loopbackGain {
+            print("Loopback level: \(fmt(20 * log10(gain), 1)) dB (levels below are relative to the sweep's full scale)")
+        }
+        if let peak = result.loopbackPeakLevel, peak > -1 {
+            print("WARNING: the loopback input clipped (peak \(fmt(peak, 1)) dBFS), which distorts every impulse response. Lower --level or the loopback input gain.")
+        }
     } else {
         print("Timing: generated sweep (no loopback), so delays include the interface latency")
     }
-    if out.id != inDevice.id {
-        print("Note: output and input are different devices. Use an aggregate device with drift correction for stable timing.")
+    if recording.separateDevices {
+        if let ppm = recording.driftPPM, let i = recording.inputRate, let o = recording.outputRate {
+            print("Separate devices: input clock \(fmt(i, 2)) Hz, output clock \(fmt(o, 2)) Hz, difference \(fmt(ppm, 1)) ppm (corrected)")
+        } else {
+            print("Separate devices: could not measure the clock difference, so it was not corrected")
+        }
+        if recording.loopback == nil {
+            print("Note: without a loopback, arrival times between separate devices are approximate (device latencies are not known).")
+            print("      Cable an output of \(out.name) to an input of \(inDevice.name) and use --loopback-out/--loopback for exact timing.")
+        }
     }
 
     if let prefix = args.options["save"] {

@@ -38,4 +38,26 @@ final class SweepTests: XCTestCase {
         XCTAssertEqual(Delay.estimate(signal: sig, reference: ref), 137, accuracy: 0.01)
         XCTAssertEqual(Delay.estimate(signal: ref, reference: sig), -137, accuracy: 0.01)
     }
+
+    func testValidation() {
+        func problem(_ a: Double, _ b: Double, _ d: Double = 3, _ fs: Double = 48_000) -> String? {
+            ExponentialSweep.validationError(startFrequency: a, endFrequency: b, duration: d, sampleRate: fs)
+        }
+        XCTAssertNil(problem(20, 20_000))
+        XCTAssertNotNil(problem(20_000, 20))
+        XCTAssertNotNil(problem(0, 20_000))
+        XCTAssertNotNil(problem(20, 30_000))          // above Nyquist
+        XCTAssertNotNil(problem(1000, 1200))          // under an octave
+        XCTAssertNotNil(problem(20, 20_000, 0.1))     // too short
+        XCTAssertNotNil(problem(.nan, 20_000))
+    }
+
+    func testSweepPeakFollowsAmplitude() {
+        for db in [-60.0, -30.0, -12.0, 0.0] {
+            let amplitude = pow(10, db / 20)
+            let x = ExponentialSweep(sampleRate: 48_000, amplitude: amplitude).samples(silence: 1)
+            let peak = x.map(abs).max() ?? 0
+            XCTAssertEqual(20 * log10(peak), db, accuracy: 0.1, "sweep peak at \(db) dBFS")
+        }
+    }
 }

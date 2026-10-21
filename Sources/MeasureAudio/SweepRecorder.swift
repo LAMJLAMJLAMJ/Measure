@@ -50,6 +50,18 @@ public struct SweepRecording {
     public let loopback: [Double]?
     /// The samples that were played.
     public let played: [Double]
+    /// The input device's actual sample rate divided by the output device's, measured from the
+    /// callbacks' host-clock timestamps. Nil when both are the same device (one clock), or when the
+    /// rates could not be measured reliably.
+    public let clockRatio: Double?
+    /// Measured actual sample rates in Hz, when available.
+    public let inputRate: Double?
+    public let outputRate: Double?
+    /// True when input and output are different devices.
+    public let separateDevices: Bool
+
+    /// Clock difference in parts per million (input relative to output), when measured.
+    public var driftPPM: Double? { clockRatio.map { ($0 - 1) * 1e6 } }
 }
 
 /// Plays a signal on one output channel while recording several input channels, using two
@@ -100,11 +112,16 @@ public final class SweepRecorder {
         try await waitUntil(timeout: 5) { state.pointee.capturedFrames >= prerollFrames }
         try check(AudioOutputUnitStart(output), "starting output")
 
-        // Run until the signal has played and the input has caught up with it.
+        // Run until the signal has played and the input has caught up with it. The input must run past
+        // where the signal started (which depends on when the output's first buffer was requested)
+        // by the signal's length, plus a little for the interface's latency.
         let timeout = Double(signal.count) / sampleRate + 10
         try await waitUntil(timeout: timeout) {
-            state.pointee.playedFrames >= signal.count
-                && state.pointee.capturedFrames >= min(capacity, prerollFrames + signal.count + Int(0.1 * sampleRate))
+            let now = state.pointee
+            guard now.playedFrames >= signal.count, now.firstOutputHostTime > 0 else { return false }
+            let start = self.startOffset(firstInput: now.firstInputHostTime, firstOutput: now.firstOutputHostTime,
+                                         sampleRate: sampleRate, fallback: prerollFrames)
+            return now.capturedFrames >= min(capacity, start + signal.count + Int(0.05 * sampleRate))
         }
         AudioOutputUnitStop(output)
         AudioOutputUnitStop(input)
@@ -115,12 +132,8 @@ public final class SweepRecorder {
         // Align: drop the input captured before the first played sample, using the host clock
         // timestamps of the first input and output buffers.
         let s = state.pointee
-        var offset = prerollFrames
-        if s.firstInputHostTime > 0, s.firstOutputHostTime > s.firstInputHostTime {
-            let seconds = hostTicksToSeconds(s.firstOutputHostTime - s.firstInputHostTime)
-            offset = Int((seconds * sampleRate).rounded())
-        }
-        offset = max(0, min(offset, s.capturedFrames))
+        let offset = max(0, min(startOffset(firstInput: s.firstInputHostTime, firstOutput: s.firstOutputHostTime,
+                                            sampleRate: sampleRate, fallback: prerollFrames), s.capturedFrames))
         let length = min(signal.count, s.capturedFrames - offset)
 
         var tracks: [[Double]] = []
@@ -129,8 +142,18 @@ public final class SweepRecorder {
             tracks.append((0..<length).map { Double(base[$0]) })
         }
         let loopback = routing.loopbackChannel == nil ? nil : tracks.removeLast()
+
+        // Different devices run on different clocks. Measure each one's actual rate from its callbacks.
+        let separate = routing.inputDevice.id != routing.outputDevice.id
+        var inRate: Double?, outRate: Double?, ratio: Double?
+        if separate {
+            inRate = rate(times: s.inputTimes, count: s.inputTimeCount, nominal: sampleRate)
+            outRate = rate(times: s.outputTimes, count: s.outputTimeCount, nominal: sampleRate)
+            if let i = inRate, let o = outRate { ratio = i / o }
+        }
         return SweepRecording(sampleRate: sampleRate, mics: tracks, loopback: loopback,
-                              played: Array(signal.prefix(length)))
+                              played: Array(signal.prefix(length)),
+                              clockRatio: ratio, inputRate: inRate, outputRate: outRate, separateDevices: separate)
     }
 
     // MARK: - Units
@@ -151,7 +174,9 @@ public final class SweepRecorder {
     private func set<T>(_ unit: AudioUnit, _ property: AudioUnitPropertyID, _ scope: AudioUnitScope,
                         _ element: AudioUnitElement, _ value: T, _ what: String) throws {
         var v = value
-        try check(AudioUnitSetProperty(unit, property, scope, element, &v, UInt32(MemoryLayout<T>.size)), what)
+        try withUnsafeBytes(of: &v) { bytes in
+            try check(AudioUnitSetProperty(unit, property, scope, element, bytes.baseAddress, UInt32(bytes.count)), what)
+        }
     }
 
     /// Float32, non-interleaved: one buffer per channel.
@@ -197,6 +222,20 @@ public final class SweepRecorder {
         }
     }
 
+    /// Input frame at which playback started: the host-clock gap between the first input and output buffers.
+    private func startOffset(firstInput: UInt64, firstOutput: UInt64, sampleRate: Double, fallback: Int) -> Int {
+        guard firstInput > 0, firstOutput > firstInput else { return fallback }
+        return Int((hostTicksToSeconds(firstOutput - firstInput) * sampleRate).rounded())
+    }
+
+    /// Actual sample rate from the (sample time, host time) pairs the callbacks stored.
+    private func rate(times: UnsafeMutablePointer<Double>, count: Int, nominal: Double) -> Double? {
+        let n = min(count, RealtimeState.timestampCapacity)
+        let samples = (0..<n).map { times[2 * $0] }
+        let hosts = (0..<n).map { hostTicksToSeconds(UInt64(times[2 * $0 + 1])) }
+        return ClockRate.estimate(sampleTimes: samples, hostSeconds: hosts, nominal: nominal)
+    }
+
     private func hostTicksToSeconds(_ ticks: UInt64) -> Double {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
@@ -228,6 +267,14 @@ struct RealtimeState {
     var firstOutputHostTime: UInt64
     var renderError: OSStatus
 
+    /// (device sample time, host time in ticks) of every callback, for measuring each device's clock rate.
+    /// Host ticks are stored as Double, which is exact below 2^53 ticks (about 104 days of uptime on Apple silicon).
+    static let timestampCapacity = 16_384
+    var inputTimes: UnsafeMutablePointer<Double>
+    var inputTimeCount: Int
+    var outputTimes: UnsafeMutablePointer<Double>
+    var outputTimeCount: Int
+
     static func make(signal: [Double], outputChannel: Int, loopbackOutputChannel: Int,
                      captureChannels: [Int], inputChannelCount: Int, capacity: Int) -> UnsafeMutablePointer<RealtimeState> {
         let sig = UnsafeMutablePointer<Float>.allocate(capacity: max(1, signal.count))
@@ -253,7 +300,9 @@ struct RealtimeState {
             capture: cap, captureChannels: chans, captureChannelCount: captureChannels.count,
             capacity: capacity, capturedFrames: 0,
             inputUnit: nil, inputBuffers: buffers, maxFrames: maxFrames,
-            firstInputHostTime: 0, firstOutputHostTime: 0, renderError: noErr))
+            firstInputHostTime: 0, firstOutputHostTime: 0, renderError: noErr,
+            inputTimes: UnsafeMutablePointer<Double>.allocate(capacity: 2 * timestampCapacity), inputTimeCount: 0,
+            outputTimes: UnsafeMutablePointer<Double>.allocate(capacity: 2 * timestampCapacity), outputTimeCount: 0))
         return state
     }
 
@@ -262,6 +311,8 @@ struct RealtimeState {
         s.signal.deallocate()
         s.capture.deallocate()
         s.captureChannels.deallocate()
+        s.inputTimes.deallocate()
+        s.outputTimes.deallocate()
         for b in s.inputBuffers { b.mData?.deallocate() }
         free(s.inputBuffers.unsafeMutablePointer)
         state.deinitialize(count: 1)
@@ -276,6 +327,12 @@ private let outputCallback: AURenderCallback = { refCon, _, timeStamp, _, frameC
     let buffers = UnsafeMutableAudioBufferListPointer(ioData)
     let frames = Int(frameCount)
     if state.pointee.firstOutputHostTime == 0 { state.pointee.firstOutputHostTime = timeStamp.pointee.mHostTime }
+    let outCount = state.pointee.outputTimeCount
+    if outCount < RealtimeState.timestampCapacity {
+        state.pointee.outputTimes[2 * outCount] = timeStamp.pointee.mSampleTime
+        state.pointee.outputTimes[2 * outCount + 1] = Double(timeStamp.pointee.mHostTime)
+        state.pointee.outputTimeCount = outCount + 1
+    }
 
     let start = state.pointee.playedFrames
     let remaining = max(0, state.pointee.signalCount - start)
@@ -308,6 +365,12 @@ private let inputCallback: AURenderCallback = { refCon, actionFlags, timeStamp, 
         return status
     }
     if state.pointee.firstInputHostTime == 0 { state.pointee.firstInputHostTime = timeStamp.pointee.mHostTime }
+    let inCount = state.pointee.inputTimeCount
+    if inCount < RealtimeState.timestampCapacity {
+        state.pointee.inputTimes[2 * inCount] = timeStamp.pointee.mSampleTime
+        state.pointee.inputTimes[2 * inCount + 1] = Double(timeStamp.pointee.mHostTime)
+        state.pointee.inputTimeCount = inCount + 1
+    }
 
     let start = state.pointee.capturedFrames
     let n = min(frames, state.pointee.capacity - start)

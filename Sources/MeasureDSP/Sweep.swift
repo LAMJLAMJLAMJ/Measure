@@ -27,6 +27,22 @@ public struct ExponentialSweep {
         self.fadeOut = fadeOut
     }
 
+    /// Explains why a combination of settings cannot make a sweep, or nil when it can.
+    /// Check user input with this first: the initialiser traps on invalid values.
+    public static func validationError(startFrequency: Double, endFrequency: Double, duration: Double,
+                                       sampleRate: Double, amplitude: Double = 0.5) -> String? {
+        if !(sampleRate > 0) { return "The sample rate must be above zero." }
+        if !(startFrequency > 0) { return "The sweep must start above 0 Hz." }
+        if !(endFrequency > startFrequency) { return "The sweep must end above its start frequency (\(Int(startFrequency)) Hz)." }
+        if endFrequency > sampleRate / 2 {
+            return "The sweep must end at or below half the sample rate (\(Int(sampleRate / 2)) Hz at \(Int(sampleRate)) Hz)."
+        }
+        if endFrequency / startFrequency < 2 { return "The sweep should cover at least an octave." }
+        if !(duration >= 0.5) { return "The sweep should be at least 0.5 s long." }
+        if !(amplitude > 0 && amplitude <= 1) { return "The sweep level must be between 0 dBFS and just above silence." }
+        return nil
+    }
+
     /// Time constant L = T / ln(f2 / f1).
     public var rate: Double { duration / log(endFrequency / startFrequency) }
 

@@ -10,6 +10,7 @@ The first prototype covers sweep measurement and ISO 3382 room acoustics. The fa
 | --- | --- |
 | `Sources/MeasureDSP` | The analysis core. It has no user interface and no audio hardware code, so it can be tested on its own. |
 | `Sources/MeasureAudio` | Core Audio device list and sweep playback and recording (macOS only). |
+| `Sources/Measure` | The Mac app (SwiftUI). |
 | `Sources/measure-cli` | A command-line tool for measuring, analysing files and making sweeps before the app exists. |
 | `Tests/MeasureDSPTests` | Tests on generated signals with known answers. Comparisons with MATLAB and the measurement database come later. |
 
@@ -35,6 +36,26 @@ swift build -c release    # build the command-line tool
 ```
 
 To work in Xcode, open the folder (`File > Open...` and choose `Package.swift`). Choose the `MeasureDSP` scheme and press ⌘U to run the tests.
+
+## The Mac app
+
+```sh
+./scripts/build-app.sh      # builds build/Measure.app
+open build/Measure.app
+```
+
+`swift run Measure` also starts it during development. In that case macOS asks for microphone access for Terminal rather than for the app.
+
+- **Setup** (toolbar): output device and sweep channel, an optional second output for the loopback cable, input device, up to 4 mic inputs, loopback input, sample rate, sweep range, length, silence and level, and a position label. Microphones and their calibration files are set up here too. Each calibration belongs to a mic, not to an input. Settings are remembered, with devices found again by their UID.
+- **Measure** (⌘M): plays the sweep and adds one trace per mic to the library. The status bar warns about clipping or low level.
+- **Import** (⌘I): WAV impulse responses and REW text frequency responses.
+- **Trace library** (sidebar): tick traces to overlay them, and right-click to edit name, position, mic and notes, or to delete. Traces are saved as WAV and JSON in `~/Documents/Measure Projects/Default`. Use ⌘O to choose another project folder.
+- **Views:**
+  - **Frequency response:** with 1/3 to 1/48 octave smoothing and mic calibration.
+  - **Impulse:** impulse response or ETC over 20 ms to the full length, aligned to the selected trace's direct sound.
+  - **Decay:** Schroeder curve per band with the EDT, T20 and T30 fit lines and the noise floor.
+  - **Acoustics:** ISO 3382 table, copyable as CSV, plus a band-by-band comparison of the shown traces.
+  - **Spectrogram and waterfall.**
 
 ## Measuring from Terminal
 
