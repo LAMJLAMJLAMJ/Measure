@@ -174,7 +174,9 @@ public final class SweepRecorder {
     private func set<T>(_ unit: AudioUnit, _ property: AudioUnitPropertyID, _ scope: AudioUnitScope,
                         _ element: AudioUnitElement, _ value: T, _ what: String) throws {
         var v = value
-        try check(AudioUnitSetProperty(unit, property, scope, element, &v, UInt32(MemoryLayout<T>.size)), what)
+        try withUnsafeBytes(of: &v) { bytes in
+            try check(AudioUnitSetProperty(unit, property, scope, element, bytes.baseAddress, UInt32(bytes.count)), what)
+        }
     }
 
     /// Float32, non-interleaved: one buffer per channel.
