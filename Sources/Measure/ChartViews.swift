@@ -168,7 +168,7 @@ struct DecayView: View {
                         LineMark(x: .value("Time", p.x), y: .value("Level", p.y), series: .value("Curve", "Schroeder"))
                             .foregroundStyle(trace.color)
                     }
-                    fitLine(params.edtFit, name: "EDT", color: .gray)
+                    fitLine(params.edtFit, name: "EDT", color: .secondary)
                     fitLine(params.t20Fit, name: "T20", color: .orange)
                     fitLine(params.t30Fit, name: "T30", color: .red)
                     RuleMark(y: .value("Noise", params.noiseFloor))
@@ -179,7 +179,7 @@ struct DecayView: View {
                 .chartYScale(domain: -80...0)
                 .chartXAxisLabel("ms from onset")
                 .chartYAxisLabel("dB")
-                .chartForegroundStyleScale(["EDT": Color.gray, "T20": Color.orange, "T30": Color.red])
+                .chartForegroundStyleScale(["EDT": Color.secondary, "T20": Color.orange, "T30": Color.red])
                 .clipped()
                 Text("Schroeder decay of \(trace.info.name) with the fitted lines (EDT 0 to -10 dB, T20 -5 to -25 dB, T30 -5 to -35 dB). The curve ends where the decay meets the noise.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -361,6 +361,7 @@ struct SpectrogramView: View {
 /// Draws a spectrogram grid on a log frequency axis.
 struct Heatmap: View {
     let grid: TimeFrequency.Grid
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Canvas { context, size in
@@ -382,19 +383,26 @@ struct Heatmap: View {
             }
             for f in frequencyTicks where f >= fLow && f <= fHigh {
                 let y = size.height * (1 - CGFloat(log(f / fLow) / log(fHigh / fLow)))
-                context.draw(Text(frequencyLabel(f)).font(.caption2).foregroundStyle(.white), at: CGPoint(x: 18, y: y))
+                context.draw(Text(frequencyLabel(f)).font(.caption2).foregroundStyle(labelColor), at: CGPoint(x: 18, y: y))
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            Text("0 to \(Int((grid.times.last ?? 0) * 1000)) ms →").font(.caption2).foregroundStyle(.white).padding(4)
+            Text("0 to \(Int((grid.times.last ?? 0) * 1000)) ms →").font(.caption2).foregroundStyle(labelColor).padding(4)
         }
         .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
-    /// Maps 0 dB (loudest) to -60 dB onto a dark-to-bright scale.
+    private var labelColor: Color { colorScheme == .dark ? .white : .black }
+
+    /// Maps -60 dB to 0 dB (loudest). Quiet is dark in dark mode and light in light mode, so the
+    /// heat map sits naturally on the window background in either appearance.
     private func color(_ level: Double) -> Color {
         let t = max(0, min(1, (level + 60) / 60))
-        return Color(hue: 0.7 - 0.7 * t, saturation: 0.9, brightness: 0.15 + 0.85 * t)
+        let hue = 0.7 - 0.7 * t
+        if colorScheme == .dark {
+            return Color(hue: hue, saturation: 0.9, brightness: 0.15 + 0.85 * t)
+        }
+        return Color(hue: hue, saturation: 0.1 + 0.9 * t, brightness: 1 - 0.15 * t)
     }
 }
 
