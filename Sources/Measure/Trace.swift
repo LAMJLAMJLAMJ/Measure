@@ -39,6 +39,8 @@ struct Trace: Identifiable {
     let energyTime: [Double]
     /// Sample index of the onset (direct sound).
     let onset: Int
+    /// Seconds from the start of the frequency response window to the onset, removed from the phase.
+    let responseDelay: Double
 
     var id: UUID { info.id }
     var color: Color { TracePalette.color(info.colorIndex) }
@@ -54,6 +56,7 @@ struct Trace: Identifiable {
         let start = max(0, onset - Int(0.005 * fs))
         let window = Array(impulseResponse[start..<min(impulseResponse.count, start + Int(fs))])
         rawResponse = FrequencyResponse(impulseResponse: window, sampleRate: fs)
+        responseDelay = Double(onset - start) / fs
         energyTime = TimeFrequency.energyTimeCurve(impulseResponse)
     }
 
@@ -65,6 +68,7 @@ struct Trace: Identifiable {
         rawResponse = frequencyResponse
         energyTime = []
         onset = 0
+        responseDelay = 0
     }
 
     /// Magnitude for the chart: calibrated, smoothed and thinned to log-spaced points.
@@ -75,6 +79,28 @@ struct Trace: Identifiable {
         let high = min(20_000, fr.frequencies.last ?? 20_000)
         let resampled = fr.logResampled(pointsPerOctave: 48, low: 10, high: high)
         return zip(resampled.frequencies, resampled.magnitude).map { ChartPoint(x: $0, y: $1) }
+    }
+
+    /// Phase for the chart in degrees, with the delay to the direct sound removed, at log-spaced points.
+    /// Nil when the trace has no phase (an imported response without a phase column).
+    func displayPhase() -> [ChartPoint]? {
+        guard let phase = rawResponse.phase else { return nil }
+        let f = rawResponse.frequencies
+        guard !f.isEmpty else { return nil }
+        let high = min(20_000, f.last!)
+        var points: [ChartPoint] = []
+        var freq = 10.0
+        var i = 0
+        while freq <= high {
+            while i + 1 < f.count && abs(f[i + 1] - freq) <= abs(f[i] - freq) { i += 1 }
+            var p = (phase[i] + 360 * f[i] * responseDelay).truncatingRemainder(dividingBy: 360)
+            if p > 180 { p -= 360 } else if p <= -180 { p += 360 }
+            points.append(ChartPoint(x: f[i], y: p))
+            freq *= pow(2, 1.0 / 48)
+        }
+        // Low frequencies share a bin; keep one point per frequency.
+        var seen = Set<Double>()
+        return points.filter { seen.insert($0.x).inserted }
     }
 }
 
