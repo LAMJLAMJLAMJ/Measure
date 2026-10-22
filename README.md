@@ -50,12 +50,18 @@ open build/Measure.app
 - **Measure** (⌘M): plays the sweep and adds one trace per mic to the library. The status bar warns about clipping or low level.
 - **Import** (⌘I): WAV impulse responses and REW text frequency responses.
 - **Trace library** (sidebar): tick traces to overlay them, and right-click to edit name, position, mic and notes, or to delete. Traces are saved as WAV and JSON in `~/Documents/Measure Projects/Default`. Use ⌘O to choose another project folder.
-- **Views:**
-  - **Frequency response:** with 1/3 to 1/48 octave smoothing and mic calibration.
-  - **Impulse:** impulse response or ETC over 20 ms to the full length, aligned to the selected trace's direct sound.
-  - **Decay:** Schroeder curve per band with the EDT, T20 and T30 fit lines and the noise floor.
-  - **Acoustics:** ISO 3382 table, copyable as CSV, plus a band-by-band comparison of the shown traces.
-  - **Spectrogram and waterfall.**
+- **Modes** (toolbar, ⌥⌘1 and ⌥⌘2): the app has two modes that share the trace library, so an impulse response measured in one can be analysed in the other. ⌘1 to ⌘7 pick a view within the current mode, and the app remembers the last mode and view.
+  - **System tuning:** measure with a sweep (the live cross-spectrum mode comes later), then look at
+    - **Impulse:** impulse response or ETC over 20 ms to the full length, aligned to the selected trace's direct sound.
+    - **Frequency:** with 1/3 to 1/48 octave smoothing and mic calibration. The Virtual EQ panel is a placeholder for now.
+    - **Phase:** wrapped phase with the delay to the direct sound removed.
+    - **Delay:** arrival time of each shown trace, relative to the selected one in ms and metres, with the ETC below.
+    - **STI:** placeholder.
+  - **Acoustic analysis:** Record (a sweep now, plain recordings later) or Load files, then look at
+    - **Reverb:** Schroeder curve per band with the EDT, T20 and T30 fit lines and the noise floor, above the EDT/T20/T30 table and a band-by-band comparison of the shown traces.
+    - **Clarity:** C50, C80, D50 and Ts table and comparison. "Copy All as CSV" copies every ISO 3382 parameter.
+    - **Echo** (Dietsch and Kraak), **STI**, **Levels** (statistical levels) and **Noise** (NR/NC): placeholders that say what each will need.
+    - **Spectrogram and waterfall.**
 
 ## Measuring from Terminal
 

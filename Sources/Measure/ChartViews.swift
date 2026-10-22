@@ -21,6 +21,7 @@ struct EmptyState: View {
 
 struct FrequencyResponseView: View {
     @Environment(AppModel.self) private var model
+    @Binding var showVirtualEQ: Bool
     @State private var range: Double = 50
 
     var body: some View {
@@ -43,6 +44,9 @@ struct FrequencyResponseView: View {
                 .frame(width: 140)
                 Spacer()
                 Text("Levels in dBFS; mic calibration applied where set").font(.caption).foregroundStyle(.secondary)
+                Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
+                    .toggleStyle(.button)
+                    .help("Show the Virtual EQ panel")
             }
             if series.isEmpty {
                 EmptyState(text: "Tick a trace in the list to show it")
@@ -76,6 +80,95 @@ struct FrequencyResponseView: View {
     }
 }
 
+// MARK: - Phase
+
+struct PhaseView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let series = model.visibleTraces.compactMap { t in t.displayPhase().map { (t, $0) } }
+        VStack(alignment: .leading) {
+            HStack {
+                Spacer()
+                Text("Wrapped phase, with the delay to each trace's direct sound removed")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if series.isEmpty {
+                EmptyState(text: "Tick a trace with phase in the list to show it")
+            } else {
+                Chart {
+                    ForEach(series, id: \.0.id) { item in
+                        let trace = item.0
+                        ForEach(item.1) { p in
+                            LineMark(x: .value("Frequency", p.x), y: .value("Phase", p.y),
+                                     series: .value("Trace", trace.id.uuidString))
+                                .foregroundStyle(trace.color)
+                                .lineStyle(StrokeStyle(lineWidth: trace.id == model.selection ? 2 : 1.2))
+                        }
+                    }
+                }
+                .chartXScale(domain: 10...20_000, type: .log)
+                .chartYScale(domain: -180...180)
+                .chartXAxis {
+                    AxisMarks(values: frequencyTicks) { value in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
+                    }
+                }
+                .chartYAxis { AxisMarks(values: [-180, -90, 0, 90, 180]) }
+                .chartXAxisLabel("Hz")
+                .chartYAxisLabel("degrees")
+                .chartLegend(.hidden)
+                .clipped()
+                Text("Phase of the first second after the direct sound. Reflections make it ragged at high frequencies; the impulse window markers, coming in a later step, will clean it up.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+// MARK: - Delay
+
+struct DelayView: View {
+    @Environment(AppModel.self) private var model
+
+    /// Speed of sound at 20 °C, m/s.
+    private let speedOfSound = 343.0
+
+    var body: some View {
+        let traces = model.visibleTraces.filter { $0.impulseResponse != nil }
+        let reference = traces.first { $0.id == model.selection } ?? traces.first
+        VStack(alignment: .leading, spacing: 12) {
+            if let reference {
+                Text("Arrival of the direct sound, relative to \(reference.info.name)").font(.headline)
+                Table(traces) {
+                    TableColumn("Trace") { Text($0.info.name) }
+                    TableColumn("Arrival ms") { Text(String(format: "%.2f", arrival($0) * 1000)) }
+                    TableColumn("Relative ms") { Text(String(format: "%+.2f", (arrival($0) - arrival(reference)) * 1000)) }
+                    TableColumn("Relative m") { Text(String(format: "%+.2f", (arrival($0) - arrival(reference)) * speedOfSound)) }
+                    TableColumn("Timing") { Text(timing($0)).foregroundStyle(.secondary) }
+                }
+                .font(.body.monospacedDigit())
+                .frame(minHeight: 120, maxHeight: 220)
+                ImpulseView(initialMode: .etc, initialSpan: 20)
+            } else {
+                EmptyState(text: "Tick impulse responses in the list to compare their arrival times")
+            }
+        }
+    }
+
+    private func arrival(_ trace: Trace) -> Double { Double(trace.onset) / trace.info.sampleRate }
+
+    private func timing(_ trace: Trace) -> String {
+        switch trace.info.timingReference {
+        case .loopback: return "Absolute (loopback)"
+        case .generated: return "Includes interface latency"
+        case nil: return "From the file start"
+        }
+    }
+}
+
 // MARK: - Impulse and ETC
 
 struct ImpulseView: View {
@@ -85,8 +178,13 @@ struct ImpulseView: View {
     }
 
     @Environment(AppModel.self) private var model
-    @State private var mode: Mode = .etc
-    @State private var span: Double = 300
+    @State private var mode: Mode
+    @State private var span: Double
+
+    init(initialMode: Mode = .etc, initialSpan: Double = 300) {
+        _mode = State(initialValue: initialMode)
+        _span = State(initialValue: initialSpan)
+    }
 
     var body: some View {
         let traces = model.visibleTraces.filter { $0.impulseResponse != nil }
@@ -208,7 +306,7 @@ struct DecayView: View {
     }
 }
 
-// MARK: - Acoustics table and band comparison
+// MARK: - Acoustics tables and band comparison
 
 struct BandRow: Identifiable {
     let id: Int
@@ -216,49 +314,64 @@ struct BandRow: Identifiable {
     let p: BandParameters
 }
 
-struct AcousticsView: View {
-    enum Metric: String, CaseIterable, Identifiable {
-        case t30 = "T30", t20 = "T20", edt = "EDT", c50 = "C50", c80 = "C80"
-        var id: String { rawValue }
-        func value(_ p: BandParameters) -> Double? {
-            switch self {
-            case .t30: return p.t30
-            case .t20: return p.t20
-            case .edt: return p.edt
-            case .c50: return p.c50
-            case .c80: return p.c80
-            }
+enum Metric: String, CaseIterable, Identifiable {
+    case t30 = "T30", t20 = "T20", edt = "EDT", c50 = "C50", c80 = "C80", d50 = "D50", ts = "Ts"
+    var id: String { rawValue }
+    func value(_ p: BandParameters) -> Double? {
+        switch self {
+        case .t30: return p.t30
+        case .t20: return p.t20
+        case .edt: return p.edt
+        case .c50: return p.c50
+        case .c80: return p.c80
+        case .d50: return p.d50 * 100
+        case .ts: return p.ts * 1000
         }
-        var unit: String { self == .c50 || self == .c80 ? "dB" : "s" }
+    }
+    var unit: String {
+        switch self {
+        case .c50, .c80: return "dB"
+        case .d50: return "%"
+        case .ts: return "ms"
+        default: return "s"
+        }
+    }
+}
+
+/// Decay curve above the reverberation table.
+struct ReverbView: View {
+    var body: some View {
+        VSplitView {
+            DecayView().frame(minHeight: 220).padding(.bottom, 8)
+            ParametersPanel(set: .reverb).frame(minHeight: 220).padding(.top, 8)
+        }
+    }
+}
+
+/// ISO 3382-1 table for the selected trace, plus a band-by-band comparison of the shown traces.
+struct ParametersPanel: View {
+    enum ParameterSet {
+        case reverb, clarity
+        var metrics: [Metric] { self == .reverb ? [.t30, .t20, .edt] : [.c50, .c80, .d50, .ts] }
     }
 
+    let set: ParameterSet
     @Environment(AppModel.self) private var model
-    @State private var metric: Metric = .t30
+    @State private var metric: Metric?
 
     var body: some View {
         let traces = model.visibleTraces.filter { $0.acoustics != nil }
+        let shown = metric.flatMap { set.metrics.contains($0) ? $0 : nil } ?? set.metrics[0]
         VStack(alignment: .leading, spacing: 12) {
             if let trace = model.selectedTrace, let a = trace.acoustics {
-                Text("\(trace.info.name): ISO 3382-1, octave bands").font(.headline)
-                let rows = a.bands.enumerated().map { BandRow(id: $0.offset, label: $0.element.band!.description, p: $0.element) }
-                    + [BandRow(id: -1, label: "Broadband", p: a.broadband)]
-                Table(rows) {
-                    TableColumn("Band") { Text($0.label) }
-                    TableColumn("EDT s") { Text(fmt($0.p.edt)) }
-                    TableColumn("T20 s") { Text(fmt($0.p.t20)) }
-                    TableColumn("T30 s") { Text(fmt($0.p.t30)) }
-                    TableColumn("C50 dB") { Text(fmt($0.p.c50, 1)) }
-                    TableColumn("C80 dB") { Text(fmt($0.p.c80, 1)) }
-                    TableColumn("D50 %") { Text(fmt($0.p.d50 * 100, 1)) }
-                    TableColumn("Ts ms") { Text(fmt($0.p.ts * 1000, 0)) }
-                    TableColumn("PNR dB") { Text(fmt($0.p.peakToNoise, 0)) }
-                }
-                .font(.body.monospacedDigit())
-                .frame(minHeight: 260)
                 HStack {
-                    Button("Copy as CSV") { copyCSV(rows) }
+                    Text("\(trace.info.name): ISO 3382-1, octave bands").font(.headline)
                     Spacer()
+                    Button("Copy All as CSV") { copyCSV(rows(a)) }
                 }
+                table(rows(a))
+                    .font(.body.monospacedDigit())
+                    .frame(minHeight: 180)
             } else {
                 EmptyState(text: "Select a measured or imported impulse response")
             }
@@ -266,24 +379,52 @@ struct AcousticsView: View {
             if traces.count > 1 {
                 HStack {
                     Text("Compare shown traces").font(.headline)
-                    Picker("Metric", selection: $metric) { ForEach(Metric.allCases) { Text($0.rawValue).tag($0) } }
-                        .pickerStyle(.segmented).frame(width: 300)
+                    Picker("Metric", selection: Binding(get: { shown }, set: { metric = $0 })) {
+                        ForEach(set.metrics) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented).frame(width: CGFloat(70 * set.metrics.count))
                 }
                 Chart {
                     ForEach(traces) { trace in
                         ForEach(trace.acoustics!.bands, id: \.band!.nominal) { p in
-                            if let v = metric.value(p) {
-                                LineMark(x: .value("Band", p.band!.description), y: .value(metric.rawValue, v),
+                            if let v = shown.value(p) {
+                                LineMark(x: .value("Band", p.band!.description), y: .value(shown.rawValue, v),
                                          series: .value("Trace", trace.id.uuidString))
                                     .foregroundStyle(trace.color)
-                                PointMark(x: .value("Band", p.band!.description), y: .value(metric.rawValue, v))
+                                PointMark(x: .value("Band", p.band!.description), y: .value(shown.rawValue, v))
                                     .foregroundStyle(trace.color)
                             }
                         }
                     }
                 }
-                .chartYAxisLabel(metric.unit)
-                .frame(minHeight: 180)
+                .chartYAxisLabel(shown.unit)
+                .frame(minHeight: 160)
+            }
+        }
+    }
+
+    private func rows(_ a: RoomAcousticsResult) -> [BandRow] {
+        a.bands.enumerated().map { BandRow(id: $0.offset, label: $0.element.band!.description, p: $0.element) }
+            + [BandRow(id: -1, label: "Broadband", p: a.broadband)]
+    }
+
+    @ViewBuilder private func table(_ rows: [BandRow]) -> some View {
+        switch set {
+        case .reverb:
+            Table(rows) {
+                TableColumn("Band") { Text($0.label) }
+                TableColumn("EDT s") { Text(fmt($0.p.edt)) }
+                TableColumn("T20 s") { Text(fmt($0.p.t20)) }
+                TableColumn("T30 s") { Text(fmt($0.p.t30)) }
+                TableColumn("PNR dB") { Text(fmt($0.p.peakToNoise, 0)) }
+            }
+        case .clarity:
+            Table(rows) {
+                TableColumn("Band") { Text($0.label) }
+                TableColumn("C50 dB") { Text(fmt($0.p.c50, 1)) }
+                TableColumn("C80 dB") { Text(fmt($0.p.c80, 1)) }
+                TableColumn("D50 %") { Text(fmt($0.p.d50 * 100, 1)) }
+                TableColumn("Ts ms") { Text(fmt($0.p.ts * 1000, 0)) }
             }
         }
     }

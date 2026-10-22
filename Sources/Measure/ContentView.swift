@@ -1,41 +1,30 @@
 #if os(macOS)
 import SwiftUI
 
-enum DetailTab: String, CaseIterable, Identifiable {
-    case response = "Frequency response"
-    case impulse = "Impulse"
-    case decay = "Decay"
-    case acoustics = "Acoustics"
-    case spectrogram = "Spectrogram"
-    var id: String { rawValue }
-}
-
 struct ContentView: View {
     @Environment(AppModel.self) private var model
-    @State private var tab: DetailTab = .response
+    @AppStorage("mode") private var mode: AppMode = .tuning
+    @AppStorage("tuningTab") private var tuningTab: TuningTab = .frequency
+    @AppStorage("acousticsTab") private var acousticsTab: AcousticsTab = .reverb
+    @AppStorage("tuningSource") private var source: TuningSource = .sweep
+    @AppStorage("showVirtualEQ") private var showVirtualEQ = false
     @State private var showSetup = false
 
     var body: some View {
-        @Bindable var model = model
         NavigationSplitView {
             TraceList()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } detail: {
             VStack(spacing: 0) {
-                Picker("View", selection: $tab) {
-                    ForEach(DetailTab.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(12)
+                tabPicker
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .padding(12)
 
                 Group {
-                    switch tab {
-                    case .response: FrequencyResponseView()
-                    case .impulse: ImpulseView()
-                    case .decay: DecayView()
-                    case .acoustics: AcousticsView()
-                    case .spectrogram: SpectrogramView()
+                    switch mode {
+                    case .tuning: tuningContent
+                    case .acoustics: acousticsContent
                     }
                 }
                 .padding([.horizontal, .bottom], 12)
@@ -43,22 +32,113 @@ struct ContentView: View {
 
                 StatusBar()
             }
+            .inspector(isPresented: Binding(get: { mode == .tuning && tuningTab == .frequency && showVirtualEQ },
+                                            set: { showVirtualEQ = $0 })) {
+                VirtualEQPanel().inspectorColumnWidth(min: 220, ideal: 280)
+            }
         }
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("Mode", selection: $mode) {
+                    ForEach(AppMode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .help("System tuning (⌥⌘1) or acoustic analysis (⌥⌘2)")
+            }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { showSetup = true } label: { Label("Setup", systemImage: "slider.horizontal.3") }
                     .help("Devices, channels, mics and sweep settings")
-                Button { importFiles(model) } label: { Label("Import", systemImage: "square.and.arrow.down") }
-                    .help("Import WAV impulse responses or REW text exports (⌘I)")
-                Button { Task { await model.measure() } } label: {
-                    Label(model.isMeasuring ? "Measuring" : "Measure", systemImage: model.isMeasuring ? "waveform" : "record.circle")
+                switch mode {
+                case .tuning: tuningActions
+                case .acoustics: acousticsActions
                 }
-                .disabled(model.isMeasuring)
-                .help("Play the sweep and record (⌘M)")
             }
         }
+        .background { shortcuts }
         .sheet(isPresented: $showSetup) { SetupView() }
         .navigationTitle(model.projectFolder.lastPathComponent)
+    }
+
+    @ViewBuilder private var tabPicker: some View {
+        switch mode {
+        case .tuning:
+            Picker("View", selection: $tuningTab) { ForEach(TuningTab.allCases) { Text($0.rawValue).tag($0) } }
+        case .acoustics:
+            Picker("View", selection: $acousticsTab) { ForEach(AcousticsTab.allCases) { Text($0.rawValue).tag($0) } }
+        }
+    }
+
+    @ViewBuilder private var tuningContent: some View {
+        switch tuningTab {
+        case .impulse: ImpulseView()
+        case .frequency: FrequencyResponseView(showVirtualEQ: $showVirtualEQ)
+        case .phase: PhaseView()
+        case .delay: DelayView()
+        case .sti: STIView()
+        }
+    }
+
+    @ViewBuilder private var acousticsContent: some View {
+        switch acousticsTab {
+        case .reverb: ReverbView()
+        case .clarity: ParametersPanel(set: .clarity)
+        case .echo: EchoView()
+        case .sti: STIView()
+        case .levels: StatisticalLevelsView()
+        case .noise: NoiseRatingView()
+        case .spectrogram: SpectrogramView()
+        }
+    }
+
+    @ViewBuilder private var tuningActions: some View {
+        Picker("Source", selection: $source) {
+            ForEach(TuningSource.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .help("Sweep, or the live cross-spectrum mode (coming in a later step)")
+        Button { importFiles(model) } label: { Label("Import", systemImage: "square.and.arrow.down") }
+            .help("Import WAV impulse responses or REW text exports (⌘I)")
+        Button { Task { await model.measure() } } label: {
+            Label(model.isMeasuring ? "Measuring" : "Measure", systemImage: model.isMeasuring ? "waveform" : "record.circle")
+        }
+        .disabled(model.isMeasuring || source == .crossSpectrum)
+        .help(source == .crossSpectrum ? "The live cross-spectrum mode comes in a later step" : "Play the sweep and record (⌘M)")
+    }
+
+    @ViewBuilder private var acousticsActions: some View {
+        Menu {
+            Button("Sweep (impulse response)") { Task { await model.measure() } }
+            Button("Plain recording (coming soon)") {}
+                .disabled(true)
+        } label: {
+            Label(model.isMeasuring ? "Recording" : "Record", systemImage: model.isMeasuring ? "waveform" : "record.circle")
+        }
+        .disabled(model.isMeasuring)
+        .help("Record a sweep for an impulse response (⌘M), or a plain recording for levels and noise")
+        Button { importFiles(model) } label: { Label("Load", systemImage: "square.and.arrow.down") }
+            .help("Load WAV impulse responses or REW text exports (⌘I)")
+    }
+
+    /// ⌘1 to ⌘7 pick a view in the current mode; ⌥⌘1 and ⌥⌘2 switch mode.
+    private var shortcuts: some View {
+        let count = mode == .tuning ? TuningTab.allCases.count : AcousticsTab.allCases.count
+        return ZStack {
+            ForEach(0..<count, id: \.self) { i in
+                Button("") {
+                    switch mode {
+                    case .tuning: tuningTab = TuningTab.allCases[i]
+                    case .acoustics: acousticsTab = AcousticsTab.allCases[i]
+                    }
+                }
+                .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
+            }
+            ForEach(Array(AppMode.allCases.enumerated()), id: \.offset) { i, m in
+                Button("") { mode = m }
+                    .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: [.command, .option])
+            }
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 }
 
