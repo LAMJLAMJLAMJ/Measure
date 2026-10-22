@@ -243,6 +243,13 @@ struct ImpulseView: View {
                         }
                     }
                     if let window {
+                        ForEach(windowCurve(window)) { p in
+                            LineMark(x: .value("Time", p.x),
+                                     y: .value(yLabel, mode == .etc ? max(-100, 20 * log10(max(p.y, 1e-10))) : p.y),
+                                     series: .value("Trace", "window"))
+                                .foregroundStyle(Color.accentColor)
+                                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        }
                         RectangleMark(xStart: .value("Time", -window.left * 1000), xEnd: .value("Time", window.right * 1000),
                                       yStart: .value(yLabel, yRange.lowerBound), yEnd: .value(yLabel, yRange.upperBound))
                             .foregroundStyle(Color.accentColor.opacity(0.08))
@@ -276,26 +283,74 @@ struct ImpulseView: View {
 
     @ViewBuilder
     private func windowControls(_ reference: Trace, _ window: ResponseWindow, traces: [Trace]) -> some View {
-        HStack(spacing: 8) {
-            Text("Window for \(reference.info.name):")
-            TextField("Left", value: Binding(get: { window.left * 1000 },
-                                             set: { commit(ResponseWindow(left: max(0, $0) / 1000, right: window.right, rightTaper: window.rightTaper), to: [reference.id]) }),
-                      format: .number.precision(.fractionLength(0...1)))
-                .frame(width: 60)
-            Text("ms before,")
-            TextField("Right", value: Binding(get: { window.right * 1000 },
-                                              set: { commit(ResponseWindow(left: window.left, right: max(1, $0) / 1000, rightTaper: window.rightTaper), to: [reference.id]) }),
-                      format: .number.precision(.fractionLength(0...1)))
-                .frame(width: 70)
-            Text("ms after the direct sound")
-            Spacer()
-            Button("Apply to All Shown") { commit(window, to: Set(traces.map(\.id))) }
-                .help("Use this window for every ticked impulse response")
-            Button("Reset") { commit(.standard, to: [reference.id]) }
-                .help("Back to 5 ms before and 1 s after the direct sound")
+        let id = reference.id
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Window for \(reference.info.name)").fontWeight(.medium)
+                Spacer()
+                Button("Apply to All Shown") { commit(window, to: Set(traces.map(\.id))) }
+                    .help("Use this window for every ticked impulse response")
+                Button("Reset") { commit(.standard, to: [id]) }
+                    .help("Back to Hann 5 ms before and Tukey 1 s after the direct sound")
+            }
+            sideControls("Left", shape: binding(window, \.leftShape, id),
+                         ms: scaled(binding(window, \.left, id), by: 1000, in: 0...500),
+                         taper: scaled(binding(window, \.leftTaper, id), by: 100, in: 0...100),
+                         showsTaper: window.leftShape == .tukey, suffix: "ms before the direct sound")
+            sideControls("Right", shape: binding(window, \.rightShape, id),
+                         ms: scaled(binding(window, \.right, id), by: 1000, in: 1...60_000),
+                         taper: scaled(binding(window, \.rightTaper, id), by: 100, in: 0...100),
+                         showsTaper: window.rightShape == .tukey, suffix: "ms after the direct sound")
         }
         .font(.callout)
         .textFieldStyle(.roundedBorder)
+    }
+
+    private func sideControls(_ title: String, shape: Binding<ResponseWindow.Shape>, ms: Binding<Double>,
+                              taper: Binding<Double>, showsTaper: Bool, suffix: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title).frame(width: 40, alignment: .leading)
+            Picker(title, selection: shape) {
+                ForEach(ResponseWindow.Shape.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .labelsHidden()
+            .frame(width: 130)
+            TextField(title, value: ms, format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 70)
+            Text(suffix)
+            if showsTaper {
+                TextField("Taper", value: taper, format: .number.precision(.fractionLength(0)))
+                    .frame(width: 50)
+                Text("% taper")
+            }
+            Spacer()
+        }
+    }
+
+    /// A binding to one field of the window that saves the whole window to the trace when set.
+    private func binding<T>(_ window: ResponseWindow, _ path: WritableKeyPath<ResponseWindow, T>, _ id: UUID) -> Binding<T> {
+        Binding(get: { window[keyPath: path] },
+                set: { var w = window; w[keyPath: path] = $0; commit(w, to: [id]) })
+    }
+
+    /// Shows a value multiplied by `factor` (seconds as ms, fractions as %), clamped to `range` when set.
+    private func scaled(_ value: Binding<Double>, by factor: Double, in range: ClosedRange<Double>) -> Binding<Double> {
+        Binding(get: { value.wrappedValue * factor },
+                set: { value.wrappedValue = min(max($0, range.lowerBound), range.upperBound) / factor })
+    }
+
+    /// The window's gain for drawing, in ms from the onset, dropping to zero just outside its edges.
+    private func windowCurve(_ w: ResponseWindow) -> [ChartPoint] {
+        let n = 400
+        var points = [ChartPoint(x: -w.left * 1000 - 0.001, y: 0)]
+        for k in 0...n {
+            let t = -w.left + (w.left + w.right) * Double(k) / Double(n)
+            let g = t < 0 ? w.leftShape.gain((t + w.left) / w.left, taper: w.leftTaper)
+                          : w.rightShape.gain((w.right - t) / w.right, taper: w.rightTaper)
+            points.append(ChartPoint(x: t * 1000, y: g))
+        }
+        points.append(ChartPoint(x: w.right * 1000 + 0.001, y: 0))
+        return points
     }
 
     private func commit(_ window: ResponseWindow, to ids: Set<UUID>) {
