@@ -30,6 +30,15 @@ struct EchoView: View {
         var id: UUID { trace.id }
     }
 
+    /// One line of the table: an echo, or a trace without any.
+    private struct TableLine: Identifiable {
+        let id: String
+        let trace: Trace
+        let time: Double?
+        let ek: Double
+        let share: Int
+    }
+
     @Environment(AppModel.self) private var model
     @AppStorage("echo.programme") private var programme: EchoCriterion.Programme = .speech
     @AppStorage("echo.filter") private var filter: Filter = .octave1k
@@ -59,17 +68,17 @@ struct EchoView: View {
                 ProgressView("Computing…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 chart
-                Table(rows) {
+                Table(tableLines) {
                     TableColumn("Trace") { Text($0.trace.info.name) }
-                    TableColumn("Max EK") { Text(String(format: "%.2f", $0.result.maxEK)) }
-                    TableColumn("At ms") { Text(String(format: "%.0f", $0.result.timeOfMax * 1000)) }
-                    TableColumn("Echo") { row in
-                        Text(verdict(row.result))
-                            .foregroundStyle(row.result.audibleShare == 50 ? Color.red : row.result.audibleShare == 10 ? Color.orange : Color.secondary)
+                    TableColumn("EK") { Text(String(format: "%.2f", $0.ek)) }
+                    TableColumn("At ms") { Text($0.time.map { String(format: "%.0f", $0 * 1000) } ?? "–") }
+                    TableColumn("Echo") { line in
+                        Text(verdict(line))
+                            .foregroundStyle(line.share == 50 ? Color.red : line.share == 10 ? Color.orange : Color.secondary)
                     }
                 }
                 .font(.body.monospacedDigit())
-                .frame(minHeight: 100, maxHeight: 180)
+                .frame(minHeight: 100, maxHeight: 220)
                 Text("EK is the rise of the centre time over Δτ, from the direct sound. Above the red line an echo is likely to be heard by 50 % of listeners, above the orange line by 10 %. Dietsch and Kraak filter to the 1 kHz octave.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -86,7 +95,14 @@ struct EchoView: View {
                         .lineStyle(StrokeStyle(lineWidth: row.id == model.selection ? 2 : 1.2))
                 }
             }
-            RuleMark(y: .value("EK", programme.limit50))
+            ForEach(rows) { row in
+                ForEach(row.result.echoes, id: \.time) { echo in
+                    PointMark(x: .value("Time", echo.time * 1000), y: .value("EK", echo.ek))
+                        .foregroundStyle(row.trace.color)
+                        .symbolSize(40)
+                }
+            }
+                        RuleMark(y: .value("EK", programme.limit50))
                 .foregroundStyle(.red)
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 3]))
                 .annotation(position: .top, alignment: .trailing) { Text("50 %").font(.caption2).foregroundStyle(.red) }
@@ -101,11 +117,23 @@ struct EchoView: View {
         .clipped()
     }
 
-    private func verdict(_ r: EchoCriterion.Result) -> String {
-        switch r.audibleShare {
+    /// Every echo of every trace in time order, and one line with the highest EK for a trace without any.
+    private var tableLines: [TableLine] {
+        rows.flatMap { row -> [TableLine] in
+            if row.result.echoes.isEmpty {
+                return [TableLine(id: "\(row.id)", trace: row.trace, time: nil, ek: row.result.maxEK, share: 0)]
+            }
+            return row.result.echoes.enumerated().map { i, echo in
+                TableLine(id: "\(row.id)-\(i)", trace: row.trace, time: echo.time, ek: echo.ek, share: echo.audibleShare)
+            }
+        }
+    }
+
+    private func verdict(_ line: TableLine) -> String {
+        switch line.share {
         case 50: return "Likely (50 % of listeners)"
         case 10: return "Possible (10 % of listeners)"
-        default: return "None"
+        default: return "None (highest EK shown)"
         }
     }
 

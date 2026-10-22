@@ -61,7 +61,7 @@ open build/Measure.app
   - **Acoustic analysis:** Record (a sweep now, plain recordings later) or Load files, then look at
     - **Reverb:** Schroeder curve per band with the EDT, T20 and T30 fit lines and the noise floor, above the EDT/T20/T30 table and a band-by-band comparison of the shown traces.
     - **Clarity:** C50, C80, D50 and Ts table and comparison. "Copy All as CSV" copies every ISO 3382 parameter.
-    - **Echo:** echo criterion after Dietsch and Kraak for the shown traces, for speech (n = 2/3, Δτ = 9 ms) or music (n = 1, Δτ = 14 ms), on the 1 kHz octave (as in the original method), the 2 kHz octave or broadband. The chart shows EK against time with the limits at which 10 % and 50 % of listeners hear an echo, and the table gives each trace's largest EK, when it occurs and the verdict.
+    - **Echo:** echo criterion after Dietsch and Kraak for the shown traces, for speech (n = 2/3, Δτ = 9 ms) or music (n = 1, Δτ = 14 ms), on the 1 kHz octave (as in the original method), the 2 kHz octave or broadband. The chart shows EK against time with the limits at which 10 % and 50 % of listeners hear an echo, and the table lists every echo of each trace (each stretch of EK above the 10 % limit, at its peak) with its EK, time and verdict, or the largest EK for a trace without any. Echoes are also marked on the chart.
     - **STI**, **Levels** (statistical levels) and **Noise** (NR/NC): placeholders that say what each will need.
     - **Spectrogram and waterfall.**
 

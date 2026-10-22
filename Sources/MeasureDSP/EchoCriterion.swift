@@ -21,6 +21,15 @@ public enum EchoCriterion {
         public var limit10: Double { self == .speech ? 0.9 : 1.5 }
     }
 
+    /// One stretch where EK stays above the 10 % limit, at its peak.
+    public struct Echo: Equatable {
+        /// Seconds from the direct sound to the peak.
+        public let time: Double
+        public let ek: Double
+        /// Share of listeners likely to hear it: 50 or 10 (%).
+        public let audibleShare: Int
+    }
+
     public struct Result {
         public let programme: Programme
         /// Seconds from the direct sound.
@@ -29,6 +38,8 @@ public enum EchoCriterion {
         public let maxEK: Double
         /// Seconds from the direct sound to the largest EK.
         public let timeOfMax: Double
+        /// Every separate echo, in time order.
+        public let echoes: [Echo]
 
         /// Share of listeners likely to hear an echo: 50, 10 or 0 (%).
         public var audibleShare: Int {
@@ -74,6 +85,29 @@ public enum EchoCriterion {
             if bucketMax > maxEK { maxEK = bucketMax; timeOfMax = bucketTime }
             k += stepN
         }
-        return Result(programme: programme, times: times, ek: ek, maxEK: maxEK, timeOfMax: timeOfMax)
+        return Result(programme: programme, times: times, ek: ek, maxEK: maxEK, timeOfMax: timeOfMax,
+                      echoes: echoes(times: times, ek: ek, programme: programme))
+    }
+
+    /// The peak of each run of EK above the 10 % limit. EK stays up for about Δτ_E after a reflection,
+    /// so one run is one echo.
+    static func echoes(times: [Double], ek: [Double], programme: Programme) -> [Echo] {
+        var out: [Echo] = []
+        var peak: (time: Double, ek: Double)?
+        func close() {
+            if let p = peak {
+                out.append(Echo(time: p.time, ek: p.ek, audibleShare: p.ek > programme.limit50 ? 50 : 10))
+            }
+            peak = nil
+        }
+        for (t, v) in zip(times, ek) {
+            if v > programme.limit10 {
+                if v > (peak?.ek ?? -.infinity) { peak = (t, v) }
+            } else {
+                close()
+            }
+        }
+        close()
+        return out
     }
 }
