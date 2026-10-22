@@ -193,6 +193,14 @@ final class AppModel {
         if let s = selection, ids.contains(s) { selection = traces.last?.id }
     }
 
+    /// Sets the frequency response window of the given traces. Imported frequency responses are skipped.
+    func setWindow(_ window: ResponseWindow, for ids: Set<UUID>) {
+        for i in traces.indices where ids.contains(traces[i].id) && traces[i].impulseResponse != nil {
+            traces[i].setWindow(window)
+            try? ProjectStore.saveInfo(traces[i].info, in: projectFolder)
+        }
+    }
+
     func update(_ info: TraceInfo) {
         guard let i = traces.firstIndex(where: { $0.id == info.id }) else { return }
         traces[i].info = info

@@ -70,7 +70,7 @@ struct ContentView: View {
 
     @ViewBuilder private var tuningContent: some View {
         switch tuningTab {
-        case .impulse: ImpulseView()
+        case .impulse: ImpulseView(editsWindow: true)
         case .frequency: FrequencyResponseView(showVirtualEQ: $showVirtualEQ)
         case .phase: PhaseView()
         case .delay: DelayView()

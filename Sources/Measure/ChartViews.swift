@@ -43,7 +43,7 @@ struct FrequencyResponseView: View {
                 }
                 .frame(width: 140)
                 Spacer()
-                Text("Levels in dBFS; mic calibration applied where set").font(.caption).foregroundStyle(.secondary)
+                Text("Levels in dBFS; mic calibration applied where set\(windowNote)").font(.caption).foregroundStyle(.secondary)
                 Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
                     .toggleStyle(.button)
                     .help("Show the Virtual EQ panel")
@@ -77,6 +77,14 @@ struct FrequencyResponseView: View {
                 .clipped()
             }
         }
+    }
+}
+
+extension FrequencyResponseView {
+    /// The selected trace's window, when it is not the standard one.
+    var windowNote: String {
+        guard let trace = model.selectedTrace, trace.impulseResponse != nil, trace.window != .standard else { return "" }
+        return String(format: "; %@ window %g to %g ms", trace.info.name, -trace.window.left * 1000, trace.window.right * 1000)
     }
 }
 
@@ -121,7 +129,7 @@ struct PhaseView: View {
                 .chartYAxisLabel("degrees")
                 .chartLegend(.hidden)
                 .clipped()
-                Text("Phase of the first second after the direct sound. Reflections make it ragged at high frequencies; the impulse window markers, coming in a later step, will clean it up.")
+                Text("Phase within each trace's window. Shorten the window on the Impulse view to leave out reflections and clean it up.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -177,17 +185,27 @@ struct ImpulseView: View {
         var id: String { rawValue }
     }
 
+    private enum Edge { case left, right }
+
     @Environment(AppModel.self) private var model
     @State private var mode: Mode
     @State private var span: Double
+    /// Show the frequency response window of the selected trace and let it be dragged.
+    let editsWindow: Bool
+    @State private var dragging: Edge?
+    @State private var liveWindow: ResponseWindow?
 
-    init(initialMode: Mode = .etc, initialSpan: Double = 300) {
+    init(initialMode: Mode = .etc, initialSpan: Double = 300, editsWindow: Bool = false) {
         _mode = State(initialValue: initialMode)
         _span = State(initialValue: initialSpan)
+        self.editsWindow = editsWindow
     }
 
     var body: some View {
         let traces = model.visibleTraces.filter { $0.impulseResponse != nil }
+        // All traces share the time axis of the selected (or first) trace, so relative arrivals show.
+        let reference = traces.first { $0.id == model.selection } ?? traces.first
+        let window = editsWindow ? reference.map { liveWindow ?? $0.window } : nil
         VStack(alignment: .leading) {
             HStack {
                 Picker("Show", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
@@ -203,35 +221,121 @@ struct ImpulseView: View {
                 Spacer()
                 Text("Time from the selected trace's direct sound").font(.caption).foregroundStyle(.secondary)
             }
-            if traces.isEmpty {
-                EmptyState(text: "No impulse responses shown")
-            } else {
-                // All traces share the time axis of the selected (or first) trace, so relative arrivals show.
-                let reference = traces.first { $0.id == model.selection } ?? traces[0]
+            if let reference, let window {
+                windowControls(reference, window, traces: traces)
+            }
+            if let reference {
                 let zero = reference.onset
+                let fs = reference.info.sampleRate
+                // Start a little before the direct sound, and before the window's left edge.
+                let preRoll = max(0.005, (window?.left ?? 0) + 0.002)
+                let lo = -min(preRoll, Double(zero) / fs) * 1000
+                let hi = span == 0 ? Double(reference.impulseResponse!.count - zero) / fs * 1000 : lo + span
+                let yLabel = mode == .etc ? "Level" : "Amplitude"
+                let yRange: ClosedRange<Double> = mode == .etc ? -100...0 : -1...1
                 Chart {
                     ForEach(traces) { trace in
-                        ForEach(points(trace, zero: zero)) { p in
-                            LineMark(x: .value("Time", p.x), y: .value(mode == .etc ? "Level" : "Amplitude", p.y),
+                        ForEach(points(trace, zero: zero, preRoll: preRoll)) { p in
+                            LineMark(x: .value("Time", p.x), y: .value(yLabel, p.y),
                                      series: .value("Trace", trace.id.uuidString))
                                 .foregroundStyle(trace.color)
                                 .lineStyle(StrokeStyle(lineWidth: 1))
                         }
                     }
+                    if let window {
+                        RectangleMark(xStart: .value("Time", -window.left * 1000), xEnd: .value("Time", window.right * 1000),
+                                      yStart: .value(yLabel, yRange.lowerBound), yEnd: .value(yLabel, yRange.upperBound))
+                            .foregroundStyle(Color.accentColor.opacity(0.08))
+                        RuleMark(x: .value("Time", -window.left * 1000))
+                            .foregroundStyle(Color.accentColor)
+                            .lineStyle(StrokeStyle(lineWidth: dragging == .left ? 2.5 : 1.5))
+                        RuleMark(x: .value("Time", window.right * 1000))
+                            .foregroundStyle(Color.accentColor)
+                            .lineStyle(StrokeStyle(lineWidth: dragging == .right ? 2.5 : 1.5))
+                    }
                 }
-                .chartYScale(domain: mode == .etc ? -100...0 : -1...1)
+                .chartXScale(domain: lo...max(hi, lo + 1))
+                .chartYScale(domain: yRange)
                 .chartXAxisLabel("ms")
                 .chartYAxisLabel(mode == .etc ? "dB" : "normalised")
                 .chartLegend(.hidden)
+                .chartOverlay { proxy in
+                    if let window {
+                        GeometryReader { geo in
+                            Rectangle().fill(.clear).contentShape(Rectangle())
+                                .gesture(dragGesture(proxy: proxy, geo: geo, window: window, reference: reference))
+                        }
+                    }
+                }
                 .clipped()
+            } else {
+                EmptyState(text: "No impulse responses shown")
             }
         }
     }
 
-    private func points(_ trace: Trace, zero: Int) -> [ChartPoint] {
+    @ViewBuilder
+    private func windowControls(_ reference: Trace, _ window: ResponseWindow, traces: [Trace]) -> some View {
+        HStack(spacing: 8) {
+            Text("Window for \(reference.info.name):")
+            TextField("Left", value: Binding(get: { window.left * 1000 },
+                                             set: { commit(ResponseWindow(left: max(0, $0) / 1000, right: window.right, rightTaper: window.rightTaper), to: [reference.id]) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 60)
+            Text("ms before,")
+            TextField("Right", value: Binding(get: { window.right * 1000 },
+                                              set: { commit(ResponseWindow(left: window.left, right: max(1, $0) / 1000, rightTaper: window.rightTaper), to: [reference.id]) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 70)
+            Text("ms after the direct sound")
+            Spacer()
+            Button("Apply to All Shown") { commit(window, to: Set(traces.map(\.id))) }
+                .help("Use this window for every ticked impulse response")
+            Button("Reset") { commit(.standard, to: [reference.id]) }
+                .help("Back to 5 ms before and 1 s after the direct sound")
+        }
+        .font(.callout)
+        .textFieldStyle(.roundedBorder)
+    }
+
+    private func commit(_ window: ResponseWindow, to ids: Set<UUID>) {
+        model.setWindow(window, for: ids)
+    }
+
+    /// Drags whichever window edge the drag starts near. The response is recomputed when the drag ends.
+    private func dragGesture(proxy: ChartProxy, geo: GeometryProxy, window: ResponseWindow, reference: Trace) -> some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                guard let anchor = proxy.plotFrame else { return }
+                let origin = geo[anchor].origin.x
+                if dragging == nil {
+                    let startX = value.startLocation.x - origin
+                    let leftX = proxy.position(forX: -window.left * 1000) ?? .infinity
+                    let rightX = proxy.position(forX: window.right * 1000) ?? .infinity
+                    let dl = abs(startX - leftX), dr = abs(startX - rightX)
+                    guard min(dl, dr) < 12 else { return }
+                    dragging = dl <= dr ? .left : .right
+                }
+                guard let ms: Double = proxy.value(atX: value.location.x - origin) else { return }
+                var w = liveWindow ?? window
+                switch dragging {
+                case .left: w.left = min(max(0, -ms / 1000), 0.5)
+                case .right: w.right = max(0.001, ms / 1000)
+                case nil: return
+                }
+                liveWindow = w
+            }
+            .onEnded { _ in
+                if let liveWindow { commit(liveWindow, to: [reference.id]) }
+                liveWindow = nil
+                dragging = nil
+            }
+    }
+
+    private func points(_ trace: Trace, zero: Int, preRoll: Double) -> [ChartPoint] {
         guard let ir = trace.impulseResponse else { return [] }
         let fs = trace.info.sampleRate
-        let start = max(0, zero - Int(0.005 * fs))
+        let start = max(0, zero - Int(preRoll * fs))
         let end = span == 0 ? ir.count : start + Int(span / 1000 * fs)
         if mode == .etc {
             return ChartData.points(trace.energyTime, range: start..<end, zero: zero, sampleRate: fs, envelope: true)

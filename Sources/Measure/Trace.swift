@@ -22,6 +22,8 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     var timingReference: TimingReference?
     var peakLevel: Double?
     var colorIndex = 0
+    /// Window for the frequency response. Nil means `ResponseWindow.standard`.
+    var window: ResponseWindow?
 }
 
 /// One measurement in the trace library: an impulse response (or an imported frequency response)
@@ -34,16 +36,34 @@ struct Trace: Identifiable {
 
     // Derived once, when the trace is made.
     let acoustics: RoomAcousticsResult?
-    let rawResponse: FrequencyResponse
+    /// Frequency response within the window (or as imported).
+    private(set) var rawResponse: FrequencyResponse
     /// Energy-time curve in dB, one value per sample.
     let energyTime: [Double]
     /// Sample index of the onset (direct sound).
     let onset: Int
     /// Seconds from the start of the frequency response window to the onset, removed from the phase.
-    let responseDelay: Double
+    private(set) var responseDelay: Double
 
     var id: UUID { info.id }
     var color: Color { TracePalette.color(info.colorIndex) }
+    var window: ResponseWindow { info.window ?? .standard }
+
+    /// Sets the frequency response window and recomputes the response. Does nothing for an imported response.
+    mutating func setWindow(_ window: ResponseWindow) {
+        guard let ir = impulseResponse else { return }
+        info.window = window
+        (rawResponse, responseDelay) = Trace.windowedResponse(ir, onset: onset, sampleRate: info.sampleRate, window: window)
+    }
+
+    private static func windowedResponse(_ ir: [Double], onset: Int, sampleRate fs: Double,
+                                         window: ResponseWindow) -> (FrequencyResponse, Double) {
+        let (samples, start) = window.apply(to: ir, onset: onset, sampleRate: fs)
+        // Zero-pad to at least a second so short windows still draw as smooth curves.
+        let response = FrequencyResponse(impulseResponse: samples, sampleRate: fs,
+                                         fftSize: FFT.size(atLeast: max(samples.count, Int(fs))))
+        return (response, Double(onset - start) / fs)
+    }
 
     init(info: TraceInfo, impulseResponse: [Double]) {
         self.info = info
@@ -52,11 +72,8 @@ struct Trace: Identifiable {
         let fs = info.sampleRate
         onset = RoomAcoustics.onsetIndex(impulseResponse)
         acoustics = RoomAcoustics.analyze(impulseResponse: impulseResponse, sampleRate: fs)
-        // Use the first second after the onset for the frequency response, as REW does by default.
-        let start = max(0, onset - Int(0.005 * fs))
-        let window = Array(impulseResponse[start..<min(impulseResponse.count, start + Int(fs))])
-        rawResponse = FrequencyResponse(impulseResponse: window, sampleRate: fs)
-        responseDelay = Double(onset - start) / fs
+        (rawResponse, responseDelay) = Trace.windowedResponse(impulseResponse, onset: onset, sampleRate: fs,
+                                                              window: info.window ?? .standard)
         energyTime = TimeFrequency.energyTimeCurve(impulseResponse)
     }
 
