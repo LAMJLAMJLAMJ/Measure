@@ -30,15 +30,18 @@ struct SetupView: View {
                     Text("Same as output").tag(String?.none)
                     ForEach(inputs) { Text(deviceLabel($0)).tag(Optional($0.uid)) }
                 }
-                ForEach($model.settings.mics) { $slot in
+                // Rows bind by id, not by index: removing a row while its controls still hold an index
+                // binding into the array crashes SwiftUI.
+                ForEach(model.settings.mics) { row in
+                    let slot = micSlot(row)
                     HStack {
-                        ChannelPicker(title: "Mic input", channel: $slot.channel, count: inChannels)
-                        Picker("Mic", selection: $slot.micName) {
+                        ChannelPicker(title: "Mic input", channel: slot.channel, count: inChannels)
+                        Picker("Mic", selection: slot.micName) {
                             Text("Uncalibrated").tag(String?.none)
                             ForEach(model.micProfiles) { Text($0.name).tag(Optional($0.name)) }
                         }
                         .frame(width: 220)
-                        Button { model.settings.mics.removeAll { $0.id == slot.id } } label: { Image(systemName: "minus.circle") }
+                        Button { model.settings.mics.removeAll { $0.id == row.id } } label: { Image(systemName: "minus.circle") }
                             .buttonStyle(.borderless)
                             .disabled(model.settings.mics.count <= 1)
                     }
@@ -80,15 +83,15 @@ struct SetupView: View {
             }
 
             Section {
-                ForEach($model.micProfiles) { $mic in
+                ForEach(model.micProfiles) { mic in
                     HStack {
-                        TextField("Name", text: $mic.name).frame(width: 180)
+                        TextField("Name", text: micProfile(mic).name).frame(width: 180)
                         Text(mic.calibrationPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No calibration file")
                             .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         if let s = mic.sensitivity { Text(String(format: "%.2f dB", s)).foregroundStyle(.secondary) }
                         Spacer()
-                        Button("Choose…") { chooseCalibration(for: $mic) }
-                        Button { model.micProfiles.removeAll { $0.id == mic.id } } label: { Image(systemName: "minus.circle") }
+                        Button("Choose…") { chooseCalibration(for: micProfile(mic)) }
+                        Button { removeMicProfile(mic) } label: { Image(systemName: "minus.circle") }
                             .buttonStyle(.borderless)
                     }
                 }
@@ -106,6 +109,28 @@ struct SetupView: View {
             ToolbarItem(placement: .automatic) { Button("Refresh devices") { model.refreshDevices() } }
             ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
         }
+    }
+
+    private func micSlot(_ slot: MicSlot) -> Binding<MicSlot> {
+        Binding(get: { model.settings.mics.first { $0.id == slot.id } ?? slot },
+                set: { new in
+                    if let i = model.settings.mics.firstIndex(where: { $0.id == slot.id }) { model.settings.mics[i] = new }
+                })
+    }
+
+    private func micProfile(_ mic: MicProfile) -> Binding<MicProfile> {
+        Binding(get: { model.micProfiles.first { $0.id == mic.id } ?? mic },
+                set: { new in
+                    if let i = model.micProfiles.firstIndex(where: { $0.id == mic.id }) { model.micProfiles[i] = new }
+                })
+    }
+
+    /// Removes a mic and unassigns it from any input that used it.
+    private func removeMicProfile(_ mic: MicProfile) {
+        for i in model.settings.mics.indices where model.settings.mics[i].micName == mic.name {
+            model.settings.mics[i].micName = nil
+        }
+        model.micProfiles.removeAll { $0.id == mic.id }
     }
 
     private var rates: [Double] {

@@ -20,7 +20,7 @@ The analysis core provides:
 - **Sweeps:** exponential sine sweeps (Farina) with fades. Deconvolution by regularised spectral division against the generated sweep, a loopback recording or any imported test signal. Delay estimation by cross-correlation.
 - **Filters:** IEC 61260 base-ten octave and third-octave bands. These are sixth-order Butterworth band-pass filters, run forward or time-reversed.
 - **ISO 3382-1 results:** EDT, T20, T30, C50, C80, D50 and Ts per band and broadband. Onset is detected at -20 dB. Lundeby truncation finds the noise floor and adds the estimated energy of the lost tail. Results also include the Schroeder decay curve and the fitted lines.
-- **Views (data only):** frequency response with fractional-octave smoothing, energy-time curve (Hilbert envelope), spectrogram and waterfall (cumulative spectral decay).
+- **Views (data only):** frequency response within an adjustable window around the direct sound, with fractional-octave smoothing, energy-time curve (Hilbert envelope), spectrogram and waterfall (cumulative spectral decay).
 
 The FFT uses Apple's Accelerate (vDSP) on macOS. On other platforms it uses a portable radix-2 FFT, so the same tests can run on Linux CI.
 
@@ -52,9 +52,9 @@ open build/Measure.app
 - **Trace library** (sidebar): tick traces to overlay them, and right-click to edit name, position, mic and notes, or to delete. Traces are saved as WAV and JSON in `~/Documents/Measure Projects/Default`. Use ⌘O to choose another project folder.
 - **Modes** (toolbar, ⌥⌘1 and ⌥⌘2): the app has two modes that share the trace library, so an impulse response measured in one can be analysed in the other. ⌘1 to ⌘7 pick a view within the current mode, and the app remembers the last mode and view.
   - **System tuning:** measure with a sweep (the live cross-spectrum mode comes later), then look at
-    - **Impulse:** impulse response or ETC over 20 ms to the full length, aligned to the selected trace's direct sound.
-    - **Frequency:** with 1/3 to 1/48 octave smoothing and mic calibration. The Virtual EQ panel is a placeholder for now.
-    - **Phase:** wrapped phase with the delay to the direct sound removed.
+    - **Impulse:** impulse response or ETC over 20 ms to the full length, aligned to the selected trace's direct sound. The shaded area is the selected trace's frequency response window: drag its edges, or type how many ms before and after the direct sound it covers. Each side has its own shape (rectangular, Hann, Hamming, Blackman or Tukey with a taper percentage), drawn as a dashed line. The default is Hann on the left and Tukey with a 25 % taper on the right. A small frequency response under the chart shows the result, and while you drag an edge it shows the new window's response over the current one in grey. "Apply to All Shown" copies the window to every ticked trace. The span and ETC/Impulse choice are remembered. The default is 5 ms before to 1 s after, and windows are saved with each trace.
+    - **Frequency:** within each trace's window, with 1/3 to 1/48 octave smoothing and mic calibration. The Virtual EQ panel is a placeholder for now.
+    - **Phase:** wrapped phase within each trace's window, with the delay to the direct sound removed.
     - **Delay:** arrival time of each shown trace, relative to the selected one in ms and metres, with the ETC below.
     - **STI:** placeholder.
   - **Acoustic analysis:** Record (a sweep now, plain recordings later) or Load files, then look at
