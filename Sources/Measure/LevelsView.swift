@@ -18,6 +18,27 @@ private func unitNote(_ offset: Double?) -> String {
     offset == nil ? "dB re full scale (mic not calibrated)" : "dB SPL"
 }
 
+/// The dB added to a recording's level re full scale to give dB SPL. Typing a value sets it for this
+/// recording; clearing it falls back to the mic's calibration.
+struct LevelOffsetField: View {
+    @Environment(AppModel.self) private var model
+    let trace: Trace
+
+    var body: some View {
+        let micOffset = model.micProfiles.first { $0.name == trace.info.mic }?.splOffset
+        TextField("Offset (dB)", value: Binding(
+            get: { model.traces.first { $0.id == trace.id }?.info.splOffset },
+            set: { value in
+                guard var info = model.traces.first(where: { $0.id == trace.id })?.info else { return }
+                info.splOffset = value
+                model.update(info)
+            }),
+            format: .number.precision(.fractionLength(1)),
+            prompt: Text(micOffset.map { String(format: "%.1f (mic)", $0) } ?? "None, dB FS"))
+            .help("dB added to \(trace.info.name)'s level re full scale to give dB SPL")
+    }
+}
+
 // MARK: - Statistical levels
 
 /// Leq, Lmax, Lmin and the exceeded levels Ln of the shown recordings, with the level over time.
@@ -60,6 +81,7 @@ struct LevelsView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 220)
+                if let current { LevelOffsetField(trace: current).frame(width: 240) }
                 Spacer()
                 Text("IEC 61672 weightings. Ln is the level exceeded n % of the time.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -206,7 +228,7 @@ struct NoiseView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            summary(offset: offset).frame(width: 260)
+            summary(current, offset: offset).frame(width: 260)
         }
         .task(id: key) {
             guard let current, let key else { return }
@@ -246,8 +268,16 @@ struct NoiseView: View {
         .chartYAxisLabel(unitNote(computedFor?.offset))
     }
 
-    @ViewBuilder private func summary(offset: Double?) -> some View {
+    @ViewBuilder private func summary(_ current: Trace?, offset: Double?) -> some View {
         Form {
+            if let current {
+                Section {
+                    LevelOffsetField(trace: current)
+                } footer: {
+                    Text("dB added to the recorded level (re full scale) to give dB SPL. Empty uses the mic's calibration.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section {
                 LabeledContent("NR", value: rating?.nr.map { String(format: "%.0f", $0.rounded(.up)) } ?? "–")
                 LabeledContent("NC", value: rating?.nc.map { String(format: "%.0f", $0.rounded(.up)) } ?? "–")
@@ -256,7 +286,7 @@ struct NoiseView: View {
                 Text("Rating")
             } footer: {
                 Text(offset == nil
-                     ? "The mic has no SPL calibration, so these are levels re full scale and the ratings are not meaningful. Calibrate the mic in Setup with a 94 dB calibrator, then record again."
+                     ? "No level offset, so these are levels re full scale and the ratings are not meaningful. Type an offset above, or calibrate the mic in Setup with a 94 dB calibrator."
                      : "NR to ISO R1996 (31.5 Hz to 8 kHz) and NC to Beranek's 1957 curves (63 Hz to 8 kHz), by the tangency method: the lowest curve no band exceeds.")
                     .font(.caption).foregroundStyle(offset == nil ? .orange : .secondary)
             }
