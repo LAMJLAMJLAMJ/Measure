@@ -59,22 +59,6 @@ struct ComingSoonView: View {
     }
 }
 
-struct STIView: View {
-    var body: some View {
-        ComingSoonView(title: "STI",
-                       detail: "Speech Transmission Index (IEC 60268-16) per octave band and overall, from the modulation transfer function of the impulse response. Background noise levels are entered or taken from a recording.",
-                       needs: .impulseResponseAndNoise)
-    }
-}
-
-struct EchoView: View {
-    var body: some View {
-        ComingSoonView(title: "Echo",
-                       detail: "Echo criterion after Dietsch and Kraak: the build-up of the centre time, checked against the limits for speech and music, with the time of any audible echo.",
-                       needs: .impulseResponse)
-    }
-}
-
 struct StatisticalLevelsView: View {
     var body: some View {
         ComingSoonView(title: "Statistical levels",

@@ -19,6 +19,8 @@ The analysis core provides:
 - **Files:** WAV read and write (PCM 8 to 32 bit, float 32 and 64 bit, multichannel). Import of REW text exports and mic calibration files, including the sensitivity line.
 - **Sweeps:** exponential sine sweeps (Farina) with fades. Deconvolution by regularised spectral division against the generated sweep, a loopback recording or any imported test signal. Delay estimation by cross-correlation.
 - **Filters:** IEC 61260 base-ten octave and third-octave bands. These are sixth-order Butterworth band-pass filters, run forward or time-reversed.
+- **Echo criterion** after Dietsch and Kraak (speech and music).
+- **STI** (IEC 60268-16:2020) from the impulse response, with noise, auditory masking and the reception threshold.
 - **ISO 3382-1 results:** EDT, T20, T30, C50, C80, D50 and Ts per band and broadband. Onset is detected at -20 dB. Lundeby truncation finds the noise floor and adds the estimated energy of the lost tail. Results also include the Schroeder decay curve and the fitted lines.
 - **Views (data only):** frequency response within an adjustable window around the direct sound, with fractional-octave smoothing, energy-time curve (Hilbert envelope), spectrogram and waterfall (cumulative spectral decay).
 
@@ -56,11 +58,13 @@ open build/Measure.app
     - **Frequency:** within each trace's window, with 1/3 to 1/48 octave smoothing and mic calibration. The Virtual EQ panel is a placeholder for now.
     - **Phase:** wrapped phase within each trace's window, with the delay to the direct sound removed.
     - **Delay:** arrival time of each shown trace, relative to the selected one in ms and metres, with the ETC below.
-    - **STI:** placeholder.
+    - **STI:** see Acoustic analysis.
   - **Acoustic analysis:** Record (a sweep now, plain recordings later) or Load files, then look at
     - **Reverb:** Schroeder curve per band with the EDT, T20 and T30 fit lines and the noise floor, above the EDT/T20/T30 table and a band-by-band comparison of the shown traces.
     - **Clarity:** C50, C80, D50 and Ts table and comparison. "Copy All as CSV" copies every ISO 3382 parameter.
-    - **Echo** (Dietsch and Kraak), **STI**, **Levels** (statistical levels) and **Noise** (NR/NC): placeholders that say what each will need.
+    - **Echo:** echo criterion after Dietsch and Kraak for the shown traces, for speech (n = 2/3, Δτ = 9 ms) or music (n = 1, Δτ = 14 ms), on the 1 kHz octave (as in the original method), the 2 kHz octave or broadband. The chart shows EK against time with the limits at which 10 % and 50 % of listeners hear an echo, and the table lists every echo of each trace (each stretch of EK above the 10 % limit, at its peak) with its EK, time and verdict, or the largest EK for a trace without any. Echoes are also marked on the chart.
+    - **STI** (also in System tuning): Speech Transmission Index per IEC 60268-16:2020 (edition 5, indirect method, male speech, backward band filtering) for each shown trace, with its qualification band (A+ to U) and the modulation transfer index per octave for the selected trace. Set the speech level in dB(A) (male speech spectrum) or your own octave levels, optional background noise levels per octave, and whether auditory masking and the reception threshold apply. Each band's response is cut where it meets its noise floor. A note warns when a response is shorter than 1.6 s or has under 20 dB SNR in a band, as the standard requires.
+    - **Levels** (statistical levels) and **Noise** (NR/NC): placeholders that say what each will need.
     - **Spectrogram and waterfall.**
 
 ## Measuring from Terminal
