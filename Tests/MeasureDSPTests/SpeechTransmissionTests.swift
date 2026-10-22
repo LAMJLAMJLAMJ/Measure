@@ -13,7 +13,7 @@ final class SpeechTransmissionTests: XCTestCase {
     func testMaleSpectrumIsZeroDBA() {
         let aWeighting = [-16.1, -8.6, -3.2, 0, 1.2, 1.0, -1.1]
         let total = zip(SpeechTransmission.maleSpeechSpectrum, aWeighting).map { pow(10, ($0 + $1) / 10) }.reduce(0, +)
-        XCTAssertEqual(10 * log10(total), 0, accuracy: 0.1)
+        XCTAssertEqual(10 * log10(total), 0, accuracy: 0.05)
     }
 
     func testExponentialDecayMatchesTheory() {
@@ -28,9 +28,9 @@ final class SpeechTransmissionTests: XCTestCase {
     }
 
     func testIdealChannelScoresOne() {
-        var ir = [Double](repeating: 0, count: 24_000)
-        ir[100] = 1
-        let r = SpeechTransmission.analyze(impulseResponse: ir, sampleRate: fs, onset: 100)
+        var ir = [Double](repeating: 0, count: 96_000)
+        ir[4800] = 1
+        let r = SpeechTransmission.analyze(impulseResponse: ir, sampleRate: fs, onset: 4800)
         XCTAssertGreaterThan(r.sti, 0.95) // only the band filters' own ringing lowers it
         XCTAssertEqual(r.rating, "A+")
     }
