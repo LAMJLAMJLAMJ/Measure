@@ -79,6 +79,7 @@ struct STIView: View {
                 LabeledContent("Level") {
                     HStack {
                         TextField("Level", value: $model.sti.speechLevelA, format: .number.precision(.fractionLength(0...1)))
+                            .labelsHidden()
                             .frame(width: 60)
                         Text("dB(A)")
                     }
@@ -112,6 +113,7 @@ struct STIView: View {
                 GridRow {
                     Text(bandLabel(SpeechTransmission.bands[k]) + " Hz").foregroundStyle(.secondary)
                     TextField("dB", value: levels[k], format: .number.precision(.fractionLength(0...1)))
+                        .labelsHidden()
                         .frame(width: 60)
                     Text("dB").foregroundStyle(.secondary)
                 }
