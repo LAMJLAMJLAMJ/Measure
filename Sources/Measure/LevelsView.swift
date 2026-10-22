@@ -69,13 +69,13 @@ struct LevelsView: View {
             } else if computedFor != key {
                 ProgressView("Computing…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                // A Table takes at most 10 columns; L1 and L5 are in the CSV.
                 Table(rows) {
                     TableColumn("Trace") { Text($0.trace.info.name) }
                     TableColumn("Length") { Text(String(format: "%.1f s", $0.result.duration)) }
                     TableColumn("Leq") { Text(level($0.result.leq)) }
                     TableColumn("Lmax") { Text(level($0.result.lmax)) }
                     TableColumn("Lmin") { Text(level($0.result.lmin)) }
-                    TableColumn("L1") { Text(level($0.result.l(1))) }
                     TableColumn("L10") { Text(level($0.result.l(10))) }
                     TableColumn("L50") { Text(level($0.result.l(50))) }
                     TableColumn("L90") { Text(level($0.result.l(90))) }

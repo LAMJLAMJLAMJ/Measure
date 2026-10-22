@@ -235,7 +235,7 @@ final class AppModel {
             var peaks: [Double] = []
             for (i, samples) in recording.mics.enumerated() {
                 let slot = s.mics[i]
-                let peak = 20 * log10(max(samples.map(abs).max() ?? 0, 1e-12))
+                let peak = 20 * log10(max(samples.map { abs($0) }.max() ?? 0, 1e-12))
                 peaks.append(peak)
                 let base = label.isEmpty ? "Recording" : label
                 let info = TraceInfo(name: recording.mics.count > 1 ? "\(base) · Mic \(i + 1)" : base, date: date,
