@@ -9,6 +9,7 @@ struct ContentView: View {
     @AppStorage("tuningSource") private var source: TuningSource = .sweep
     @AppStorage("showVirtualEQ") private var showVirtualEQ = false
     @State private var showSetup = false
+    @State private var showPlainRecording = false
 
     var body: some View {
         NavigationSplitView {
@@ -56,6 +57,7 @@ struct ContentView: View {
         }
         .background { shortcuts }
         .sheet(isPresented: $showSetup) { SetupView() }
+        .sheet(isPresented: $showPlainRecording) { PlainRecordingSheet() }
         .navigationTitle(model.projectFolder.lastPathComponent)
     }
 
@@ -84,8 +86,8 @@ struct ContentView: View {
         case .clarity: ParametersPanel(set: .clarity)
         case .echo: EchoView()
         case .sti: STIView()
-        case .levels: StatisticalLevelsView()
-        case .noise: NoiseRatingView()
+        case .levels: LevelsView()
+        case .noise: NoiseView()
         case .spectrogram: SpectrogramView()
         }
     }
@@ -107,15 +109,19 @@ struct ContentView: View {
     @ViewBuilder private var acousticsActions: some View {
         Menu {
             Button("Sweep (impulse response)") { Task { await model.measure() } }
-            Button("Plain recording (coming soon)") {}
-                .disabled(true)
+            Button("Plain recording…") { showPlainRecording = true }
         } label: {
             Label(model.isMeasuring ? "Recording" : "Record", systemImage: model.isMeasuring ? "waveform" : "record.circle")
         }
         .disabled(model.isMeasuring)
         .help("Record a sweep for an impulse response (⌘M), or a plain recording for levels and noise")
-        Button { importFiles(model) } label: { Label("Load", systemImage: "square.and.arrow.down") }
-            .help("Load WAV impulse responses or REW text exports (⌘I)")
+        Menu {
+            Button("Impulse responses or frequency responses…") { importFiles(model) }
+            Button("Recordings…") { importRecordings(model) }
+        } label: {
+            Label("Load", systemImage: "square.and.arrow.down")
+        }
+        .help("Load WAV impulse responses or REW text exports (⌘I), or WAV recordings for levels and noise")
     }
 
     /// ⌘1 to ⌘7 pick a view in the current mode; ⌥⌘1 and ⌥⌘2 switch mode.
@@ -216,6 +222,9 @@ struct TraceList: View {
         var parts = [trace.info.date.formatted(date: .abbreviated, time: .shortened)]
         if let t30 = trace.acoustics?.broadband.t30 { parts.append(String(format: "T30 %.2f s", t30)) }
         if trace.info.source == .importedFrequencyResponse { parts.append("imported FR") }
+        if let samples = trace.recording {
+            parts.append(String(format: "recording, %.0f s", Double(samples.count) / max(1, trace.info.sampleRate)))
+        }
         return parts.joined(separator: " · ")
     }
 }
@@ -239,8 +248,54 @@ struct TraceEditor: View {
         .frame(width: 420)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) { Button("Save") { model.update(info); dismiss() } }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") {
+                    // A recording's SPL offset belongs to the mic it was recorded with.
+                    if info.mic != model.traces.first(where: { $0.id == info.id })?.info.mic { info.splOffset = nil }
+                    model.update(info)
+                    dismiss()
+                }
+            }
         }
+    }
+}
+
+/// Asks how long to record for, then records every mic input with nothing playing.
+struct PlainRecordingSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("recording.duration") private var duration: Double = 30
+    @State private var label = ""
+
+    var body: some View {
+        Form {
+            TextField("Duration (s)", value: $duration, format: .number)
+            TextField("Label", text: $label, prompt: Text("e.g. Background noise, seat A12"))
+            Text(calibrationNote).font(.caption).foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(width: 420)
+        .onAppear { label = model.settings.position }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Record") {
+                    let seconds = min(max(duration, 1), 3600)
+                    let name = label
+                    dismiss()
+                    Task { await model.recordPlain(duration: seconds, label: name) }
+                }
+                .disabled(!(duration >= 1))
+            }
+        }
+    }
+
+    private var calibrationNote: String {
+        let mics = model.settings.mics
+        let uncalibrated = mics.filter { slot in model.micProfiles.first { $0.name == slot.micName }?.splOffset == nil }
+        if uncalibrated.isEmpty { return "Records every mic input, in dB SPL from each mic's calibration." }
+        let inputs = uncalibrated.map { "\($0.channel)" }.joined(separator: ", ")
+        return "Input \(inputs) has no SPL calibration, so its levels will be re full scale. Calibrate the mic in Setup for dB SPL. Up to an hour."
     }
 }
 #endif

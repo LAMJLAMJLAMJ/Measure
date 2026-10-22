@@ -26,7 +26,7 @@ struct FrequencyResponseView: View {
 
     var body: some View {
         @Bindable var model = model
-        let traces = model.visibleTraces
+        let traces = model.visibleTraces.filter(\.hasResponse)
         let series = traces.map { ($0, $0.displayResponse(smoothing: model.smoothing, calibration: model.calibration(for: $0))) }
         let top = (series.flatMap { $0.1.filter { $0.x >= 20 }.map(\.y) }.max() ?? 0).rounded(.up) + 5
 

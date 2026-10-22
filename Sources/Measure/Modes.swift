@@ -59,22 +59,6 @@ struct ComingSoonView: View {
     }
 }
 
-struct StatisticalLevelsView: View {
-    var body: some View {
-        ComingSoonView(title: "Statistical levels",
-                       detail: "Leq, Lmax, L10, L50 and L90 with A, C or Z frequency weighting and fast or slow time weighting, overall and per band.",
-                       needs: .recording)
-    }
-}
-
-struct NoiseRatingView: View {
-    var body: some View {
-        ComingSoonView(title: "Noise",
-                       detail: "Octave-band background noise rated against the NR and NC curves. Needs a calibrated mic for absolute levels.",
-                       needs: .recording)
-    }
-}
-
 /// Side panel next to the frequency response for trying EQ on a measurement.
 struct VirtualEQPanel: View {
     var body: some View {

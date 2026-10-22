@@ -7,6 +7,8 @@ import SwiftUI
 struct TraceInfo: Codable, Identifiable, Hashable {
     enum Source: String, Codable {
         case sweep, importedImpulseResponse, importedFrequencyResponse
+        /// A plain recording of the sound itself (background noise or programme), for levels and noise ratings.
+        case recording
     }
 
     var id = UUID()
@@ -24,15 +26,20 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     var colorIndex = 0
     /// Window for the frequency response. Nil means `ResponseWindow.standard`.
     var window: ResponseWindow?
+    /// dB added to a recording's level re full scale to give dB SPL, from the mic's calibration when it
+    /// was recorded. Nil falls back to the mic's current calibration.
+    var splOffset: Double?
 }
 
-/// One measurement in the trace library: an impulse response (or an imported frequency response)
-/// plus everything derived from it for the views.
+/// One measurement in the trace library: an impulse response, an imported frequency response or a plain
+/// recording, plus everything derived from it for the views.
 struct Trace: Identifiable {
     var info: TraceInfo
     /// Nil for an imported frequency response, which has no time data.
     let impulseResponse: [Double]?
     let importedResponse: FrequencyResponse?
+    /// The samples of a plain recording. Nil for everything else.
+    let recording: [Double]?
 
     // Derived once, when the trace is made.
     let acoustics: RoomAcousticsResult?
@@ -70,6 +77,7 @@ struct Trace: Identifiable {
         self.info = info
         self.impulseResponse = impulseResponse
         self.importedResponse = nil
+        self.recording = nil
         let fs = info.sampleRate
         onset = RoomAcoustics.onsetIndex(impulseResponse)
         acoustics = RoomAcoustics.analyze(impulseResponse: impulseResponse, sampleRate: fs)
@@ -82,12 +90,28 @@ struct Trace: Identifiable {
         self.info = info
         self.impulseResponse = nil
         self.importedResponse = frequencyResponse
+        self.recording = nil
         acoustics = nil
         rawResponse = frequencyResponse
         energyTime = []
         onset = 0
         responseDelay = 0
     }
+
+    init(info: TraceInfo, recording: [Double]) {
+        self.info = info
+        self.impulseResponse = nil
+        self.importedResponse = nil
+        self.recording = recording
+        acoustics = nil
+        rawResponse = FrequencyResponse(frequencies: [], magnitude: [])
+        energyTime = []
+        onset = 0
+        responseDelay = 0
+    }
+
+    /// True for anything with a frequency response to draw (not a plain recording).
+    var hasResponse: Bool { recording == nil }
 
     /// Magnitude for the chart: calibrated, smoothed and thinned to log-spaced points.
     func displayResponse(smoothing: Smoothing, calibration: FrequencyResponse?) -> [ChartPoint] {
@@ -200,8 +224,8 @@ enum ProjectStore {
     static func save(_ trace: Trace, in folder: URL) throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let base = folder.appendingPathComponent(trace.id.uuidString)
-        if let ir = trace.impulseResponse {
-            try WAV.write(AudioData(sampleRate: trace.info.sampleRate, mono: ir), to: base.appendingPathExtension("wav"))
+        if let samples = trace.impulseResponse ?? trace.recording {
+            try WAV.write(AudioData(sampleRate: trace.info.sampleRate, mono: samples), to: base.appendingPathExtension("wav"))
         } else if let fr = trace.importedResponse {
             var text = "* Frequency response imported into Measure\n"
             for i in fr.frequencies.indices {
@@ -233,8 +257,8 @@ enum ProjectStore {
         let traces: [Trace] = files.filter { $0.pathExtension == "json" }.compactMap { url in
             guard let data = try? Data(contentsOf: url), let info = try? decoder.decode(TraceInfo.self, from: data) else { return nil }
             let base = url.deletingPathExtension()
-            if let audio = try? WAV.read(contentsOf: base.appendingPathExtension("wav")), let ir = audio.channels.first {
-                return Trace(info: info, impulseResponse: ir)
+            if let audio = try? WAV.read(contentsOf: base.appendingPathExtension("wav")), let samples = audio.channels.first {
+                return info.source == .recording ? Trace(info: info, recording: samples) : Trace(info: info, impulseResponse: samples)
             }
             if let parsed = try? FrequencyResponseText.parse(contentsOf: base.appendingPathExtension("txt")) {
                 return Trace(info: info, frequencyResponse: parsed.response)
