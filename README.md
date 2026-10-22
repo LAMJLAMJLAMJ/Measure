@@ -19,6 +19,7 @@ The analysis core provides:
 - **Files:** WAV read and write (PCM 8 to 32 bit, float 32 and 64 bit, multichannel). Import of REW text exports and mic calibration files, including the sensitivity line.
 - **Sweeps:** exponential sine sweeps (Farina) with fades. Deconvolution by regularised spectral division against the generated sweep, a loopback recording or any imported test signal. Delay estimation by cross-correlation.
 - **Filters:** IEC 61260 base-ten octave and third-octave bands. These are sixth-order Butterworth band-pass filters, run forward or time-reversed.
+- **Echo criterion** after Dietsch and Kraak (speech and music).
 - **ISO 3382-1 results:** EDT, T20, T30, C50, C80, D50 and Ts per band and broadband. Onset is detected at -20 dB. Lundeby truncation finds the noise floor and adds the estimated energy of the lost tail. Results also include the Schroeder decay curve and the fitted lines.
 - **Views (data only):** frequency response within an adjustable window around the direct sound, with fractional-octave smoothing, energy-time curve (Hilbert envelope), spectrogram and waterfall (cumulative spectral decay).
 
@@ -60,7 +61,8 @@ open build/Measure.app
   - **Acoustic analysis:** Record (a sweep now, plain recordings later) or Load files, then look at
     - **Reverb:** Schroeder curve per band with the EDT, T20 and T30 fit lines and the noise floor, above the EDT/T20/T30 table and a band-by-band comparison of the shown traces.
     - **Clarity:** C50, C80, D50 and Ts table and comparison. "Copy All as CSV" copies every ISO 3382 parameter.
-    - **Echo** (Dietsch and Kraak), **STI**, **Levels** (statistical levels) and **Noise** (NR/NC): placeholders that say what each will need.
+    - **Echo:** echo criterion after Dietsch and Kraak for the shown traces, for speech (n = 2/3, Δτ = 9 ms) or music (n = 1, Δτ = 14 ms), on the 1 kHz octave (as in the original method), the 2 kHz octave or broadband. The chart shows EK against time with the limits at which 10 % and 50 % of listeners hear an echo, and the table gives each trace's largest EK, when it occurs and the verdict.
+    - **STI**, **Levels** (statistical levels) and **Noise** (NR/NC): placeholders that say what each will need.
     - **Spectrogram and waterfall.**
 
 ## Measuring from Terminal

@@ -67,14 +67,6 @@ struct STIView: View {
     }
 }
 
-struct EchoView: View {
-    var body: some View {
-        ComingSoonView(title: "Echo",
-                       detail: "Echo criterion after Dietsch and Kraak: the build-up of the centre time, checked against the limits for speech and music, with the time of any audible echo.",
-                       needs: .impulseResponse)
-    }
-}
-
 struct StatisticalLevelsView: View {
     var body: some View {
         ComingSoonView(title: "Statistical levels",
