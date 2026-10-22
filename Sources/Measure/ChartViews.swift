@@ -159,7 +159,7 @@ struct DelayView: View {
                 }
                 .font(.body.monospacedDigit())
                 .frame(minHeight: 120, maxHeight: 220)
-                ImpulseView(initialMode: .etc, initialSpan: 20)
+                ImpulseView(initialMode: .etc, initialSpan: 20, storageKey: "delay")
             } else {
                 EmptyState(text: "Tick impulse responses in the list to compare their arrival times")
             }
@@ -188,16 +188,17 @@ struct ImpulseView: View {
     private enum Edge { case left, right }
 
     @Environment(AppModel.self) private var model
-    @State private var mode: Mode
-    @State private var span: Double
+    // Remembered between visits and launches, separately for each place the view is used.
+    @AppStorage private var mode: Mode
+    @AppStorage private var span: Double
     /// Show the frequency response window of the selected trace and let it be dragged.
     let editsWindow: Bool
     @State private var dragging: Edge?
     @State private var liveWindow: ResponseWindow?
 
-    init(initialMode: Mode = .etc, initialSpan: Double = 300, editsWindow: Bool = false) {
-        _mode = State(initialValue: initialMode)
-        _span = State(initialValue: initialSpan)
+    init(initialMode: Mode = .etc, initialSpan: Double = 300, editsWindow: Bool = false, storageKey: String = "impulse") {
+        _mode = AppStorage(wrappedValue: initialMode, "\(storageKey).mode")
+        _span = AppStorage(wrappedValue: initialSpan, "\(storageKey).span")
         self.editsWindow = editsWindow
     }
 
@@ -275,6 +276,10 @@ struct ImpulseView: View {
                     }
                 }
                 .clipped()
+                if let window {
+                    WindowPreview(trace: reference, window: window)
+                        .frame(height: 150)
+                }
             } else {
                 EmptyState(text: "No impulse responses shown")
             }
@@ -397,6 +402,71 @@ struct ImpulseView: View {
         }
         let peak = max(ir.map(abs).max() ?? 1, .leastNonzeroMagnitude)
         return ChartData.points(ir, range: start..<end, zero: zero, sampleRate: fs).map { ChartPoint(x: $0.x, y: $0.y / peak) }
+    }
+}
+
+/// Small frequency response of one trace under the impulse chart. While a window edge is dragged it
+/// shows the response with the new window over the current one in grey.
+struct WindowPreview: View {
+    private struct Key: Hashable {
+        let trace: UUID
+        let window: ResponseWindow
+        let smoothing: Smoothing
+    }
+
+    @Environment(AppModel.self) private var model
+    let trace: Trace
+    let window: ResponseWindow
+    @State private var preview: [ChartPoint] = []
+    @State private var previewFor: ResponseWindow?
+
+    var body: some View {
+        let current = trace.displayResponse(smoothing: model.smoothing, calibration: model.calibration(for: trace))
+        let moving = window != trace.window && previewFor == window
+        let levels = (moving ? preview + current : current).filter { $0.x >= 20 }.map(\.y)
+        let top = (levels.max() ?? 0).rounded(.up) + 5
+        Chart {
+            ForEach(current) { p in
+                LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Response", "current"))
+                    .foregroundStyle(moving ? Color.gray.opacity(0.6) : trace.color)
+                    .lineStyle(StrokeStyle(lineWidth: 1.2))
+            }
+            if moving {
+                ForEach(preview) { p in
+                    LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Response", "preview"))
+                        .foregroundStyle(trace.color)
+                        .lineStyle(StrokeStyle(lineWidth: 1.5))
+                }
+            }
+        }
+        .chartXScale(domain: 20...20_000, type: .log)
+        .chartYScale(domain: (top - 50)...top)
+        .chartXAxis {
+            AxisMarks(values: frequencyTicks) { value in
+                AxisGridLine()
+                AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
+            }
+        }
+        .chartYAxisLabel("dB")
+        .chartLegend(.hidden)
+        .clipped()
+        .task(id: Key(trace: trace.id, window: window, smoothing: model.smoothing)) { await compute() }
+    }
+
+    private func compute() async {
+        guard window != trace.window, let ir = trace.impulseResponse else { return }
+        // Let a fast drag settle before recomputing.
+        try? await Task.sleep(for: .milliseconds(30))
+        guard !Task.isCancelled else { return }
+        let onset = trace.onset, fs = trace.info.sampleRate, w = window
+        let smoothing = model.smoothing, calibration = model.calibration(for: trace)
+        let points = await Task.detached(priority: .userInitiated) {
+            Trace.displayPoints(Trace.windowedResponse(ir, onset: onset, sampleRate: fs, window: w).0,
+                                smoothing: smoothing, calibration: calibration)
+        }.value
+        guard !Task.isCancelled else { return }
+        preview = points
+        previewFor = w
     }
 }
 

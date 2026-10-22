@@ -56,7 +56,8 @@ struct Trace: Identifiable {
         (rawResponse, responseDelay) = Trace.windowedResponse(ir, onset: onset, sampleRate: info.sampleRate, window: window)
     }
 
-    private static func windowedResponse(_ ir: [Double], onset: Int, sampleRate fs: Double,
+    /// Frequency response of `ir` within `window`, and the seconds from the window start to the onset.
+    static func windowedResponse(_ ir: [Double], onset: Int, sampleRate fs: Double,
                                          window: ResponseWindow) -> (FrequencyResponse, Double) {
         let (samples, start) = window.apply(to: ir, onset: onset, sampleRate: fs)
         // Zero-pad to at least a second so short windows still draw as smooth curves.
@@ -90,7 +91,11 @@ struct Trace: Identifiable {
 
     /// Magnitude for the chart: calibrated, smoothed and thinned to log-spaced points.
     func displayResponse(smoothing: Smoothing, calibration: FrequencyResponse?) -> [ChartPoint] {
-        var fr = rawResponse
+        Trace.displayPoints(rawResponse, smoothing: smoothing, calibration: calibration)
+    }
+
+    static func displayPoints(_ response: FrequencyResponse, smoothing: Smoothing, calibration: FrequencyResponse?) -> [ChartPoint] {
+        var fr = response
         if let calibration { fr = fr.applyingCalibration(calibration) }
         if let fraction = smoothing.fraction { fr = fr.smoothed(fraction: fraction) }
         let high = min(20_000, fr.frequencies.last ?? 20_000)
