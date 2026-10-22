@@ -39,6 +39,26 @@ struct MeasurementSettings: Codable, Equatable {
     var position = ""
 }
 
+/// Speech and noise levels for STI, remembered between launches.
+struct STISettings: Codable, Equatable {
+    /// A-weighted speech level, dB(A). Sets the octave levels when `customSpeech` is off.
+    var speechLevelA: Double = 60
+    var customSpeech = false
+    /// Octave speech levels, dB SPL, 125 Hz to 8 kHz. Used when `customSpeech` is on.
+    var speechLevels = SpeechTransmission.speechLevels(aWeighted: 60)
+    var includeNoise = false
+    /// Octave background noise levels, dB SPL, 125 Hz to 8 kHz.
+    var noiseLevels: [Double] = [45, 40, 35, 30, 25, 20, 15]
+    var auditoryEffects = true
+
+    var conditions: SpeechTransmission.Conditions {
+        SpeechTransmission.Conditions(
+            speechLevels: customSpeech ? speechLevels : SpeechTransmission.speechLevels(aWeighted: speechLevelA),
+            noiseLevels: includeNoise ? noiseLevels : nil,
+            auditoryEffects: auditoryEffects)
+    }
+}
+
 struct SetupError: Error, CustomStringConvertible {
     let message: String
     var description: String { message }
@@ -57,6 +77,7 @@ final class AppModel {
     var settings: MeasurementSettings { didSet { save(settings, key: "settings") } }
     var micProfiles: [MicProfile] { didSet { save(micProfiles, key: "mics"); calibrations = [:] } }
     var smoothing: Smoothing = .sixth
+    var sti: STISettings { didSet { save(sti, key: "sti") } }
 
     var isMeasuring = false
     var status: String?
@@ -69,6 +90,7 @@ final class AppModel {
         projectFolder = ProjectStore.defaultFolder
         settings = AppModel.load(key: "settings") ?? MeasurementSettings()
         micProfiles = AppModel.load(key: "mics") ?? []
+        sti = AppModel.load(key: "sti") ?? STISettings()
         refreshDevices()
         openProject(projectFolder)
     }
