@@ -396,7 +396,8 @@ struct ImpulseView: View {
         guard let ir = trace.impulseResponse else { return [] }
         let fs = trace.info.sampleRate
         let start = max(0, zero - Int(preRoll * fs))
-        let end = span == 0 ? ir.count : start + Int(span / 1000 * fs)
+        // Another trace can be shorter than the selected one's onset, so never let the range run backwards.
+        let end = max(start, span == 0 ? ir.count : start + Int(span / 1000 * fs))
         if mode == .etc {
             return ChartData.points(trace.energyTime, range: start..<end, zero: zero, sampleRate: fs, envelope: true)
         }
