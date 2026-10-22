@@ -303,6 +303,14 @@ final class AppModel {
         status = "STI now includes this background noise."
     }
 
+    /// Uses octave levels (125 Hz to 8 kHz, dB SPL) as the STI speech levels, in place of the
+    /// male speech spectrum.
+    func useSpeechForSTI(_ levels: [Double]) {
+        sti.speechLevels = levels
+        sti.customSpeech = true
+        status = "STI now uses this recording's octave levels as the speech level."
+    }
+
     // MARK: - Library
 
     func add(_ trace: Trace) {

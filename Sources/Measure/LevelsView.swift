@@ -291,18 +291,27 @@ struct NoiseView: View {
                     .font(.caption).foregroundStyle(offset == nil ? .orange : .secondary)
             }
             Section {
-                Button("Use for STI") {
-                    guard let r = rating else { return }
-                    let bands: [Double] = [125, 250, 500, 1000, 2000, 4000, 8000]
-                    model.useNoiseForSTI(bands.map { b in r.levels.first { $0.band == b }?.level ?? 0 })
+                let levels = stiLevels
+                HStack {
+                    Button("Use as STI Speech") { if let levels { model.useSpeechForSTI(levels) } }
+                    Button("Use as STI Noise") { if let levels { model.useNoiseForSTI(levels) } }
                 }
-                .disabled(rating == nil || offset == nil || (rating?.levels.count ?? 0) < 9)
+                .disabled(levels == nil || offset == nil)
+            } header: {
+                Text("STI")
             } footer: {
-                Text("Sets the STI background noise to these octave levels, 125 Hz to 8 kHz.")
+                Text("Copies these octave levels, 125 Hz to 8 kHz, to the STI speech levels (from a recording of the talker or the system playing speech) or to the STI background noise. Needs an offset, as STI works in dB SPL.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// The 125 Hz to 8 kHz octave levels STI takes, or nil when a band is missing.
+    private var stiLevels: [Double]? {
+        guard let r = rating else { return nil }
+        let levels = SpeechTransmission.bands.compactMap { b in r.levels.first { $0.band == b }?.level }
+        return levels.count == SpeechTransmission.bands.count ? levels : nil
     }
 
     private func compute(_ trace: Trace, key: Key) async {
