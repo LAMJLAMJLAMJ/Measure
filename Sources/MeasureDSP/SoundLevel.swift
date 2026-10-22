@@ -20,7 +20,7 @@ public enum SoundLevel {
     }
 
     /// A and C weighting (IEC 61672-1): the analogue poles mapped by the bilinear transform, followed by
-    /// a short linear-phase FIR that corrects the transform's high-frequency warping. Within 0.05 dB of
+    /// a short linear-phase FIR that corrects the transform's high-frequency warping. Within 0.1 dB of
     /// the standard's curves from 10 Hz to 16 kHz at 48 kHz.
     public struct WeightingFilter {
         /// First-order sections (1 − zero·z⁻¹) / (1 − pole·z⁻¹).
@@ -52,23 +52,27 @@ public enum SoundLevel {
             }
 
             // Frequency-sampling design of the correction: the ratio of the analogue to the digital
-            // response (capped at +12 dB near Nyquist, where the digital one falls to zero).
+            // response, Hann-windowed so it does not ripple. The ratio is held at its 20 kHz value
+            // above 20 kHz (and capped at +12 dB), where the digital response falls to zero, and DC
+            // takes the next bin's value so the low end stays flat.
             var taps: [Double] = []
             if weighting != .z {
                 let n = 63, grid = 1024
-                let ratio = (0...grid / 2).map { k -> Double in
-                    let f = Double(k) * fs / Double(grid)
-                    guard f > 0 else { return 1 }
+                let hold = min(20_000, fs / 2)
+                func ratio(_ k: Int) -> Double {
+                    let f = min(Double(max(k, 1)) * fs / Double(grid), hold)
                     let d = digital(f)
                     return d > 1e-9 ? min(4, WeightingFilter.analogue(weighting, f) / d) : 4
                 }
+                let r = (0...grid / 2).map(ratio)
                 let c = Double(n - 1) / 2
                 taps = (0..<n).map { i in
-                    var sum = ratio[0] + ratio[grid / 2] * cos(Double.pi * (Double(i) - c))
+                    var sum = r[0] + r[grid / 2] * cos(Double.pi * (Double(i) - c))
                     for k in 1..<(grid / 2) {
-                        sum += 2 * ratio[k] * cos(2 * Double.pi * Double(k) * (Double(i) - c) / Double(grid))
+                        sum += 2 * r[k] * cos(2 * Double.pi * Double(k) * (Double(i) - c) / Double(grid))
                     }
-                    return sum / Double(grid)
+                    let window = 0.5 - 0.5 * cos(2 * Double.pi * Double(i + 1) / Double(n + 1))
+                    return sum / Double(grid) * window
                 }
             }
             correction = taps
