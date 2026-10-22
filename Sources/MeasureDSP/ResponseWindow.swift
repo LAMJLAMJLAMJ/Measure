@@ -3,7 +3,7 @@ import Foundation
 /// The window that cuts a frequency response out of an impulse response, like REW's IR windows.
 /// It is placed around the onset (direct sound): a half-Hann rise over the part before the onset,
 /// flat after it, and a half-Hann fade over the last part of the right side (a Tukey window).
-public struct ResponseWindow: Codable, Equatable {
+public struct ResponseWindow: Codable, Hashable {
     /// Seconds before the onset where the window starts.
     public var left: Double
     /// Seconds after the onset where the window ends.
