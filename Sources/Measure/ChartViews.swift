@@ -49,7 +49,13 @@ struct FrequencyResponseView: View {
                 }
                 .frame(width: 140)
                 Spacer()
+                // One line, cut short when the Virtual EQ panel narrows the view: wrapping made it tall
+                // enough to push the whole window out of shape.
                 Text("Levels in dBFS; mic calibration applied where set\(windowNote)").font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
+                    .help("Levels in dBFS; mic calibration applied where set\(windowNote)")
                 Menu {
                     ForEach(FrequencyResponse.AverageMethod.allCases) { method in
                         Button("\(method.rawValue) Average of Shown") { model.average(traces.map(\.id), method: method) }

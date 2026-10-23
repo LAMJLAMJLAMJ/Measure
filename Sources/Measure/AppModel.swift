@@ -358,6 +358,8 @@ final class AppModel {
         guard var info = traces.first(where: { $0.id == id })?.info else { return }
         info.eq = filters.isEmpty ? nil : filters
         update(info)
+        // The Frequency view draws the prediction only for a shown trace, so show the one being equalised.
+        if !filters.isEmpty { visible.insert(id) }
     }
 
     /// Adds a trace with the predicted response of `id` with its Virtual EQ, for comparison.

@@ -344,6 +344,9 @@ struct LiveView: View {
                 Button("Reset") { live.clearDelays(); live.reset() }
                 Spacer()
                 Text(statusText(live)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
             }
         }
     }
