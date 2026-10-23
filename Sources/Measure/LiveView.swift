@@ -245,9 +245,28 @@ final class LiveAnalyzer {
 }
 
 /// Live magnitude, coherence and phase of every mic against the reference.
+extension AppModel {
+    /// Each live curve with the calibration of the mic assigned to its input.
+    var calibratedLiveCurves: [(Int, [ChartPoint])] {
+        live.curves.map { c in
+            let mic = c.mic < settings.mics.count ? settings.mics[c.mic].micName : nil
+            guard let cal = calibration(mic: mic) else { return (c.mic, c.magnitude) }
+            return (c.mic, c.magnitude.map { ChartPoint(x: $0.x, y: $0.y - cal.magnitude(at: $0.x)) })
+        }
+    }
+
+    /// The power average of the calibrated live curves, which the target is aligned to and Auto EQ fits.
+    /// Nil while the live mode is not running.
+    var liveAverageResponse: FrequencyResponse? {
+        let responses = calibratedLiveCurves.map { FrequencyResponse(frequencies: $0.1.map(\.x), magnitude: $0.1.map(\.y)) }
+        return responses.isEmpty ? nil : FrequencyResponse.average(responses, method: .power)
+    }
+}
+
 struct LiveView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("showVirtualEQ") private var showVirtualEQ = false
+    @AppStorage("showTarget") private var showTarget = false
     @State private var range: Double = 50
     /// Whether this is the Frequency view, which has the Virtual EQ panel.
     var showsEQ = false
@@ -296,6 +315,7 @@ struct LiveView: View {
                     .disabled(!live.isRunning || live.blocks == 0)
                     .help("Add each mic's current response to the list as an impulse response")
                 if showsEQ {
+                    TargetControl()
                     Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
                         .toggleStyle(.button)
                         .help("Show the Virtual EQ panel, which applies to the live curves")
@@ -357,12 +377,7 @@ struct LiveView: View {
         let shown = model.visibleTraces.filter(\.hasResponse).map {
             ($0, $0.displayResponse(smoothing: model.smoothing, calibration: model.calibration(for: $0)))
         }
-        // Each mic's calibration, by the mic assigned to its input.
-        let calibrated: [(Int, [ChartPoint])] = live.curves.map { c in
-            let mic = c.mic < model.settings.mics.count ? model.settings.mics[c.mic].micName : nil
-            guard let cal = model.calibration(mic: mic) else { return (c.mic, c.magnitude) }
-            return (c.mic, c.magnitude.map { ChartPoint(x: $0.x, y: $0.y - cal.magnitude(at: $0.x)) })
-        }
+        let calibrated = model.calibratedLiveCurves
         // The live curves with the Virtual EQ added, drawn dashed while the panel is open.
         let eq = live.settings.activeEQ
         let fs = model.settings.sampleRate
@@ -377,10 +392,23 @@ struct LiveView: View {
                 (trace, points.map { ChartPoint(x: $0.x, y: $0.y + ParametricEQ.gainDB(trace.activeEQ, at: $0.x, sampleRate: trace.eqSampleRate)) })
             }
             : nil
+        // The target sits on the live curves' average while measuring, otherwise on the selected trace.
+        var targetPoints: [TargetPoint]?
+        if showsEQ && showTarget {
+            let selected = shown.first { $0.0.id == model.selection } ?? shown.first
+            if let response = model.liveAverageResponse ?? selected.map({ model.calibratedResponse($0.0) }) {
+                targetPoints = model.targetPoints(alignedTo: response)
+            }
+        }
+        let targetTip: [TipSeries] = (targetPoints ?? []).isEmpty ? [] : [TipSeries(id: "target", name: "Target", color: .gray,
+                                                                         points: (targetPoints ?? []).map { ChartPoint(x: $0.x, y: $0.y) })]
         // Scale to the live curves while measuring, otherwise to the traces.
         let levels = calibrated.isEmpty ? shown.flatMap { $0.1 } : calibrated.flatMap { $0.1 }
         let top = ((levels.filter { $0.x >= 20 }.map(\.y).max() ?? 0) + 5).rounded(.up)
         return Chart {
+            if let targetPoints {
+                TargetMarks(points: targetPoints, tolerance: model.target.tolerance > 0)
+            }
             ForEach(shown, id: \.0.id) { item in
                 ForEach(item.1) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Trace", item.0.id.uuidString))
@@ -418,6 +446,7 @@ struct LiveView: View {
         .frequencyDataTip(calibrated.map { TipSeries(id: "mic\($0.0)", name: "Live · Mic \($0.0 + 1)", color: color($0.0), points: $0.1) }
                           + predicted.map { TipSeries(id: "eq\($0.0)", name: "Mic \($0.0 + 1) with EQ", color: color($0.0), points: $0.1) }
                           + shown.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
+                          + targetTip
                           + (tracePrediction.map { [TipSeries(id: "eq-trace", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? []))
         .clipped()
     }
