@@ -35,7 +35,7 @@ struct ContentView: View {
             }
             .inspector(isPresented: Binding(get: { mode == .tuning && tuningTab == .frequency && showVirtualEQ },
                                             set: { showVirtualEQ = $0 })) {
-                VirtualEQPanel().inspectorColumnWidth(min: 220, ideal: 280)
+                VirtualEQPanel().inspectorColumnWidth(min: 300, ideal: 340, max: 480)
             }
         }
         .toolbar {
@@ -74,7 +74,7 @@ struct ContentView: View {
         switch tuningTab {
         case .impulse: ImpulseView(editsWindow: true)
         case .frequency:
-            if source == .crossSpectrum { LiveView() } else { FrequencyResponseView(showVirtualEQ: $showVirtualEQ) }
+            if source == .crossSpectrum { LiveView(showsEQ: true) } else { FrequencyResponseView(showVirtualEQ: $showVirtualEQ) }
         case .phase:
             if source == .crossSpectrum { LiveView() } else { PhaseView() }
         case .delay: DelayView()
@@ -201,6 +201,10 @@ struct StatusBar: View {
 struct TraceList: View {
     @Environment(AppModel.self) private var model
     @State private var editing: TraceInfo?
+    @State private var renaming: UUID?
+    @State private var newName = ""
+    @State private var choosingColour: UUID?
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         @Bindable var model = model
@@ -212,12 +216,28 @@ struct TraceList: View {
                         set: { on in if on { model.visible.insert(trace.id) } else { model.visible.remove(trace.id) } }))
                         .labelsHidden()
                         .toggleStyle(.checkbox)
-                    ColorPicker("Colour", selection: colorBinding(trace), supportsOpacity: false)
-                        .labelsHidden()
-                        .frame(width: 26)
-                        .help("Choose this measurement's colour")
+                    Button { choosingColour = trace.id } label: {
+                        Circle().fill(trace.color).frame(width: 12, height: 12)
+                            .overlay(Circle().strokeBorder(.secondary.opacity(0.5), lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Choose this measurement's colour")
+                    .popover(isPresented: Binding(get: { choosingColour == trace.id },
+                                                  set: { if !$0 { choosingColour = nil } })) {
+                        colourChooser(trace)
+                    }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(trace.info.name).lineLimit(1)
+                        if renaming == trace.id {
+                            TextField("Name", text: $newName)
+                                .textFieldStyle(.roundedBorder)
+                                .focused($nameFocused)
+                                .onSubmit { commitRename(trace.id) }
+                                .onExitCommand { renaming = nil }
+                                .onChange(of: nameFocused) { _, focused in if !focused { commitRename(trace.id) } }
+                        } else {
+                            Text(trace.info.name).lineLimit(1)
+                                .onTapGesture(count: 2) { startRename(trace) }
+                        }
                         Text(subtitle(trace)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         if let names = trace.info.averagedFrom {
                             Text("Average of " + names.joined(separator: ", "))
@@ -228,6 +248,7 @@ struct TraceList: View {
                 .help(trace.info.notes)
                 .tag(trace.id)
                 .contextMenu {
+                    Button("Rename") { startRename(trace) }
                     Button("Edit…") { editing = trace.info }
                     Button("Show Only This") { model.visible = [trace.id] }
                     Menu("Colour") {
@@ -248,6 +269,38 @@ struct TraceList: View {
         }
         .onDeleteCommand { if let s = model.selection { model.delete([s]) } }
         .sheet(item: $editing) { info in TraceEditor(info: info) }
+    }
+
+    private func startRename(_ trace: Trace) {
+        newName = trace.info.name
+        renaming = trace.id
+        DispatchQueue.main.async { nameFocused = true }
+    }
+
+    private func commitRename(_ id: UUID) {
+        guard renaming == id else { return }
+        renaming = nil
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, var info = model.traces.first(where: { $0.id == id })?.info, info.name != name else { return }
+        info.name = name
+        model.update(info)
+    }
+
+    /// The palette as swatches, plus a colour well for any other colour.
+    private func colourChooser(_ trace: Trace) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(20), spacing: 6), count: 5), spacing: 6) {
+                ForEach(TracePalette.colors.indices, id: \.self) { i in
+                    Button { setColor(trace, index: i); choosingColour = nil } label: {
+                        Circle().fill(TracePalette.colors[i]).frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(.plain)
+                    .help(TracePalette.names[i])
+                }
+            }
+            ColorPicker("Other…", selection: colorBinding(trace), supportsOpacity: false)
+        }
+        .padding(10)
     }
 
     /// The trace's colour, as a binding for the colour well. Choosing one stores it with the trace.

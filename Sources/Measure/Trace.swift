@@ -14,6 +14,8 @@ struct TraceInfo: Codable, Identifiable, Hashable {
         case transferFunction
         /// The average of several traces' frequency responses.
         case average
+        /// A trace's response with its Virtual EQ applied: a prediction, not a measurement.
+        case eqPrediction
     }
 
     var id = UUID()
@@ -38,6 +40,8 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     var averagedFrom: [String]?
     /// A colour chosen by the user, as sRGB hex ("#RRGGBB"). Nil uses the palette colour `colorIndex`.
     var colorHex: String?
+    /// Virtual EQ filters tried on this trace. A prediction only; the response itself is unchanged.
+    var eq: [EQFilter]?
 }
 
 /// One measurement in the trace library: an impulse response, an imported frequency response or a plain
@@ -64,6 +68,10 @@ struct Trace: Identifiable {
     var id: UUID { info.id }
     var color: Color { info.colorHex.flatMap(Color.init(hex:)) ?? TracePalette.color(info.colorIndex) }
     var window: ResponseWindow { info.window ?? .standard }
+    /// The sample rate the Virtual EQ's filters are designed at: the trace's own, or 48 kHz for an
+    /// imported response that has none.
+    var eqSampleRate: Double { info.sampleRate > 0 ? info.sampleRate : 48_000 }
+    var activeEQ: [EQFilter] { (info.eq ?? []).filter(\.enabled) }
 
     /// Sets the frequency response window and recomputes the response. Does nothing for an imported response.
     mutating func setWindow(_ window: ResponseWindow) {
