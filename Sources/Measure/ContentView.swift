@@ -73,8 +73,10 @@ struct ContentView: View {
     @ViewBuilder private var tuningContent: some View {
         switch tuningTab {
         case .impulse: ImpulseView(editsWindow: true)
-        case .frequency: FrequencyResponseView(showVirtualEQ: $showVirtualEQ)
-        case .phase: PhaseView()
+        case .frequency:
+            if source == .crossSpectrum { LiveView() } else { FrequencyResponseView(showVirtualEQ: $showVirtualEQ) }
+        case .phase:
+            if source == .crossSpectrum { LiveView() } else { PhaseView() }
         case .delay: DelayView()
         case .sti: STIView()
         }
@@ -96,14 +98,28 @@ struct ContentView: View {
         Picker("Source", selection: $source) {
             ForEach(TuningSource.allCases) { Text($0.rawValue).tag($0) }
         }
-        .help("Sweep, or the live cross-spectrum mode (coming in a later step)")
+        .help("Sweep, or the live cross-spectrum mode (reference on the loopback input, on the Frequency and Phase views)")
+        .onChange(of: source) { if source != .crossSpectrum { model.live.stop(model) } }
         Button { importFiles(model) } label: { Label("Import", systemImage: "square.and.arrow.down") }
             .help("Import WAV impulse responses or REW text exports (⌘I)")
-        Button { Task { await model.measure() } } label: {
-            Label(model.isMeasuring ? "Measuring" : "Measure", systemImage: model.isMeasuring ? "waveform" : "record.circle")
+        if source == .crossSpectrum {
+            Button {
+                if model.live.isRunning { model.live.stop(model) } else {
+                    if tuningTab != .frequency && tuningTab != .phase { tuningTab = .frequency }
+                    Task { await model.live.start(model) }
+                }
+            } label: {
+                Label(model.live.isRunning ? "Stop" : "Start", systemImage: model.live.isRunning ? "stop.circle" : "play.circle")
+            }
+            .disabled(model.isMeasuring)
+            .help("Start or stop the live analyser")
+        } else {
+            Button { Task { await model.measure() } } label: {
+                Label(model.isMeasuring ? "Measuring" : "Measure", systemImage: model.isMeasuring ? "waveform" : "record.circle")
+            }
+            .disabled(model.isMeasuring || model.live.isRunning)
+            .help("Play the sweep and record (⌘M)")
         }
-        .disabled(model.isMeasuring || source == .crossSpectrum)
-        .help(source == .crossSpectrum ? "The live cross-spectrum mode comes in a later step" : "Play the sweep and record (⌘M)")
     }
 
     @ViewBuilder private var acousticsActions: some View {

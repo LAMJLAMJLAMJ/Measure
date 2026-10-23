@@ -4,9 +4,9 @@ import Charts
 import MeasureDSP
 import SwiftUI
 
-private let frequencyTicks: [Double] = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
+let frequencyTicks: [Double] = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
 
-private func frequencyLabel(_ f: Double) -> String {
+func frequencyLabel(_ f: Double) -> String {
     f >= 1000 ? "\(Int(f / 1000))k" : "\(Int(f))"
 }
 

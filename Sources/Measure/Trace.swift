@@ -9,6 +9,8 @@ struct TraceInfo: Codable, Identifiable, Hashable {
         case sweep, importedImpulseResponse, importedFrequencyResponse
         /// A plain recording of the sound itself (background noise or programme), for levels and noise ratings.
         case recording
+        /// The impulse response of a live transfer function, captured in the cross-spectrum mode.
+        case transferFunction
     }
 
     var id = UUID()
