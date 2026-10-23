@@ -119,6 +119,11 @@ final class LiveAnalyzer {
         loop = nil
         stream.stop()
         isRunning = false
+        // The live curve goes with the measurement: what stays on screen are the saved traces.
+        curves = []
+        peaks = []
+        spectra = []
+        blocks = 0
         model?.status = nil
     }
 
@@ -244,12 +249,14 @@ struct LiveView: View {
             controls(live)
             if !(live.settings.internalReference && live.settings.generator) && model.settings.loopbackInput == nil {
                 EmptyState(text: "Use the internal reference, or set the loopback input in Measurement Setup to the input that carries the signal fed to the system.")
-            } else if !live.isRunning && live.curves.isEmpty {
-                EmptyState(text: "Press Start to measure live. Shown traces are drawn in grey for comparison.")
+            } else if live.curves.isEmpty && !model.visibleTraces.contains(where: \.hasResponse) {
+                EmptyState(text: "Press Start to measure live. Ticked traces are drawn with it for comparison.")
             } else {
                 magnitudeChart(live)
-                coherenceChart(live).frame(height: 70)
+                if !live.curves.isEmpty { coherenceChart(live).frame(height: 70) }
                 phaseChart(live).frame(height: 150)
+                Text(live.isRunning ? "Thick lines: live. Thin lines: ticked traces, in their colors." : "Stopped. Press Start to measure live; ticked traces are shown in their colors.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -277,7 +284,7 @@ struct LiveView: View {
                 }
                 Spacer()
                 Button("Capture") { live.capture(model) }
-                    .disabled(live.blocks == 0)
+                    .disabled(!live.isRunning || live.blocks == 0)
                     .help("Add each mic's current response to the list as an impulse response")
             }
             HStack {
@@ -318,7 +325,11 @@ struct LiveView: View {
         return parts.joined(separator: " · ")
     }
 
-    private func color(_ mic: Int) -> Color { TracePalette.color(mic) }
+    /// Live curves get their own high-contrast colors, so they stand apart from the traces' palette.
+    private func color(_ mic: Int) -> Color {
+        let colors: [Color] = [.primary, .red, .cyan, .yellow]
+        return colors[mic % colors.count]
+    }
 
     private func magnitudeChart(_ live: LiveAnalyzer) -> some View {
         let shown = model.visibleTraces.filter(\.hasResponse).map {
@@ -330,20 +341,22 @@ struct LiveView: View {
             guard let cal = model.calibration(mic: mic) else { return (c.mic, c.magnitude) }
             return (c.mic, c.magnitude.map { ChartPoint(x: $0.x, y: $0.y - cal.magnitude(at: $0.x)) })
         }
-        let top = ((calibrated.flatMap { $0.1.filter { $0.x >= 20 }.map(\.y) }.max() ?? 0) + 5).rounded(.up)
+        // Scale to the live curves while measuring, otherwise to the traces.
+        let levels = calibrated.isEmpty ? shown.flatMap { $0.1 } : calibrated.flatMap { $0.1 }
+        let top = ((levels.filter { $0.x >= 20 }.map(\.y).max() ?? 0) + 5).rounded(.up)
         return Chart {
             ForEach(shown, id: \.0.id) { item in
                 ForEach(item.1) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Trace", item.0.id.uuidString))
-                        .foregroundStyle(.gray.opacity(0.6))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        .foregroundStyle(item.0.color)
+                        .lineStyle(StrokeStyle(lineWidth: item.0.id == model.selection ? 2 : 1.2))
                 }
             }
             ForEach(calibrated, id: \.0) { mic, points in
                 ForEach(points) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Mic", "mic\(mic)"))
                         .foregroundStyle(color(mic))
-                        .lineStyle(StrokeStyle(lineWidth: 1.5))
+                        .lineStyle(StrokeStyle(lineWidth: 2.8))
                 }
             }
         }
@@ -373,12 +386,20 @@ struct LiveView: View {
     }
 
     private func phaseChart(_ live: LiveAnalyzer) -> some View {
-        Chart {
+        let shown = model.visibleTraces.compactMap { t in t.displayPhase().map { (t, $0) } }
+        return Chart {
+            ForEach(shown, id: \.0.id) { item in
+                ForEach(item.1) { p in
+                    LineMark(x: .value("Frequency", p.x), y: .value("Phase", p.y), series: .value("Trace", item.0.id.uuidString))
+                        .foregroundStyle(item.0.color.opacity(0.8))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                }
+            }
             ForEach(live.curves) { c in
                 ForEach(c.phase) { p in
                     PointMark(x: .value("Frequency", p.x), y: .value("Phase", p.y))
                         .foregroundStyle(color(c.mic))
-                        .symbolSize(6)
+                        .symbolSize(10)
                 }
             }
         }
