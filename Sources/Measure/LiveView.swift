@@ -13,6 +13,9 @@ struct LiveSettings: Codable, Equatable {
     var averages = 8
     /// Play pink noise; off to measure with programme or another external signal.
     var generator = true
+    /// Use the generated noise as the reference rather than the loopback input, as Smaart's internal
+    /// reference does. Needs the generator, and input and output on one device (one clock).
+    var internalReference = true
     /// Noise level, dB re its peak (the noise's RMS is about 12 dB lower).
     var level: Double = -30
     /// Delay of each mic behind the reference, in samples.
@@ -76,14 +79,15 @@ final class LiveAnalyzer {
             model.errorMessage = "Choose an input device in Measurement Setup."
             return
         }
-        guard let reference = s.loopbackInput else {
-            model.errorMessage = "The live mode needs a reference: set the loopback input in Measurement Setup to the input that carries the signal fed to the system."
+        let useInternal = settings.internalReference && settings.generator
+        if !useInternal && s.loopbackInput == nil {
+            model.errorMessage = "Without the internal reference the live mode needs a loopback input: set it in Measurement Setup to the input that carries the signal fed to the system."
             return
         }
         sampleRate = s.sampleRate
         // The noise repeats every 65 536 samples, so every FFT size up to that sees whole periods.
         let noise = settings.generator ? PinkNoise.periodic(count: 65_536, sampleRate: s.sampleRate) : nil
-        let routing = LiveRouting(inputDevice: input, referenceChannel: reference - 1,
+        let routing = LiveRouting(inputDevice: input, referenceChannel: useInternal ? nil : s.loopbackInput.map { $0 - 1 },
                                   micChannels: s.mics.map { $0.channel - 1 },
                                   outputDevice: settings.generator ? model.outputDevice : nil,
                                   outputChannel: s.outputChannel - 1,
@@ -95,7 +99,11 @@ final class LiveAnalyzer {
             return
         }
         model.errorMessage = nil
-        model.status = settings.generator ? "Live: playing pink noise" : "Live: listening to the reference"
+        if useInternal, let out = model.outputDevice, out.id != input.id {
+            model.status = "Live, internal reference: output and input are different devices, so their clocks drift and the response will smear. Use one device or the loopback input."
+        } else {
+            model.status = useInternal ? "Live: pink noise, internal reference" : settings.generator ? "Live: pink noise, loopback reference" : "Live: listening to the reference input"
+        }
         isRunning = true
         reset()
         loop = Task { [weak self] in
@@ -191,6 +199,14 @@ final class LiveAnalyzer {
 
     func clearDelays() { settings.delays = [] }
 
+    /// How the reference was taken, for a captured trace's notes.
+    private func referenceText(_ model: AppModel) -> String {
+        if settings.internalReference && settings.generator {
+            return "the internal reference (delay includes the interface latency)"
+        }
+        return "reference input \(model.settings.loopbackInput ?? 0)"
+    }
+
     /// Adds the current transfer function of each mic to the library as an impulse response.
     func capture(_ model: AppModel) {
         guard !spectra.isEmpty, blocks > 0 else { return }
@@ -207,8 +223,8 @@ final class LiveAnalyzer {
             let delayMS = Double(settings.delay(i)) / fs * 1000
             let info = TraceInfo(name: label, date: date, source: .transferFunction, sampleRate: fs,
                                  mic: slot.micName, position: s.position,
-                                 notes: String(format: "Live transfer function, input %d against reference input %d, %d-point FFT, %d averages, reference delayed %.2f ms",
-                                               slot.channel, s.loopbackInput ?? 0, settings.fftSize, settings.averages, delayMS),
+                                 notes: String(format: "Live transfer function, input %d against %@, %d-point FFT, %d averages, reference delayed %.2f ms",
+                                               slot.channel, referenceText(model), settings.fftSize, settings.averages, delayMS),
                                  colorIndex: model.traces.count)
             model.add(Trace(info: info, impulseResponse: rotated))
             if i == 0 { model.selection = info.id }
@@ -226,8 +242,8 @@ struct LiveView: View {
         let live = model.live
         VStack(alignment: .leading, spacing: 8) {
             controls(live)
-            if model.settings.loopbackInput == nil {
-                EmptyState(text: "Set the loopback input in Measurement Setup. It carries the reference: the signal fed to the system.")
+            if !(live.settings.internalReference && live.settings.generator) && model.settings.loopbackInput == nil {
+                EmptyState(text: "Use the internal reference, or set the loopback input in Measurement Setup to the input that carries the signal fed to the system.")
             } else if !live.isRunning && live.curves.isEmpty {
                 EmptyState(text: "Press Start to measure live. Shown traces are drawn in grey for comparison.")
             } else {
@@ -248,6 +264,13 @@ struct LiveView: View {
                 Toggle("Pink noise", isOn: $live.settings.generator)
                     .disabled(live.isRunning)
                     .help("Play pink noise on the measurement output. Off: measure with programme or any signal fed to the reference input.")
+                Picker("Reference", selection: $live.settings.internalReference) {
+                    Text("Internal").tag(true)
+                    Text(model.settings.loopbackInput.map { "Input \($0)" } ?? "Loopback input").tag(false)
+                }
+                .frame(width: 190)
+                .disabled(live.isRunning || !live.settings.generator)
+                .help("Internal: the generated noise is the reference, no cable needed. Input: the loopback input carries it, which also works with programme.")
                 if live.settings.generator {
                     Slider(value: $live.settings.level, in: -60...0, step: 1).frame(width: 120)
                     Text("\(Int(live.settings.level)) dBFS peak").monospacedDigit().frame(width: 100, alignment: .leading)

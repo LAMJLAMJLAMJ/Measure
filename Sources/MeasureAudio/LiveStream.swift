@@ -8,8 +8,9 @@ import Foundation
 public struct LiveRouting {
     public var inputDevice: AudioDevice
     /// The input carrying the reference: the signal fed to the system, by a loopback cable or a feed
-    /// from the console. From 0.
-    public var referenceChannel: Int
+    /// from the console. From 0. Nil uses the generated signal itself as the reference (an internal
+    /// reference), which needs a signal to play.
+    public var referenceChannel: Int?
     /// Mic inputs. From 0.
     public var micChannels: [Int]
     /// Where the noise generator plays, or nil to measure with an external signal such as programme.
@@ -19,7 +20,7 @@ public struct LiveRouting {
     /// A second output that also gets the noise, for a loopback cable to the reference input. From 0.
     public var loopbackOutputChannel: Int?
 
-    public init(inputDevice: AudioDevice, referenceChannel: Int, micChannels: [Int],
+    public init(inputDevice: AudioDevice, referenceChannel: Int?, micChannels: [Int],
                 outputDevice: AudioDevice?, outputChannel: Int, loopbackOutputChannel: Int?) {
         self.inputDevice = inputDevice
         self.referenceChannel = referenceChannel
@@ -30,7 +31,7 @@ public struct LiveRouting {
     }
 
     func validate() throws {
-        for c in [referenceChannel] + micChannels where c < 0 || c >= inputDevice.inputChannels {
+        for c in [referenceChannel].compactMap({ $0 }) + micChannels where c < 0 || c >= inputDevice.inputChannels {
             throw AudioEngineError.channelOutOfRange(device: inputDevice.name, channel: c + 1, available: inputDevice.inputChannels)
         }
         if let out = outputDevice {
@@ -64,6 +65,9 @@ public final class LiveStream {
     public func start(routing: LiveRouting, sampleRate: Double, signal: [Double]?, level: Double) async throws {
         stop()
         try routing.validate()
+        if routing.referenceChannel == nil && (signal == nil || routing.outputDevice == nil) {
+            throw AudioEngineError.coreAudio("starting: an internal reference needs the generator", -1)
+        }
         guard await SweepRecorder.requestMicrophoneAccess() else { throw AudioEngineError.microphoneAccessDenied }
         try AudioDevices.setSampleRate(sampleRate, on: routing.inputDevice)
         if let out = routing.outputDevice, signal != nil, out.id != routing.inputDevice.id {
@@ -75,7 +79,8 @@ public final class LiveStream {
         let s = LiveState.make(signal: signal ?? [], gain: Float(pow(10, level / 20)),
                                outputChannel: routing.outputChannel,
                                loopbackOutputChannel: routing.loopbackOutputChannel ?? -1,
-                               captureChannels: [routing.referenceChannel] + routing.micChannels,
+                               // -1: the internal reference, made from the signal in the input callback.
+                               captureChannels: [routing.referenceChannel ?? -1] + routing.micChannels,
                                inputChannelCount: routing.inputDevice.inputChannels)
         state = s
         do {
@@ -306,9 +311,24 @@ private let liveInputCallback: AURenderCallback = { refCon, actionFlags, timeSta
     let mask = capacity - 1
     for c in 0..<state.pointee.channelCount {
         let source = state.pointee.captureChannels[c]
-        guard source < buffers.count, let data = buffers[source].mData?.assumingMemoryBound(to: Float.self) else { continue }
         let dest = state.pointee.ring + c * capacity
         var peak = state.pointee.peaks[c]
+        if source < 0 {
+            // Internal reference: the signal as played, frame for frame with the input. Input and
+            // output start together and run on one clock, so the offset between them is a constant
+            // latency, which the delay finder measures along with the acoustic delay.
+            let count = state.pointee.signalCount
+            guard count > 0 else { continue }
+            let gain = state.pointee.gain
+            for i in 0..<frames {
+                let v = state.pointee.signal[(start + i) % count] * gain
+                dest[(start + i) & mask] = v
+                peak = max(peak, abs(v))
+            }
+            state.pointee.peaks[c] = peak
+            continue
+        }
+        guard source < buffers.count, let data = buffers[source].mData?.assumingMemoryBound(to: Float.self) else { continue }
         for i in 0..<frames {
             let v = data[i]
             dest[(start + i) & mask] = v
