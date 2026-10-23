@@ -120,6 +120,31 @@ final class AlignmentTests: XCTestCase {
         }
     }
 
+    func testShiftedImpulsesAddInTime() {
+        let a = impulse(at: 480, length: 4800)
+        let b = impulse(at: 960, length: 4800)
+        let setting = TimeAlignment.Setting(delay: 0.010, gain: -6, inverted: true)
+        // b at 20 ms, delayed 10 ms and inverted at half level: a spike of -0.5 at 30 ms.
+        let shifted = TimeAlignment.shifted(b, sampleRate: fs, setting: setting, start: 0.005, count: 1440, outputRate: fs)
+        XCTAssertEqual(shifted[1200], -pow(10, -6.0 / 20), accuracy: 1e-12)
+        XCTAssertEqual(shifted.map(abs).reduce(0, +), pow(10, -6.0 / 20), accuracy: 1e-12)
+        // Half a sample of delay splits the spike between two samples.
+        let half = TimeAlignment.shifted(a, sampleRate: fs, setting: .init(delay: 0.5 / fs), start: 0, count: 600, outputRate: fs)
+        XCTAssertEqual(half[480], 0.5, accuracy: 1e-9)
+        XCTAssertEqual(half[481], 0.5, accuracy: 1e-9)
+        // Another output rate reads the same times.
+        let slow = TimeAlignment.shifted(a, sampleRate: fs, setting: .init(), start: 0, count: 300, outputRate: 24_000)
+        XCTAssertEqual(slow[240], 1, accuracy: 1e-12)
+        let p = TimeAlignment.peak(shifted, sampleRate: fs)!
+        XCTAssertEqual(p.time, 1200 / fs, accuracy: 1e-12)
+        XCTAssertLessThan(p.value, 0)
+        // Between two equal samples the peak is half-way.
+        XCTAssertEqual(TimeAlignment.peak([0, 0.2, 1, 1, 0.2], sampleRate: 1)!.time, 2.5, accuracy: 1e-9)
+        // The envelope of a spike peaks at it.
+        let env = TimeFrequency.envelope(Array(shifted))
+        XCTAssertEqual(env.indices.max { env[$0] < env[$1] }!, 1200)
+    }
+
     func testCrossoverNeedsACrossing() {
         let a = part(impulse(at: 100))
         var b = a

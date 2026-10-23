@@ -275,6 +275,39 @@ public enum TimeAlignment {
                    summation: chosen.level, fromArrival: chosen.tau)
     }
 
+    /// An impulse response with a setting applied, on a time grid: `count` samples at `outputRate` from
+    /// `start` seconds after the common zero. Fractional delays are interpolated linearly; times outside
+    /// the response are zero. Add the results of several sources for their predicted sum.
+    public static func shifted(_ ir: [Double], sampleRate fs: Double, setting: Setting, start: Double,
+                               count: Int, outputRate: Double) -> [Double] {
+        var out = [Double](repeating: 0, count: max(count, 0))
+        guard fs > 0, outputRate > 0, !ir.isEmpty else { return out }
+        let g = setting.factor
+        for n in out.indices {
+            let t = start + Double(n) / outputRate - setting.delay
+            let x = t * fs
+            let i = Int(x.rounded(.down))
+            guard i >= 0, i < ir.count else { continue }
+            let w = x - Double(i)
+            let next = i + 1 < ir.count ? ir[i + 1] : 0
+            out[n] = g * (ir[i] + w * (next - ir[i]))
+        }
+        return out
+    }
+
+    /// The largest sample of an impulse response, by size: its time in seconds from the first sample
+    /// (refined between samples by a parabola) and its value, whose sign is the polarity.
+    public static func peak(_ x: [Double], sampleRate fs: Double) -> (time: Double, value: Double)? {
+        guard fs > 0, let i = x.indices.max(by: { abs(x[$0]) < abs(x[$1]) }), x[i] != 0 else { return nil }
+        var offset = 0.0
+        if i > 0 && i + 1 < x.count {
+            let a = abs(x[i - 1]), b = abs(x[i]), c = abs(x[i + 1])
+            let d = a - 2 * b + c
+            if d < 0 { offset = 0.5 * (a - c) / d }
+        }
+        return ((Double(i) + offset) / fs, x[i])
+    }
+
     /// The delays shifted so the smallest is zero: a processor can add delay but not take it away.
     public static func normalized(_ settings: [Setting]) -> [Setting] {
         guard let least = settings.map(\.delay).min() else { return settings }

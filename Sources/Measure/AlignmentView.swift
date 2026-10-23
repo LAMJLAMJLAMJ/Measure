@@ -21,6 +21,23 @@ struct AlignmentSettings: Codable {
     func setting(_ id: UUID) -> TimeAlignment.Setting { parts[id] ?? TimeAlignment.Setting() }
 }
 
+/// How Align finds a source's delay and polarity.
+enum AlignMethod: String, CaseIterable, Identifiable {
+    /// The delay that makes the source add best to the others over the range, from the complex responses.
+    case phase = "Phase"
+    /// The delay that lines up its impulse response peak with the others' sum, and the peak's sign.
+    case impulse = "Impulse"
+    var id: String { rawValue }
+}
+
+/// What the Alignment view draws.
+enum AlignmentDisplay: String, CaseIterable, Identifiable {
+    case frequency = "Magnitude & Phase"
+    case impulse = "Impulse"
+    case etc = "ETC"
+    var id: String { rawValue }
+}
+
 /// One curve on an alignment chart.
 private struct AlignmentCurve: Identifiable {
     let id: String
@@ -45,6 +62,9 @@ private struct AlignmentData {
 struct AlignmentView: View {
     @Environment(AppModel.self) private var model
     @State private var message: String?
+    @AppStorage("alignment.method") private var method: AlignMethod = .phase
+    @AppStorage("alignment.display") private var display: AlignmentDisplay = .frequency
+    @AppStorage("alignment.timeSpan") private var timeSpan: Double = 20
 
     var body: some View {
         let data = makeData()
@@ -111,7 +131,7 @@ struct AlignmentView: View {
         @Bindable var model = model
         return HStack(spacing: 12) {
             HStack(spacing: 4) {
-                Text("Align over")
+                Text("Range")
                 numberField($model.alignment.low, width: 56)
                 Text("to")
                 numberField($model.alignment.high, width: 60)
@@ -121,6 +141,12 @@ struct AlignmentView: View {
             .help("The range the automatic alignment and the summation figure look at: about an octave either side of the crossover")
             Button("Find Crossover") { findCrossover(data) }
                 .help("Set the range to an octave either side of where the reference trace and the next one are at the same level")
+            Picker("Align by", selection: $method) {
+                ForEach(AlignMethod.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .help("How Align works. Phase: the delay and polarity that add best over the range. Impulse: line up the impulse response peaks, with the polarity from their signs.")
             Spacer(minLength: 0)
             Button("Match Arrivals") { matchArrivals(data) }
                 .help("Delay the earlier traces so every direct sound arrives with the last one")
@@ -223,6 +249,13 @@ struct AlignmentView: View {
     // MARK: - Actions
 
     private func align(_ data: AlignmentData, index: Int) {
+        switch method {
+        case .phase: alignByPhase(data, index: index)
+        case .impulse: alignByImpulse(data, index: index)
+        }
+    }
+
+    private func alignByPhase(_ data: AlignmentData, index: Int) {
         let trace = data.traces[index]
         let (others, otherSettings) = included(data, except: trace.id)
         guard let first = others.first else { return }
@@ -244,6 +277,55 @@ struct AlignmentView: View {
         let polarity = fit.inverted ? ", polarity inverted" : ""
         message = String(format: "%@ aligned%@: the sum is %.1f dB from a perfect addition over the range. The best phase match is %.2f ms from lining up the arrivals.",
                          trace.info.name, polarity, fit.summation, fit.fromArrival * 1000)
+    }
+
+    private func alignByImpulse(_ data: AlignmentData, index: Int) {
+        let trace = data.traces[index]
+        guard let ir = trace.impulseResponse, let moving = TimeAlignment.peak(ir, sampleRate: trace.info.sampleRate) else {
+            message = "\(trace.info.name) has no impulse response: align it by phase."
+            return
+        }
+        guard let others = othersImpulse(data, except: trace.id),
+              let target = TimeAlignment.peak(others.samples, sampleRate: others.rate) else {
+            message = "The other traces in the sum have no impulse responses: align by phase."
+            return
+        }
+        var setting = model.alignment.setting(trace.id)
+        setting.delay = target.time - moving.time
+        setting.inverted = (target.value < 0) != (moving.value < 0)
+        var parts = model.alignment.parts
+        parts[trace.id] = setting
+        normalize(&parts, ids: data.traces.map(\.id))
+        model.alignment.parts = parts
+        let polarity = setting.inverted ? ", polarity inverted" : ""
+        var text = "\(trace.info.name) aligned\(polarity): its impulse peak is on the others' peak."
+        let (sumParts, sumSettings) = included(data)
+        let a = model.alignment
+        if let figure = TimeAlignment.summation(sumParts, settings: sumSettings, low: a.low, high: a.high) {
+            text += String(format: " The sum is %.1f dB from a perfect addition over the range.", figure)
+        }
+        message = text
+    }
+
+    /// The impulse responses of the traces in the sum other than `skipped`, with their settings, added
+    /// from the common zero at the first one's sample rate. Nil when none has an impulse response.
+    private func othersImpulse(_ data: AlignmentData, except skipped: UUID) -> (samples: [Double], rate: Double)? {
+        var sources: [(ir: [Double], rate: Double, setting: TimeAlignment.Setting)] = []
+        for trace in data.traces where trace.id != skipped && !model.alignment.off.contains(trace.id) {
+            guard let ir = trace.impulseResponse, trace.info.sampleRate > 0 else { continue }
+            sources.append((ir, trace.info.sampleRate, model.alignment.setting(trace.id)))
+        }
+        guard let rate = sources.first?.rate else { return nil }
+        var end = 0.0
+        for source in sources { end = max(end, Double(source.ir.count) / source.rate + source.setting.delay) }
+        let count = Int((min(end, 10) * rate).rounded(.up))
+        var sum = [Double](repeating: 0, count: count)
+        for source in sources {
+            let x = TimeAlignment.shifted(source.ir, sampleRate: source.rate, setting: source.setting, start: 0,
+                                          count: count, outputRate: rate)
+            for n in sum.indices { sum[n] += x[n] }
+        }
+        return (sum, rate)
     }
 
     /// Shifts the delays so the smallest is zero: a processor can add delay but not take it away.
@@ -366,6 +448,35 @@ struct AlignmentView: View {
     }
 
     private func charts(_ data: AlignmentData) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Picker("Show", selection: $display) {
+                    ForEach(AlignmentDisplay.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                if display != .frequency {
+                    Picker("Span", selection: $timeSpan) {
+                        Text("10 ms").tag(10.0)
+                        Text("20 ms").tag(20.0)
+                        Text("50 ms").tag(50.0)
+                        Text("100 ms").tag(100.0)
+                        Text("300 ms").tag(300.0)
+                    }
+                    .fixedSize()
+                }
+                Spacer(minLength: 0)
+            }
+            if display == .frequency {
+                frequencyCharts(data)
+            } else {
+                timeChart(data)
+            }
+        }
+    }
+
+    private func frequencyCharts(_ data: AlignmentData) -> some View {
         let (magnitude, phase) = curves(data)
         let top = magnitude.flatMap { $0.points.map(\.y) }.max() ?? 0
         let ceiling = (top / 6).rounded(.up) * 6 + 6
@@ -379,6 +490,84 @@ struct AlignmentView: View {
                            yDomain: -180...180, yLabel: "degrees", yTicks: [-180, -90, 0, 90, 180], unit: "°")
                 .frame(minHeight: 120, maxHeight: .infinity)
             Text("Phase relative to the reference trace's arrival after its delay. In the shaded range, curves that lie on each other add fully. Each trace is taken within its window on the Impulse view: give subs a window long enough for the low end.")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        }
+    }
+
+    // MARK: - Impulse and ETC
+
+    /// Each impulse response in the sum after its delay, polarity and gain, and their sum, around the
+    /// reference trace's arrival: as the waveform (scaled to the sum's peak) or as the ETC in dB.
+    private func timeCurves(_ data: AlignmentData) -> [AlignmentCurve] {
+        let sources = data.traces.filter { $0.impulseResponse != nil && !model.alignment.off.contains($0.id) }
+        guard let rate = sources.first?.info.sampleRate, rate > 0 else { return [] }
+        let span = timeSpan / 1000
+        let before = 0.2 * span
+        let count = Int((span * rate).rounded())
+        let zero = Int((before * rate).rounded())
+        var signals: [[Double]] = []
+        for trace in sources {
+            let x = TimeAlignment.shifted(trace.impulseResponse!, sampleRate: trace.info.sampleRate,
+                                          setting: model.alignment.setting(trace.id), start: data.reference - before,
+                                          count: count, outputRate: rate)
+            signals.append(x)
+        }
+        var sum = [Double](repeating: 0, count: count)
+        for x in signals { for n in sum.indices { sum[n] += x[n] } }
+        let etc = display == .etc
+        var values: [[Double]] = signals
+        if signals.count > 1 { values.append(sum) }
+        if etc { values = values.map { TimeFrequency.envelope($0) } }
+        var scale = 0.0
+        for v in values { for y in v { scale = max(scale, abs(y)) } }
+        guard scale > 0 else { return [] }
+        var out: [AlignmentCurve] = []
+        for (i, v) in values.enumerated() {
+            let y: [Double] = etc ? v.map { max(10 * log10(max($0 / scale, 1e-30)), -80) } : v.map { $0 / scale }
+            let points = ChartData.points(y, range: 0..<count, zero: zero, sampleRate: rate, envelope: etc)
+            if i < sources.count {
+                let trace = sources[i]
+                out.append(AlignmentCurve(id: trace.id.uuidString, name: trace.info.name, color: trace.color,
+                                          width: 1.2, points: points))
+            } else {
+                out.append(AlignmentCurve(id: "sum", name: "Sum", color: .primary, width: 2, points: points))
+            }
+        }
+        return out
+    }
+
+    private func timeChart(_ data: AlignmentData) -> some View {
+        let curves = timeCurves(data)
+        let etc = display == .etc
+        let low = -0.2 * timeSpan
+        let high = 0.8 * timeSpan
+        let yDomain: ClosedRange<Double> = etc ? -60...0 : -1...1
+        return VStack(alignment: .leading, spacing: 6) {
+            if curves.isEmpty {
+                EmptyState(text: "Tick traces with impulse responses to see them in time")
+            } else {
+                Chart {
+                    ForEach(curves) { curve in
+                        ForEach(curve.points) { p in
+                            LineMark(x: .value("Time", p.x), y: .value(etc ? "dB" : "Amplitude", p.y),
+                                     series: .value("Trace", curve.id))
+                                .foregroundStyle(curve.color)
+                                .lineStyle(StrokeStyle(lineWidth: curve.width))
+                        }
+                    }
+                    RuleMark(x: .value("Reference", 0.0))
+                        .foregroundStyle(Color.secondary.opacity(0.5))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                }
+                .chartXScale(domain: low...high)
+                .chartYScale(domain: yDomain)
+                .chartXAxisLabel("ms from the reference's arrival")
+                .chartYAxisLabel(etc ? "dB" : "")
+                .chartLegend(.hidden)
+                .clipped()
+                .frame(minHeight: 200, maxHeight: .infinity)
+            }
+            Text("The whole impulse responses after each delay, polarity and gain, and their sum (thick), scaled to the largest. The dashed line is the reference trace's arrival. Virtual EQ and mic calibration are not applied here.")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
         }
     }
