@@ -1,11 +1,13 @@
 #if os(macOS)
 import SwiftUI
 
-/// The two ways of working. Both share the trace library, so an impulse response measured while
-/// tuning can be analysed acoustically and the other way round.
+/// The ways of working. Tuning and acoustic analysis share the trace library, so an impulse response
+/// measured while tuning can be analysed acoustically and the other way round. Live monitoring
+/// listens to the mics continuously, for an RTA and sound levels.
 enum AppMode: String, CaseIterable, Identifiable {
     case tuning = "System tuning"
     case acoustics = "Acoustic analysis"
+    case monitoring = "Live monitoring"
     var id: String { rawValue }
 }
 
@@ -24,6 +26,12 @@ enum TuningTab: String, CaseIterable, Identifiable {
     case phase = "Phase"
     case delay = "Delay"
     case sti = "STI"
+    var id: String { rawValue }
+}
+
+enum MonitoringTab: String, CaseIterable, Identifiable {
+    case rta = "RTA"
+    case spl = "SPL"
     var id: String { rawValue }
 }
 
