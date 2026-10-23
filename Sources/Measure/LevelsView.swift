@@ -292,9 +292,14 @@ struct NoiseView: View {
             }
             Section {
                 let levels = stiLevels
-                HStack {
-                    Button("Use as STI Speech") { if let levels { model.useSpeechForSTI(levels) } }
-                    Button("Use as STI Noise") { if let levels { model.useNoiseForSTI(levels) } }
+                // Stacked and full width: side by side the labels do not fit the panel.
+                VStack(spacing: 8) {
+                    Button { if let levels { model.useSpeechForSTI(levels) } } label: {
+                        Text("Use as STI Speech").frame(maxWidth: .infinity)
+                    }
+                    Button { if let levels { model.useNoiseForSTI(levels) } } label: {
+                        Text("Use as STI Noise").frame(maxWidth: .infinity)
+                    }
                 }
                 .disabled(levels == nil || offset == nil)
             } header: {
