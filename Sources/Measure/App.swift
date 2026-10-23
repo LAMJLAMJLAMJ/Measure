@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct MeasureApp: App {
@@ -25,6 +26,7 @@ struct MeasureApp: App {
                     .disabled(model.isMeasuring)
                 Button("Import Files…") { importFiles(model) }
                     .keyboardShortcut("i", modifiers: .command)
+                Button("Import Recordings…") { importRecordings(model) }
                 Divider()
                 Button("Open Project Folder…") { openProject(model) }
                     .keyboardShortcut("o", modifiers: .command)
@@ -43,6 +45,19 @@ func importFiles(_ model: AppModel) {
     if panel.runModal() == .OK {
         let urls = panel.urls
         Task { await model.importFiles(urls) }
+    }
+}
+
+@MainActor
+func importRecordings(_ model: AppModel) {
+    let panel = NSOpenPanel()
+    panel.allowsMultipleSelection = true
+    panel.canChooseDirectories = false
+    panel.allowedContentTypes = [.wav]
+    panel.message = "Choose WAV recordings for levels and noise ratings. Only the first channel is used."
+    if panel.runModal() == .OK {
+        let urls = panel.urls
+        Task { await model.importRecordings(urls) }
     }
 }
 

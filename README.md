@@ -48,7 +48,7 @@ open build/Measure.app
 
 `swift run Measure` also starts it during development. In that case macOS asks for microphone access for Terminal rather than for the app.
 
-- **Setup** (toolbar): output device and sweep channel, an optional second output for the loopback cable, input device, up to 4 mic inputs, loopback input, sample rate, sweep range, length, silence and level, and a position label. Microphones and their calibration files are set up here too. Each calibration belongs to a mic, not to an input. Settings are remembered, with devices found again by their UID.
+- **Setup** (toolbar): output device and sweep channel, an optional second output for the loopback cable, input device, up to 4 mic inputs, loopback input, sample rate, sweep range, length, silence and level, and a position label. Microphones and their calibration files are set up here too. Each calibration belongs to a mic, not to an input. "Calibrate…" records a 94 dB or 114 dB sound level calibrator for 3 s on the mic's input and sets its SPL offset, so plain recordings read in dB SPL; the offset can also be typed in. It holds only while the interface gain stays where it was. Settings are remembered, with devices found again by their UID.
 - **Measure** (⌘M): plays the sweep and adds one trace per mic to the library. The status bar warns about clipping or low level.
 - **Import** (⌘I): WAV impulse responses and REW text frequency responses.
 - **Trace library** (sidebar): tick traces to overlay them, and right-click to edit name, position, mic and notes, or to delete. Traces are saved as WAV and JSON in `~/Documents/Measure Projects/Default`. Use ⌘O to choose another project folder.
@@ -59,12 +59,13 @@ open build/Measure.app
     - **Phase:** wrapped phase within each trace's window, with the delay to the direct sound removed.
     - **Delay:** arrival time of each shown trace, relative to the selected one in ms and metres, with the ETC below.
     - **STI:** see Acoustic analysis.
-  - **Acoustic analysis:** Record (a sweep now, plain recordings later) or Load files, then look at
+  - **Acoustic analysis:** Record a sweep (for an impulse response) or a plain recording of every mic input for a set time (for levels and noise), or Load impulse responses or WAV recordings (Measurement > Import Recordings…), then look at
     - **Reverb:** Schroeder curve per band with the EDT, T20 and T30 fit lines and the noise floor, above the EDT/T20/T30 table and a band-by-band comparison of the shown traces.
     - **Clarity:** C50, C80, D50 and Ts table and comparison. "Copy All as CSV" copies every ISO 3382 parameter.
     - **Echo:** echo criterion after Dietsch and Kraak for the shown traces, for speech (n = 2/3, Δτ = 9 ms) or music (n = 1, Δτ = 14 ms), on the 1 kHz octave (as in the original method), the 2 kHz octave or broadband. The chart shows EK against time with the limits at which 10 % and 50 % of listeners hear an echo, and the table lists every echo of each trace (each stretch of EK above the 10 % limit, at its peak) with its EK, time and verdict, or the largest EK for a trace without any. Echoes are also marked on the chart.
     - **STI** (also in System tuning): Speech Transmission Index per IEC 60268-16:2020 (edition 5, indirect method, male speech, backward band filtering) for each shown trace, with its qualification band (A+ to U) and the modulation transfer index per octave for the selected trace. Set the speech level in dB(A) (male speech spectrum) or your own octave levels, optional background noise levels per octave, and whether auditory masking and the reception threshold apply. Each band's response is cut where it meets its noise floor. A note warns when a response is shorter than 1.6 s or has under 20 dB SNR in a band, as the standard requires.
-    - **Levels** (statistical levels) and **Noise** (NR/NC): placeholders that say what each will need.
+    - **Levels:** Leq, Lmax, Lmin, L10, L50, L90 and L95 of each shown recording (the CSV adds L1 and L5), A, C or Z weighted (IEC 61672) with Fast or Slow time weighting, and the level over time of the selected one. Levels are dB SPL when the mic is calibrated, otherwise re full scale. The Offset field (also on the Noise tab) sets the dB added to the selected recording's level to give dB SPL, for a recording made without a calibrated mic or one that was imported; clearing it uses the mic's calibration again. "Copy All as CSV" copies the table.
+    - **Noise:** octave-band Leq of the selected recording from 31.5 Hz to 8 kHz, with its NR (ISO R1996) and NC (Beranek 1957) ratings by the tangency method, the matching curves drawn over the bands, and LAeq. "Use as STI Speech" and "Use as STI Noise" copy the 125 Hz to 8 kHz levels to the STI speech levels (switching STI to custom speech levels) or to its background noise.
     - **Spectrogram and waterfall.**
 
 ## Measuring from Terminal

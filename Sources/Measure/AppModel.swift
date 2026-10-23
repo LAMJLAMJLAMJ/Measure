@@ -11,6 +11,9 @@ struct MicProfile: Codable, Identifiable, Hashable {
     var calibrationPath: String?
     /// dB, from the calibration file's "Sens Factor" line if it has one.
     var sensitivity: Double?
+    /// dB added to a level re full scale to give dB SPL, from a calibrator or typed in. It holds only
+    /// while the interface gain stays where it was.
+    var splOffset: Double?
 }
 
 /// One mic input in a measurement: which input channel, and which mic is plugged into it.
@@ -200,6 +203,114 @@ final class AppModel {
         }
     }
 
+    // MARK: - Plain recordings
+
+    /// Routing for a plain recording: the mic inputs only. The output plays silence, which keeps the
+    /// devices running the same way as for a sweep.
+    private func recordingRouting() throws -> SweepRouting {
+        guard let out = outputDevice, let input = inputDevice else {
+            throw SetupError(message: "Choose an output and an input device in Measurement Setup.")
+        }
+        if Set(settings.mics.map(\.channel)).count != settings.mics.count {
+            throw SetupError(message: "Two mics use the same input channel.")
+        }
+        return SweepRouting(outputDevice: out, outputChannel: settings.outputChannel - 1, inputDevice: input,
+                            micChannels: settings.mics.map { $0.channel - 1 })
+    }
+
+    /// Records every mic input for `duration` seconds and adds one trace per mic.
+    func recordPlain(duration: Double, label: String) async {
+        guard !isMeasuring else { return }
+        let s = settings
+        isMeasuring = true
+        errorMessage = nil
+        status = "Recording \(Int(duration)) s…"
+        defer { isMeasuring = false }
+        do {
+            let routing = try recordingRouting()
+            let silence = [Double](repeating: 0, count: Int(duration * s.sampleRate))
+            let recording = try await SweepRecorder().record(silence, sampleRate: s.sampleRate, routing: routing)
+            let date = Date()
+            let count = traces.count
+            var peaks: [Double] = []
+            for (i, samples) in recording.mics.enumerated() {
+                let slot = s.mics[i]
+                let peak = 20 * log10(max(samples.map { abs($0) }.max() ?? 0, 1e-12))
+                peaks.append(peak)
+                let base = label.isEmpty ? "Recording" : label
+                let info = TraceInfo(name: recording.mics.count > 1 ? "\(base) · Mic \(i + 1)" : base, date: date,
+                                     source: .recording, sampleRate: s.sampleRate, mic: slot.micName, position: label,
+                                     notes: "Input \(slot.channel), \(Int(duration)) s plain recording",
+                                     peakLevel: peak, colorIndex: count + i,
+                                     splOffset: micProfiles.first { $0.name == slot.micName }?.splOffset)
+                add(Trace(info: info, recording: samples))
+                if i == 0 { selection = info.id }
+            }
+            if let worst = peaks.max(), worst > -1 {
+                status = "Recorded, but a mic clipped (peak \(String(format: "%.1f", worst)) dBFS). Lower the gain."
+            } else {
+                status = "Recorded \(peaks.count) mic\(peaks.count == 1 ? "" : "s"), \(Int(duration)) s."
+            }
+        } catch {
+            status = nil
+            errorMessage = "\(error)"
+        }
+    }
+
+    /// Records a calibrator on the input `mic` is assigned to and sets the mic's SPL offset so the
+    /// calibrator reads `reference` dB.
+    func calibrateSPL(mic id: UUID, reference: Double) async {
+        guard !isMeasuring, let mic = micProfiles.first(where: { $0.id == id }) else { return }
+        guard let index = settings.mics.firstIndex(where: { $0.micName == mic.name }) else {
+            errorMessage = "Assign \(mic.name) to a mic input first."
+            return
+        }
+        isMeasuring = true
+        errorMessage = nil
+        status = "Calibrating \(mic.name)…"
+        defer { isMeasuring = false }
+        do {
+            let fs = settings.sampleRate
+            let routing = try recordingRouting()
+            let silence = [Double](repeating: 0, count: Int(3 * fs))
+            let recording = try await SweepRecorder().record(silence, sampleRate: fs, routing: routing)
+            // Skip the first half second while the calibrator and the interface settle.
+            let samples = Array(recording.mics[index].dropFirst(Int(0.5 * fs)))
+            let level = SoundLevel.analyze(samples, sampleRate: fs, weighting: .z, timeWeighting: .slow).leq
+            if level < -70 {
+                throw SetupError(message: String(format: "The calibrator read only %.1f dBFS on input %d. Check it is on the mic and switched on.",
+                                                 level, settings.mics[index].channel))
+            }
+            if let i = micProfiles.firstIndex(where: { $0.id == id }) {
+                micProfiles[i].splOffset = reference - level
+            }
+            status = String(format: "Calibrated %@: %.1f dBFS reads %.1f dB SPL.", mic.name, level, reference)
+        } catch {
+            status = nil
+            errorMessage = "\(error)"
+        }
+    }
+
+    /// dB to add to a trace's level re full scale for dB SPL. Nil when its mic has not been calibrated.
+    func splOffset(for trace: Trace) -> Double? {
+        trace.info.splOffset ?? micProfiles.first { $0.name == trace.info.mic }?.splOffset
+    }
+
+    /// Uses octave noise levels (125 Hz to 8 kHz, dB SPL) as the background noise for STI.
+    func useNoiseForSTI(_ levels: [Double]) {
+        sti.noiseLevels = levels
+        sti.includeNoise = true
+        status = "STI now includes this background noise."
+    }
+
+    /// Uses octave levels (125 Hz to 8 kHz, dB SPL) as the STI speech levels, in place of the
+    /// male speech spectrum.
+    func useSpeechForSTI(_ levels: [Double]) {
+        sti.speechLevels = levels
+        sti.customSpeech = true
+        status = "STI now uses this recording's octave levels as the speech level."
+    }
+
     // MARK: - Library
 
     func add(_ trace: Trace) {
@@ -247,6 +358,26 @@ final class AppModel {
             selection = selection ?? traces.last?.id
             status = nil
         }
+    }
+
+    /// Imports WAV files as plain recordings, for levels and noise ratings.
+    func importRecordings(_ urls: [URL]) async {
+        status = "Importing…"
+        var next = traces.count
+        for url in urls {
+            let name = url.deletingPathExtension().lastPathComponent
+            guard let audio = try? WAV.read(contentsOf: url), let samples = audio.channels.first else {
+                errorMessage = "Could not read \(url.lastPathComponent). Load WAV recordings."
+                continue
+            }
+            let info = TraceInfo(name: name, source: .recording, sampleRate: audio.sampleRate,
+                                 notes: "Imported from \(url.lastPathComponent)", colorIndex: next)
+            let trace = Trace(info: info, recording: samples)
+            add(trace)
+            selection = trace.id
+            next += 1
+        }
+        status = nil
     }
 
     /// Imports WAV impulse responses and REW text frequency responses.

@@ -8,6 +8,10 @@ import SwiftUI
 struct SetupView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    /// The mic waiting for its calibrator to be fitted.
+    @State private var calibrating: MicProfile?
+    /// The mic being calibrated now.
+    @State private var recordingCalibration: UUID?
 
     var body: some View {
         @Bindable var model = model
@@ -84,27 +88,65 @@ struct SetupView: View {
 
             Section {
                 ForEach(model.micProfiles) { mic in
-                    HStack {
-                        TextField("Name", text: micProfile(mic).name).frame(width: 180)
-                        Text(mic.calibrationPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No calibration file")
-                            .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                        if let s = mic.sensitivity { Text(String(format: "%.2f dB", s)).foregroundStyle(.secondary) }
-                        Spacer()
-                        Button("Choose…") { chooseCalibration(for: micProfile(mic)) }
-                        Button { removeMicProfile(mic) } label: { Image(systemName: "minus.circle") }
-                            .buttonStyle(.borderless)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            TextField("Name", text: micProfile(mic).name).frame(width: 180)
+                            Text(mic.calibrationPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No calibration file")
+                                .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            if let s = mic.sensitivity { Text(String(format: "%.2f dB", s)).foregroundStyle(.secondary) }
+                            Spacer()
+                            Button("Choose…") { chooseCalibration(for: micProfile(mic)) }
+                            Button { removeMicProfile(mic) } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless)
+                        }
+                        HStack {
+                            TextField("SPL offset (dB)", value: micProfile(mic).splOffset, format: .number.precision(.fractionLength(1)),
+                                      prompt: Text("Not calibrated"))
+                                .frame(width: 260)
+                                .help("dB added to a level re full scale to give dB SPL. Set by the calibrator, or type it in.")
+                            Spacer()
+                            if recordingCalibration == mic.id { ProgressView().controlSize(.small) }
+                            Button("Calibrate…") { calibrating = mic }
+                                .disabled(model.isMeasuring)
+                                .help("Record a sound level calibrator on this mic's input to set the offset")
+                        }
                     }
                 }
                 Button("Add mic") { model.micProfiles.append(MicProfile(name: "Mic \(model.micProfiles.count + 1)")) }
             } header: {
                 Text("Microphones")
             } footer: {
-                Text("Calibration files (REW/UMIK format) belong to the mic, so they follow it to whichever input it is plugged into.")
-                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    if let error = model.errorMessage {
+                        Text(error).font(.caption).foregroundStyle(.orange)
+                    } else if let status = model.status, recordingCalibration == nil, status.hasPrefix("Calibrated") {
+                        Text(status).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("Calibration files (REW/UMIK format) belong to the mic, so they follow it to whichever input it is plugged into. The SPL offset holds only while the interface gain stays where it was when calibrated.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
         .frame(width: 640, height: 720)
+        .confirmationDialog("Calibrate \(calibrating?.name ?? "")",
+                            isPresented: Binding(get: { calibrating != nil }, set: { if !$0 { calibrating = nil } }),
+                            presenting: calibrating) { mic in
+            if model.settings.mics.contains(where: { $0.micName == mic.name }) {
+                ForEach([94.0, 114.0], id: \.self) { reference in
+                    Button("Record \(Int(reference)) dB calibrator") {
+                        recordingCalibration = mic.id
+                        Task {
+                            await model.calibrateSPL(mic: mic.id, reference: reference)
+                            recordingCalibration = nil
+                        }
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text(calibrationMessage)
+        }
         .toolbar {
             ToolbarItem(placement: .automatic) { Button("Refresh devices") { model.refreshDevices() } }
             ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
@@ -131,6 +173,14 @@ struct SetupView: View {
             model.settings.mics[i].micName = nil
         }
         model.micProfiles.removeAll { $0.id == mic.id }
+    }
+
+    private var calibrationMessage: String {
+        guard let mic = calibrating else { return "" }
+        guard let slot = model.settings.mics.first(where: { $0.micName == mic.name }) else {
+            return "\(mic.name) is not assigned to a mic input. Assign it above first."
+        }
+        return "Fit the calibrator to \(mic.name) on input \(slot.channel) and switch it on, then choose its level. Measure records 3 seconds."
     }
 
     private var rates: [Double] {
