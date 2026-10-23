@@ -18,9 +18,13 @@ struct MonitorSettings: Codable, Equatable {
     var meters: [MeterSettings] = [MeterSettings(weighting: .a, average: .slow),
                                    MeterSettings(weighting: .a, average: .fifteenMinutes),
                                    MeterSettings(weighting: .c, average: .slow)]
-    /// A level not to exceed, dB (SPL when the mics are calibrated). Meters above it turn red and the
-    /// history draws it as a line. Nil for none.
-    var limit: Double?
+    /// Levels not to exceed for A-weighted and C-weighted meters, dB (SPL when the mics are
+    /// calibrated). Meters above their limit turn red, and the history draws both as lines. Nil for none.
+    var limitA: Double?
+    var limitC: Double?
+    /// dB added to each mic's levels, by mic index, on top of its calibration: for a mic without a
+    /// calibrator reading, or to refer a level measured at one place to another.
+    var micOffsets: [Double] = []
     /// Seconds of history shown; 0 shows everything since the start.
     var historyRange = 900
     var rtaMic = 0
@@ -29,6 +33,45 @@ struct MonitorSettings: Codable, Equatable {
     var rtaAveraging: RealTimeAnalyzer.Averaging = .fast
     var rtaWeighting: SoundLevel.FrequencyWeighting = .z
     var rtaFFTSize = 16_384
+
+    init() {}
+
+    /// The limit for meters with weighting `w`; Z-weighted meters have none.
+    func limit(_ w: SoundLevel.FrequencyWeighting) -> Double? {
+        switch w {
+        case .a: return limitA
+        case .c: return limitC
+        case .z: return nil
+        }
+    }
+
+    func micOffset(_ index: Int) -> Double { index >= 0 && index < micOffsets.count ? micOffsets[index] : 0 }
+
+    mutating func setMicOffset(_ value: Double, for index: Int) {
+        guard index >= 0 else { return }
+        while micOffsets.count <= index { micOffsets.append(0) }
+        micOffsets[index] = value
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case meters, limitA, limitC, micOffsets, historyRange, rtaMic, rtaFraction, rtaAveraging, rtaWeighting, rtaFFTSize
+    }
+
+    /// Settings saved by an earlier version lack some keys; those keep their defaults.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = MonitorSettings()
+        meters = try c.decodeIfPresent([MeterSettings].self, forKey: .meters) ?? d.meters
+        limitA = try c.decodeIfPresent(Double.self, forKey: .limitA)
+        limitC = try c.decodeIfPresent(Double.self, forKey: .limitC)
+        micOffsets = try c.decodeIfPresent([Double].self, forKey: .micOffsets) ?? []
+        historyRange = try c.decodeIfPresent(Int.self, forKey: .historyRange) ?? d.historyRange
+        rtaMic = try c.decodeIfPresent(Int.self, forKey: .rtaMic) ?? d.rtaMic
+        rtaFraction = try c.decodeIfPresent(Int.self, forKey: .rtaFraction) ?? d.rtaFraction
+        rtaAveraging = try c.decodeIfPresent(RealTimeAnalyzer.Averaging.self, forKey: .rtaAveraging) ?? d.rtaAveraging
+        rtaWeighting = try c.decodeIfPresent(SoundLevel.FrequencyWeighting.self, forKey: .rtaWeighting) ?? d.rtaWeighting
+        rtaFFTSize = try c.decodeIfPresent(Int.self, forKey: .rtaFFTSize) ?? d.rtaFFTSize
+    }
 }
 
 /// What the views draw, copied from the engine about ten times a second.
@@ -158,11 +201,26 @@ final class MonitorAnalyzer {
 
     func resetPeaks() { engine?.resetPeaks() }
 
-    /// dB added to mic `index`'s levels for dB SPL, from its calibration, or nil to show dB re full scale.
-    func offset(_ model: AppModel, mic index: Int) -> Double? {
+    /// The SPL offset from mic `index`'s calibration (Setup > Calibrate…), if it has one.
+    func calibration(_ model: AppModel, mic index: Int) -> Double? {
         let mics = model.settings.mics
-        guard index < mics.count, let name = mics[index].micName else { return nil }
+        guard index >= 0, index < mics.count, let name = mics[index].micName else { return nil }
         return model.micProfiles.first { $0.name == name }?.splOffset
+    }
+
+    /// dB added to mic `index`'s levels: its calibration plus the offset typed in here. Nil when it has
+    /// neither, so the levels are shown re full scale.
+    func offset(_ model: AppModel, mic index: Int) -> Double? {
+        let cal = calibration(model, mic: index)
+        let typed = settings.micOffset(index)
+        if cal == nil && typed == 0 { return nil }
+        return (cal ?? 0) + typed
+    }
+
+    /// "dB SPL" for a calibrated mic, "dB" for one with only a typed offset, "dBFS" otherwise.
+    func unit(_ model: AppModel, mic index: Int) -> String {
+        if calibration(model, mic: index) != nil { return "dB SPL" }
+        return settings.micOffset(index) != 0 ? "dB" : "dBFS"
     }
 }
 

@@ -41,16 +41,10 @@ struct SPLView: View {
             }
             .frame(height: 170)
             HStack(spacing: 12) {
-                Toggle("Limit", isOn: Binding(get: { monitor.settings.limit != nil },
-                                              set: { monitor.settings.limit = $0 ? (monitor.settings.limit ?? 100) : nil }))
-                    .help("A level not to exceed: meters above it turn red, and the history draws it as a red line")
-                if monitor.settings.limit != nil {
-                    TextField("Limit", value: Binding(get: { monitor.settings.limit ?? 100 }, set: { monitor.settings.limit = $0 }),
-                              format: .number.precision(.fractionLength(0...1)))
-                        .frame(width: 60)
-                        .multilineTextAlignment(.trailing)
-                    Text("dB").foregroundStyle(.secondary)
-                }
+                LimitField(title: "A limit", value: $monitor.settings.limitA, standard: 100,
+                           help: "A level not to exceed on A-weighted meters: they turn red above it, and the history draws it as a red line")
+                LimitField(title: "C limit", value: $monitor.settings.limitC, standard: 115,
+                           help: "A level not to exceed on C-weighted meters: they turn red above it, and the history draws it as a purple line")
                 Picker("Show", selection: $monitor.settings.historyRange) {
                     Text("5 min").tag(300)
                     Text("15 min").tag(900)
@@ -65,9 +59,64 @@ struct SPLView: View {
                     .lineLimit(1)
                     .layoutPriority(-1)
             }
+            MicOffsetsRow()
             LevelHistoryChart()
             StatisticsRow()
         }
+    }
+}
+
+/// A limit that can be turned on and typed in.
+struct LimitField: View {
+    let title: String
+    @Binding var value: Double?
+    /// The value it starts at when turned on.
+    let standard: Double
+    let help: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Toggle(title, isOn: Binding(get: { value != nil }, set: { value = $0 ? (value ?? standard) : nil }))
+            if value != nil {
+                TextField(title, value: Binding(get: { value ?? standard }, set: { value = $0 }),
+                          format: .number.precision(.fractionLength(0...1)))
+                    .labelsHidden()
+                    .frame(width: 56)
+                    .multilineTextAlignment(.trailing)
+                Text("dB").foregroundStyle(.secondary)
+            }
+        }
+        .fixedSize()
+        .help(help)
+    }
+}
+
+/// An offset field for each mic, added to its levels on top of its calibration.
+struct MicOffsetsRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let monitor = model.monitor
+        HStack(spacing: 14) {
+            Text("Mic offsets").foregroundStyle(.secondary)
+            ForEach(Array(model.settings.mics.enumerated()), id: \.offset) { i, slot in
+                HStack(spacing: 4) {
+                    Text(slot.micName ?? "Input \(slot.channel)").lineLimit(1)
+                    TextField("Offset", value: Binding(get: { monitor.settings.micOffset(i) },
+                                                       set: { monitor.settings.setMicOffset($0, for: i) }),
+                              format: .number.precision(.fractionLength(0...1)))
+                        .labelsHidden()
+                        .frame(width: 56)
+                        .multilineTextAlignment(.trailing)
+                    Text("dB").foregroundStyle(.secondary)
+                }
+                .fixedSize()
+                .help(monitor.calibration(model, mic: i).map { String(format: "Added to the %.1f dB from this mic's calibration", $0) }
+                      ?? "This mic has no calibration: its levels are dB re full scale plus this offset. Calibrate it in Setup for dB SPL.")
+            }
+            Spacer()
+        }
+        .font(.callout)
     }
 }
 
@@ -83,7 +132,8 @@ struct MeterCard: View {
         let mic: MonitorSnapshot.Mic? = meter.mic < monitor.snapshot.mics.count ? monitor.snapshot.mics[meter.mic] : nil
         let level = mic.map { $0.level(meter.weighting, meter.average) + (offset ?? 0) }
         let maximum = self.maximum(mic).map { $0 + (offset ?? 0) }
-        let over = monitor.settings.limit.map { (level ?? -200) > $0 } ?? false
+        let limit = monitor.settings.limit(meter.weighting)
+        let over = limit.map { (level ?? -200) > $0 } ?? false
         let clipping = (mic?.recentPeak ?? -200) > -1
 
         VStack(alignment: .leading, spacing: 4) {
@@ -101,12 +151,12 @@ struct MeterCard: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
                 .frame(maxWidth: .infinity, alignment: .center)
-            LevelBar(level: level, limit: monitor.settings.limit, spl: offset != nil)
+            LevelBar(level: level, limit: limit, spl: offset != nil)
                 .frame(height: 8)
             HStack {
                 Text("Max \(levelText(maximum))").monospacedDigit()
                 Spacer()
-                Text("\(offset == nil ? "dBFS" : "dB SPL") \(meter.average.label(meter.weighting))")
+                Text("\(monitor.unit(model, mic: meter.mic)) \(meter.average.label(meter.weighting))")
                     .lineLimit(1)
             }
             .font(.callout)
@@ -204,7 +254,7 @@ struct LevelHistoryChart: View {
         let levels = lines.flatMap { $0.2.map(\.level) }
         let low = ((levels.min() ?? 40) - 5).rounded(.down)
         let top: Double = ((levels.max() ?? 100) + 5).rounded(.up)
-        let limitTop: Double = (monitor.settings.limit ?? -300) + 3
+        let limitTop: Double = max(monitor.settings.limitA ?? -300, monitor.settings.limitC ?? -300) + 3
         let high = max(top, limitTop)
         if levels.isEmpty {
             EmptyState(text: monitor.isRunning ? "The history starts after the first second" : "Start live monitoring to see the levels over time")
@@ -217,10 +267,17 @@ struct LevelHistoryChart: View {
                             .lineStyle(StrokeStyle(lineWidth: 1.5))
                     }
                 }
-                if let limit = monitor.settings.limit {
-                    RuleMark(y: .value("Limit", limit))
+                if let limit = monitor.settings.limitA {
+                    RuleMark(y: .value("A limit", limit))
                         .foregroundStyle(.red)
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
+                        .annotation(position: .top, alignment: .leading) { Text("A limit").font(.caption).foregroundStyle(.red) }
+                }
+                if let limit = monitor.settings.limitC {
+                    RuleMark(y: .value("C limit", limit))
+                        .foregroundStyle(.purple)
+                        .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
+                        .annotation(position: .top, alignment: .leading) { Text("C limit").font(.caption).foregroundStyle(.purple) }
                 }
             }
             .chartYScale(domain: low...max(high, low + 10))
@@ -365,7 +422,7 @@ struct RTAView: View {
             } else {
                 chart(bars, top: offset == nil ? 0 : 130)
             }
-            Text("Bands from an FFT of the latest block (Hann window), each bin shared between the bands it overlaps. \(offset == nil ? "dB re full scale: calibrate the mic in Setup for dB SPL." : "dB SPL from the mic's calibration") Grey ticks: peak hold.")
+            Text("Bands from an FFT of the latest block (Hann window), each bin shared between the bands it overlaps. \(offset == nil ? "dB re full scale: calibrate the mic in Setup for dB SPL." : "Levels include the mic's calibration and offset.") Grey ticks: peak hold.")
                 .font(.caption).foregroundStyle(.secondary)
                 .lineLimit(2)
         }
@@ -395,7 +452,7 @@ struct RTAView: View {
     private func summary(_ bars: [Bar], offset: Double?) -> String {
         guard let loudest = bars.max(by: { $0.level < $1.level }), loudest.level > -150 else { return "" }
         let total = 10 * log10(bars.map { pow(10, $0.level / 10) }.reduce(0, +))
-        let unit = offset == nil ? "dBFS" : "dB SPL"
+        let unit = model.monitor.unit(model, mic: model.monitor.settings.rtaMic)
         let w = model.monitor.settings.rtaWeighting.rawValue
         let f = loudest.band.center
         let band = f >= 1000 ? String(format: "%.1f kHz", f / 1000) : String(format: "%.0f Hz", f)
