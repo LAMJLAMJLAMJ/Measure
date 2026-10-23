@@ -81,6 +81,8 @@ final class AppModel {
     var micProfiles: [MicProfile] { didSet { save(micProfiles, key: "mics"); calibrations = [:] } }
     var smoothing: Smoothing = .sixth
     var sti: STISettings { didSet { save(sti, key: "sti") } }
+    /// The live cross-spectrum analyser.
+    let live: LiveAnalyzer
 
     var isMeasuring = false
     var status: String?
@@ -94,6 +96,7 @@ final class AppModel {
         settings = AppModel.load(key: "settings") ?? MeasurementSettings()
         micProfiles = AppModel.load(key: "mics") ?? []
         sti = AppModel.load(key: "sti") ?? STISettings()
+        live = LiveAnalyzer()
         refreshDevices()
         openProject(projectFolder)
     }
@@ -122,6 +125,7 @@ final class AppModel {
 
     func measure() async {
         guard !isMeasuring else { return }
+        live.stop()
         guard let out = outputDevice, let input = inputDevice else {
             errorMessage = "Choose an output and an input device in Measurement Setup."
             return
@@ -221,6 +225,7 @@ final class AppModel {
     /// Records every mic input for `duration` seconds and adds one trace per mic.
     func recordPlain(duration: Double, label: String) async {
         guard !isMeasuring else { return }
+        live.stop()
         let s = settings
         isMeasuring = true
         errorMessage = nil
@@ -261,6 +266,7 @@ final class AppModel {
     /// calibrator reads `reference` dB.
     func calibrateSPL(mic id: UUID, reference: Double) async {
         guard !isMeasuring, let mic = micProfiles.first(where: { $0.id == id }) else { return }
+        live.stop()
         guard let index = settings.mics.firstIndex(where: { $0.micName == mic.name }) else {
             errorMessage = "Assign \(mic.name) to a mic input first."
             return
@@ -309,6 +315,36 @@ final class AppModel {
         sti.speechLevels = levels
         sti.customSpeech = true
         status = "STI now uses this recording's octave levels as the speech level."
+    }
+
+    // MARK: - Averaging
+
+    /// Adds a trace with the average frequency response of the given traces, each within its window
+    /// and with its mic's calibration applied (so the average itself has no mic).
+    func average(_ ids: [UUID], method: FrequencyResponse.AverageMethod) {
+        let sources = traces.filter { ids.contains($0.id) && $0.hasResponse }
+        guard sources.count >= 2 else {
+            errorMessage = "Tick two or more traces with a frequency response to average them."
+            return
+        }
+        let responses = sources.map { t in calibration(for: t).map { t.rawResponse.applyingCalibration($0) } ?? t.rawResponse }
+        guard let avg = FrequencyResponse.average(responses, method: method) else {
+            errorMessage = "These traces have no frequency range in common."
+            return
+        }
+        let names = sources.map(\.info.name)
+        let kind = method == .power ? "power" : "dB"
+        // Name the measurements when there are few enough to read in the list.
+        let name = names.count <= 3 ? "Avg (\(kind)): " + names.joined(separator: " + ") : "Average of \(names.count) (\(kind))"
+        var info = TraceInfo(name: name, source: .average, sampleRate: sources.first?.info.sampleRate ?? 0,
+                             position: sources.first?.info.position ?? "",
+                             notes: "\(method.rawValue) average of " + names.joined(separator: ", "),
+                             colorIndex: traces.count)
+        info.averagedFrom = names
+        let trace = Trace(info: info, frequencyResponse: avg)
+        add(trace)
+        selection = trace.id
+        status = "Averaged \(sources.count) traces."
     }
 
     // MARK: - Library
@@ -415,7 +451,12 @@ final class AppModel {
 
     /// The calibration curve of the mic a trace was measured with, if one is set.
     func calibration(for trace: Trace) -> FrequencyResponse? {
-        guard let mic = trace.info.mic, let profile = micProfiles.first(where: { $0.name == mic }),
+        calibration(mic: trace.info.mic)
+    }
+
+    /// The calibration curve of a mic by name, if one is set. Files are read once and cached.
+    func calibration(mic: String?) -> FrequencyResponse? {
+        guard let mic, let profile = micProfiles.first(where: { $0.name == mic }),
               let path = profile.calibrationPath else { return nil }
         if let cached = calibrations[path] { return cached }
         guard let parsed = try? FrequencyResponseText.parse(contentsOf: URL(fileURLWithPath: path)) else { return nil }

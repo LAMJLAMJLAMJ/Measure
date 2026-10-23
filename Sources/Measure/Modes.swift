@@ -14,6 +14,8 @@ enum TuningSource: String, CaseIterable, Identifiable {
     case sweep = "Sweep"
     case crossSpectrum = "Cross-spectrum (live)"
     var id: String { rawValue }
+    /// For the toolbar, where space is short.
+    var shortName: String { self == .sweep ? "Sweep" : "Live" }
 }
 
 enum TuningTab: String, CaseIterable, Identifiable {

@@ -54,6 +54,32 @@ final class FrequencyResponseTests: XCTestCase {
         XCTAssertEqual(measured.applyingCalibration(cal).magnitude, [80, 77.5])
     }
 
+    func testAveragesOnTheSameGrid() {
+        let f: [Double] = [100, 200, 400]
+        let a = FrequencyResponse(frequencies: f, magnitude: [0, 0, 0])
+        let b = FrequencyResponse(frequencies: f, magnitude: [-10, 10, 0])
+        let db = FrequencyResponse.average([a, b], method: .decibel)!
+        XCTAssertEqual(db.frequencies, f)
+        XCTAssertEqual(db.magnitude, [-5, 5, 0])
+        // Power: 10·log10((1 + 0.1) / 2) and 10·log10((1 + 10) / 2).
+        let power = FrequencyResponse.average([a, b], method: .power)!
+        XCTAssertEqual(power.magnitude[0], 10 * log10(0.55), accuracy: 1e-9)
+        XCTAssertEqual(power.magnitude[1], 10 * log10(5.5), accuracy: 1e-9)
+        XCTAssertEqual(power.magnitude[2], 0, accuracy: 1e-9)
+    }
+
+    func testAveragesAcrossDifferentGrids() {
+        let a = FrequencyResponse(frequencies: stride(from: 10.0, through: 20_000, by: 1).map { $0 },
+                                  magnitude: [Double](repeating: 6, count: 19_991))
+        let b = FrequencyResponse(frequencies: stride(from: 20.0, through: 10_000, by: 2).map { $0 },
+                                  magnitude: [Double](repeating: 0, count: 4_991))
+        let avg = FrequencyResponse.average([a, b], method: .decibel)!
+        XCTAssertEqual(avg.frequencies.first!, 20, accuracy: 1e-9)
+        XCTAssertLessThanOrEqual(avg.frequencies.last!, 10_000)
+        for m in avg.magnitude { XCTAssertEqual(m, 3, accuracy: 1e-6) }
+        XCTAssertNil(avg.phase)
+    }
+
     func testRejectsTextWithoutData() {
         XCTAssertThrowsError(try FrequencyResponseText.parse("just a header\nand more text"))
     }
