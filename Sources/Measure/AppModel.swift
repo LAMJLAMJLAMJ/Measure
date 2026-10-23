@@ -81,6 +81,9 @@ final class AppModel {
     var micProfiles: [MicProfile] { didSet { save(micProfiles, key: "mics"); calibrations = [:] } }
     var smoothing: Smoothing = .sixth
     var sti: STISettings { didSet { save(sti, key: "sti") } }
+    /// The target curve drawn on the frequency views and used by Auto EQ.
+    var target: TargetCurve { didSet { save(target, key: "target") } }
+    var autoEQSettings: AutoEQ.Settings { didSet { save(autoEQSettings, key: "autoEQ") } }
     /// The live cross-spectrum analyser.
     let live: LiveAnalyzer
 
@@ -96,6 +99,8 @@ final class AppModel {
         settings = AppModel.load(key: "settings") ?? MeasurementSettings()
         micProfiles = AppModel.load(key: "mics") ?? []
         sti = AppModel.load(key: "sti") ?? STISettings()
+        target = AppModel.load(key: "target") ?? TargetCurve.Preset.flat.curve
+        autoEQSettings = AppModel.load(key: "autoEQ") ?? AutoEQ.Settings()
         live = LiveAnalyzer()
         refreshDevices()
         openProject(projectFolder)
@@ -353,6 +358,8 @@ final class AppModel {
         guard var info = traces.first(where: { $0.id == id })?.info else { return }
         info.eq = filters.isEmpty ? nil : filters
         update(info)
+        // The Frequency view draws the prediction only for a shown trace, so show the one being equalised.
+        if !filters.isEmpty { visible.insert(id) }
     }
 
     /// Adds a trace with the predicted response of `id` with its Virtual EQ, for comparison.

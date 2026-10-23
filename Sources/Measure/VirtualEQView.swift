@@ -16,6 +16,8 @@ struct VirtualEQPanel: View {
         let filters: [EQFilter]
         let sampleRate: Double
         let color: Color
+        /// The response Auto EQ fits, with its mic calibration.
+        let response: FrequencyResponse?
         let set: ([EQFilter]) -> Void
         let addPrediction: (() -> Void)?
     }
@@ -36,12 +38,12 @@ struct VirtualEQPanel: View {
         if source == .crossSpectrum {
             let live = model.live
             return Target(title: "Live curves", filters: live.settings.eq ?? [], sampleRate: model.settings.sampleRate,
-                          color: .primary, set: { live.settings.eq = $0.isEmpty ? nil : $0 }, addPrediction: nil)
+                          color: .primary, response: model.liveAverageResponse, set: { live.settings.eq = $0.isEmpty ? nil : $0 }, addPrediction: nil)
         }
         guard let trace = model.selectedTrace, trace.hasResponse else { return nil }
         let id = trace.id
         return Target(title: trace.info.name, filters: trace.info.eq ?? [], sampleRate: trace.eqSampleRate,
-                      color: trace.color, set: { model.setEQ($0, for: id) }, addPrediction: { model.addEQPrediction(for: id) })
+                      color: trace.color, response: model.calibratedResponse(trace), set: { model.setEQ($0, for: id) }, addPrediction: { model.addEQPrediction(for: id) })
     }
 
     private func editor(_ target: Target) -> some View {
@@ -65,6 +67,10 @@ struct VirtualEQPanel: View {
                     }
                 }
             }
+            // A small ideal height: otherwise the list asks for the height of all its rows, and with the
+            // eight or more filters Auto EQ adds that pushed the window's top and bottom out of view.
+            .frame(minHeight: 60, idealHeight: 200, maxHeight: .infinity)
+            AutoEQSection(response: target.response, filters: filters, sampleRate: target.sampleRate, set: target.set)
             HStack {
                 Menu("Add Filter") {
                     ForEach(EQFilter.Kind.allCases) { kind in
@@ -91,6 +97,7 @@ struct VirtualEQPanel: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(12)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func footnote(_ target: Target) -> String {
@@ -169,6 +176,13 @@ private struct FilterRow: View {
                     ForEach(EQFilter.Kind.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .labelsHidden()
+                if filter.auto == true {
+                    Button("Auto") { filter.auto = nil }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("Added by Auto EQ, so the next Auto EQ run replaces it. Click to keep it as your own.")
+                }
                 Button(action: remove) { Image(systemName: "minus.circle") }
                     .buttonStyle(.borderless)
                     .help("Remove this filter")

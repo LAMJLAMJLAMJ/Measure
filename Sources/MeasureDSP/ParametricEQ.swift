@@ -25,6 +25,9 @@ public struct EQFilter: Codable, Hashable, Identifiable {
     /// Bandwidth: Q for peaks, notches and pass filters (0.707 is Butterworth), shelf slope Q for shelves.
     public var q: Double
     public var enabled = true
+    /// True for a filter added by Auto EQ, which the next Auto EQ run replaces. Nil or false for one
+    /// added or kept by hand.
+    public var auto: Bool?
 
     public init(kind: Kind, frequency: Double, gain: Double = 0, q: Double = 0.707, enabled: Bool = true) {
         self.kind = kind

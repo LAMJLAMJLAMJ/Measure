@@ -22,6 +22,7 @@ struct EmptyState: View {
 struct FrequencyResponseView: View {
     @Environment(AppModel.self) private var model
     @Binding var showVirtualEQ: Bool
+    @AppStorage("showTarget") private var showTarget = false
     @State private var range: Double = 50
 
     var body: some View {
@@ -29,6 +30,10 @@ struct FrequencyResponseView: View {
         let traces = model.visibleTraces.filter(\.hasResponse)
         let series = traces.map { ($0, $0.displayResponse(smoothing: model.smoothing, calibration: model.calibration(for: $0))) }
         let predicted = showVirtualEQ ? self.predicted(series) : nil
+        // The target sits on the selected trace, or on the first shown one.
+        let targetPoints: [TargetPoint]? = showTarget
+            ? (traces.first { $0.id == model.selection } ?? traces.first).map { model.targetPoints(alignedTo: model.calibratedResponse($0)) }
+            : nil
         let top = (series.flatMap { $0.1.filter { $0.x >= 20 }.map(\.y) }.max() ?? 0).rounded(.up) + 5
 
         VStack(alignment: .leading) {
@@ -44,7 +49,13 @@ struct FrequencyResponseView: View {
                 }
                 .frame(width: 140)
                 Spacer()
+                // One line, cut short when the Virtual EQ panel narrows the view: wrapping made it tall
+                // enough to push the whole window out of shape.
                 Text("Levels in dBFS; mic calibration applied where set\(windowNote)").font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
+                    .help("Levels in dBFS; mic calibration applied where set\(windowNote)")
                 Menu {
                     ForEach(FrequencyResponse.AverageMethod.allCases) { method in
                         Button("\(method.rawValue) Average of Shown") { model.average(traces.map(\.id), method: method) }
@@ -55,6 +66,7 @@ struct FrequencyResponseView: View {
                 .fixedSize()
                 .disabled(traces.count < 2)
                 .help("Add a trace with the average of the ticked traces' responses: power (RMS) for a spatial average, or dB")
+                TargetControl()
                 Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
                     .toggleStyle(.button)
                     .help("Show the Virtual EQ panel")
@@ -63,6 +75,9 @@ struct FrequencyResponseView: View {
                 EmptyState(text: "Tick a trace in the list to show it")
             } else {
                 Chart {
+                    if let targetPoints {
+                        TargetMarks(points: targetPoints, tolerance: model.target.tolerance > 0)
+                    }
                     ForEach(series, id: \.0.id) { item in
                         let trace = item.0
                         ForEach(item.1) { p in
@@ -94,7 +109,8 @@ struct FrequencyResponseView: View {
                 .chartYAxisLabel("dB")
                 .chartLegend(.hidden)
                 .frequencyDataTip(series.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
-                                  + (predicted.map { [TipSeries(id: "eq", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? []))
+                                  + (predicted.map { [TipSeries(id: "eq", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? [])
+                                  + targetTip(targetPoints))
                 .clipped()
             }
         }
@@ -107,6 +123,12 @@ extension FrequencyResponseView {
         guard let item = series.first(where: { $0.0.id == model.selection }), !item.0.activeEQ.isEmpty else { return nil }
         let trace = item.0
         return (trace, item.1.map { ChartPoint(x: $0.x, y: $0.y + ParametricEQ.gainDB(trace.activeEQ, at: $0.x, sampleRate: trace.eqSampleRate)) })
+    }
+
+    /// The target as a data tip series.
+    func targetTip(_ points: [TargetPoint]?) -> [TipSeries] {
+        guard let points else { return [] }
+        return [TipSeries(id: "target", name: "Target", color: .gray, points: points.map { ChartPoint(x: $0.x, y: $0.y) })]
     }
 
     /// The selected trace's window, when it is not the standard one.
