@@ -317,6 +317,32 @@ final class AppModel {
         status = "STI now uses this recording's octave levels as the speech level."
     }
 
+    // MARK: - Averaging
+
+    /// Adds a trace with the average frequency response of the given traces, each within its window
+    /// and with its mic's calibration applied (so the average itself has no mic).
+    func average(_ ids: [UUID], method: FrequencyResponse.AverageMethod) {
+        let sources = traces.filter { ids.contains($0.id) && $0.hasResponse }
+        guard sources.count >= 2 else {
+            errorMessage = "Tick two or more traces with a frequency response to average them."
+            return
+        }
+        let responses = sources.map { t in calibration(for: t).map { t.rawResponse.applyingCalibration($0) } ?? t.rawResponse }
+        guard let avg = FrequencyResponse.average(responses, method: method) else {
+            errorMessage = "These traces have no frequency range in common."
+            return
+        }
+        let info = TraceInfo(name: "Average of \(sources.count) (\(method == .power ? "power" : "dB"))",
+                             source: .average, sampleRate: sources.first?.info.sampleRate ?? 0,
+                             position: sources.first?.info.position ?? "",
+                             notes: "\(method.rawValue) average of " + sources.map(\.info.name).joined(separator: ", "),
+                             colorIndex: traces.count)
+        let trace = Trace(info: info, frequencyResponse: avg)
+        add(trace)
+        selection = trace.id
+        status = "Averaged \(sources.count) traces."
+    }
+
     // MARK: - Library
 
     func add(_ trace: Trace) {

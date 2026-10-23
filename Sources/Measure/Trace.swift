@@ -11,6 +11,8 @@ struct TraceInfo: Codable, Identifiable, Hashable {
         case recording
         /// The impulse response of a live transfer function, captured in the cross-spectrum mode.
         case transferFunction
+        /// The average of several traces' frequency responses.
+        case average
     }
 
     var id = UUID()

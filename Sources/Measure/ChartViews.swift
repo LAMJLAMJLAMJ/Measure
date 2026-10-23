@@ -44,6 +44,16 @@ struct FrequencyResponseView: View {
                 .frame(width: 140)
                 Spacer()
                 Text("Levels in dBFS; mic calibration applied where set\(windowNote)").font(.caption).foregroundStyle(.secondary)
+                Menu {
+                    ForEach(FrequencyResponse.AverageMethod.allCases) { method in
+                        Button("\(method.rawValue) Average of Shown") { model.average(traces.map(\.id), method: method) }
+                    }
+                } label: {
+                    Label("Average", systemImage: "sum")
+                }
+                .fixedSize()
+                .disabled(traces.count < 2)
+                .help("Add a trace with the average of the ticked traces' responses: power (RMS) for a spatial average, or dB")
                 Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
                     .toggleStyle(.button)
                     .help("Show the Virtual EQ panel")

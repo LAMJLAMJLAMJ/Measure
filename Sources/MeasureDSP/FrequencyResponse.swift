@@ -69,6 +69,46 @@ public struct FrequencyResponse: Equatable {
         return magnitude[lo] + w * (magnitude[hi] - magnitude[lo])
     }
 
+    public enum AverageMethod: String, CaseIterable, Identifiable {
+        /// Mean of the power (RMS average): what a spatial average of several mic positions usually uses.
+        case power = "Power (RMS)"
+        /// Mean of the levels in dB.
+        case decibel = "dB"
+        public var id: String { rawValue }
+    }
+
+    /// The average of several responses' magnitudes. Responses on the same frequency grid (the same
+    /// FFT size and sample rate) are averaged bin by bin. Otherwise each is smoothed to 1/48 octave and
+    /// averaged at 96 points per octave over the range they all cover. Phase is dropped.
+    public static func average(_ responses: [FrequencyResponse], method: AverageMethod) -> FrequencyResponse? {
+        guard let first = responses.first, !first.frequencies.isEmpty else { return nil }
+        guard responses.count > 1 else { return FrequencyResponse(frequencies: first.frequencies, magnitude: first.magnitude) }
+        let sameGrid = responses.allSatisfy { $0.frequencies == first.frequencies }
+        let frequencies: [Double]
+        let levels: [[Double]]
+        if sameGrid {
+            frequencies = first.frequencies
+            levels = responses.map(\.magnitude)
+        } else {
+            guard let low = responses.compactMap({ $0.frequencies.first }).max(),
+                  let high = responses.compactMap({ $0.frequencies.last }).min(), high > low else { return nil }
+            let count = Int((log2(high / low) * 96).rounded(.down)) + 1
+            frequencies = (0..<count).map { low * pow(2, Double($0) / 96) }
+            levels = responses.map { r in
+                let smooth = r.smoothed(fraction: 48)
+                return frequencies.map { smooth.magnitude(at: $0) }
+            }
+        }
+        let n = Double(levels.count)
+        let magnitude = frequencies.indices.map { i -> Double in
+            switch method {
+            case .power: return 10 * log10(max(levels.map { pow(10, $0[i] / 10) }.reduce(0, +) / n, 1e-30))
+            case .decibel: return levels.map { $0[i] }.reduce(0, +) / n
+            }
+        }
+        return FrequencyResponse(frequencies: frequencies, magnitude: magnitude)
+    }
+
     /// Subtracts a calibration curve (for example a mic calibration file) from the magnitude.
     public func applyingCalibration(_ calibration: FrequencyResponse) -> FrequencyResponse {
         var out = self
