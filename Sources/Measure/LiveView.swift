@@ -400,12 +400,20 @@ struct LiveView: View {
                 targetPoints = model.targetPoints(alignedTo: response)
             }
         }
-        let targetTip: [TipSeries] = (targetPoints ?? []).isEmpty ? [] : [TipSeries(id: "target", name: "Target", color: .gray,
-                                                                         points: (targetPoints ?? []).map { ChartPoint(x: $0.x, y: $0.y) })]
+        // Data tip series, built in steps to keep each expression simple for the type checker.
+        var tips: [TipSeries] = calibrated.map { TipSeries(id: "mic\($0.0)", name: "Live · Mic \($0.0 + 1)", color: color($0.0), points: $0.1) }
+        tips += predicted.map { TipSeries(id: "eq\($0.0)", name: "Mic \($0.0 + 1) with EQ", color: color($0.0), points: $0.1) }
+        tips += shown.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
+        if let targetPoints {
+            tips.append(TipSeries(id: "target", name: "Target", color: .gray, points: targetPoints.map { ChartPoint(x: $0.x, y: $0.y) }))
+        }
+        if let tracePrediction {
+            tips.append(TipSeries(id: "eq-trace", name: "\(tracePrediction.0.info.name) with EQ", color: tracePrediction.0.color, points: tracePrediction.1))
+        }
         // Scale to the live curves while measuring, otherwise to the traces.
         let levels = calibrated.isEmpty ? shown.flatMap { $0.1 } : calibrated.flatMap { $0.1 }
         let top = ((levels.filter { $0.x >= 20 }.map(\.y).max() ?? 0) + 5).rounded(.up)
-        return Chart {
+        let chart = Chart {
             if let targetPoints {
                 TargetMarks(points: targetPoints, tolerance: model.target.tolerance > 0)
             }
@@ -438,16 +446,13 @@ struct LiveView: View {
                 }
             }
         }
+        return chart
         .chartXScale(domain: 10...20_000, type: .log)
         .chartYScale(domain: (top - range)...top)
         .chartXAxis { frequencyAxis }
         .chartYAxisLabel("dB re reference")
         .chartLegend(.hidden)
-        .frequencyDataTip(calibrated.map { TipSeries(id: "mic\($0.0)", name: "Live · Mic \($0.0 + 1)", color: color($0.0), points: $0.1) }
-                          + predicted.map { TipSeries(id: "eq\($0.0)", name: "Mic \($0.0 + 1) with EQ", color: color($0.0), points: $0.1) }
-                          + shown.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
-                          + targetTip
-                          + (tracePrediction.map { [TipSeries(id: "eq-trace", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? []))
+        .frequencyDataTip(tips)
         .clipped()
     }
 
