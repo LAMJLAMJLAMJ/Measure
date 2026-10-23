@@ -95,10 +95,13 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var tuningActions: some View {
+        // Segmented with short labels: a menu-style picker in the toolbar can shrink to a bare arrow.
         Picker("Source", selection: $source) {
-            ForEach(TuningSource.allCases) { Text($0.rawValue).tag($0) }
+            ForEach(TuningSource.allCases) { Text($0.shortName).tag($0) }
         }
-        .help("Sweep, or the live cross-spectrum mode (reference on the loopback input, on the Frequency and Phase views)")
+        .pickerStyle(.segmented)
+        .fixedSize()
+        .help("Sweep, or Live: the cross-spectrum analyser on the Frequency and Phase views")
         .onChange(of: source) { if source != .crossSpectrum { model.live.stop(model) } }
         Button { importFiles(model) } label: { Label("Import", systemImage: "square.and.arrow.down") }
             .help("Import WAV impulse responses or REW text exports (⌘I)")
