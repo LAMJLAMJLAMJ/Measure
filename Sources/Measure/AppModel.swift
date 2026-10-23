@@ -332,11 +332,15 @@ final class AppModel {
             errorMessage = "These traces have no frequency range in common."
             return
         }
-        let info = TraceInfo(name: "Average of \(sources.count) (\(method == .power ? "power" : "dB"))",
-                             source: .average, sampleRate: sources.first?.info.sampleRate ?? 0,
+        let names = sources.map(\.info.name)
+        let kind = method == .power ? "power" : "dB"
+        // Name the measurements when there are few enough to read in the list.
+        let name = names.count <= 3 ? "Avg (\(kind)): " + names.joined(separator: " + ") : "Average of \(names.count) (\(kind))"
+        var info = TraceInfo(name: name, source: .average, sampleRate: sources.first?.info.sampleRate ?? 0,
                              position: sources.first?.info.position ?? "",
-                             notes: "\(method.rawValue) average of " + sources.map(\.info.name).joined(separator: ", "),
+                             notes: "\(method.rawValue) average of " + names.joined(separator: ", "),
                              colorIndex: traces.count)
+        info.averagedFrom = names
         let trace = Trace(info: info, frequencyResponse: avg)
         add(trace)
         selection = trace.id

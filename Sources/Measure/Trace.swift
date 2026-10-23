@@ -33,6 +33,8 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     /// dB added to a recording's level re full scale to give dB SPL, from the mic's calibration when it
     /// was recorded. Nil falls back to the mic's current calibration.
     var splOffset: Double?
+    /// For an average, the names of the traces it was made from.
+    var averagedFrom: [String]?
 }
 
 /// One measurement in the trace library: an impulse response, an imported frequency response or a plain

@@ -216,8 +216,13 @@ struct TraceList: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(trace.info.name).lineLimit(1)
                         Text(subtitle(trace)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        if let names = trace.info.averagedFrom {
+                            Text("Average of " + names.joined(separator: ", "))
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                        }
                     }
                 }
+                .help(trace.info.notes)
                 .tag(trace.id)
                 .contextMenu {
                     Button("Edit…") { editing = trace.info }
