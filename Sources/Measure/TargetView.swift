@@ -222,7 +222,11 @@ struct AutoEQSection: View {
                 Text(model.target.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             if let summary {
-                Text(summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                // Not fixedSize: a text fixed to its full height is measured at zero width when the window
+                // works out its smallest size, one word to a line, which made the window taller than the screen.
+                Text(summary).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(4)
+                    .help(summary)
             }
         }
         .onChange(of: model.selection) { summary = nil }
