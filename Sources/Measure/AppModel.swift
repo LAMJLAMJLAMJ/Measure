@@ -84,6 +84,8 @@ final class AppModel {
     /// The target curve drawn on the frequency views and used by Auto EQ.
     var target: TargetCurve { didSet { save(target, key: "target") } }
     var autoEQSettings: AutoEQ.Settings { didSet { save(autoEQSettings, key: "autoEQ") } }
+    /// Delays, polarities and gains tried on the Alignment view, and its range.
+    var alignment: AlignmentSettings { didSet { save(alignment, key: "alignment") } }
     /// The live cross-spectrum analyser.
     let live: LiveAnalyzer
     /// Live monitoring: SPL meters and the RTA.
@@ -103,6 +105,7 @@ final class AppModel {
         sti = AppModel.load(key: "sti") ?? STISettings()
         target = AppModel.load(key: "target") ?? TargetCurve.Preset.flat.curve
         autoEQSettings = AppModel.load(key: "autoEQ") ?? AutoEQ.Settings()
+        alignment = AppModel.load(key: "alignment") ?? AlignmentSettings()
         live = LiveAnalyzer()
         monitor = MonitorAnalyzer()
         refreshDevices()
