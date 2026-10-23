@@ -61,15 +61,4 @@ struct ComingSoonView: View {
     }
 }
 
-/// Side panel next to the frequency response for trying EQ on a measurement.
-struct VirtualEQPanel: View {
-    var body: some View {
-        ContentUnavailableView {
-            Label("Virtual EQ", systemImage: "slider.vertical.3")
-        } description: {
-            Text("Add parametric filters to a trace and see the predicted response over the measurement, with each filter's frequency, gain and Q listed. Prediction only: nothing is sent to a processor.\n\nComing in a later step.")
-        }
-        .frame(minWidth: 220)
-    }
-}
 #endif

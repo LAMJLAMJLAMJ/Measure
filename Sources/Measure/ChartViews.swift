@@ -28,6 +28,7 @@ struct FrequencyResponseView: View {
         @Bindable var model = model
         let traces = model.visibleTraces.filter(\.hasResponse)
         let series = traces.map { ($0, $0.displayResponse(smoothing: model.smoothing, calibration: model.calibration(for: $0))) }
+        let predicted = showVirtualEQ ? self.predicted(series) : nil
         let top = (series.flatMap { $0.1.filter { $0.x >= 20 }.map(\.y) }.max() ?? 0).rounded(.up) + 5
 
         VStack(alignment: .leading) {
@@ -71,6 +72,14 @@ struct FrequencyResponseView: View {
                                 .lineStyle(StrokeStyle(lineWidth: trace.id == model.selection ? 2 : 1.2))
                         }
                     }
+                    if let predicted {
+                        ForEach(predicted.1) { p in
+                            LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y),
+                                     series: .value("Trace", "eq-prediction"))
+                                .foregroundStyle(predicted.0.color)
+                                .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 3]))
+                        }
+                    }
                 }
                 .chartXScale(domain: 10...20_000, type: .log)
                 .chartYScale(domain: (top - range)...top)
@@ -91,6 +100,13 @@ struct FrequencyResponseView: View {
 }
 
 extension FrequencyResponseView {
+    /// The selected trace with its Virtual EQ added, drawn dashed while the panel is open.
+    func predicted(_ series: [(Trace, [ChartPoint])]) -> (Trace, [ChartPoint])? {
+        guard let item = series.first(where: { $0.0.id == model.selection }), !item.0.activeEQ.isEmpty else { return nil }
+        let trace = item.0
+        return (trace, item.1.map { ChartPoint(x: $0.x, y: $0.y + ParametricEQ.gainDB(trace.activeEQ, at: $0.x, sampleRate: trace.eqSampleRate)) })
+    }
+
     /// The selected trace's window, when it is not the standard one.
     var windowNote: String {
         guard let trace = model.selectedTrace, trace.impulseResponse != nil, trace.window != .standard else { return "" }

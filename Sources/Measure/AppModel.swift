@@ -347,6 +347,28 @@ final class AppModel {
         status = "Averaged \(sources.count) traces."
     }
 
+    // MARK: - Virtual EQ
+
+    func setEQ(_ filters: [EQFilter], for id: UUID) {
+        guard var info = traces.first(where: { $0.id == id })?.info else { return }
+        info.eq = filters.isEmpty ? nil : filters
+        update(info)
+    }
+
+    /// Adds a trace with the predicted response of `id` with its Virtual EQ, for comparison.
+    func addEQPrediction(for id: UUID) {
+        guard let trace = traces.first(where: { $0.id == id }), let filters = trace.info.eq, !filters.isEmpty else { return }
+        let measured = calibration(for: trace).map { trace.rawResponse.applyingCalibration($0) } ?? trace.rawResponse
+        let predicted = ParametricEQ.apply(filters, to: measured, sampleRate: trace.eqSampleRate)
+        let info = TraceInfo(name: "\(trace.info.name) + EQ", source: .eqPrediction, sampleRate: trace.info.sampleRate,
+                             position: trace.info.position,
+                             notes: "Predicted with Virtual EQ (\(Int(trace.eqSampleRate)) Hz biquads):\n" + ParametricEQ.description(filters),
+                             colorIndex: traces.count)
+        let made = Trace(info: info, frequencyResponse: predicted)
+        add(made)
+        status = "Added the predicted response of \(trace.info.name)."
+    }
+
     // MARK: - Library
 
     func add(_ trace: Trace) {
