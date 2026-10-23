@@ -6,6 +6,7 @@ struct ContentView: View {
     @AppStorage("mode") private var mode: AppMode = .tuning
     @AppStorage("tuningTab") private var tuningTab: TuningTab = .frequency
     @AppStorage("acousticsTab") private var acousticsTab: AcousticsTab = .reverb
+    @AppStorage("monitoringTab") private var monitoringTab: MonitoringTab = .spl
     @AppStorage("tuningSource") private var source: TuningSource = .sweep
     @AppStorage("showVirtualEQ") private var showVirtualEQ = false
     @State private var showSetup = false
@@ -26,6 +27,7 @@ struct ContentView: View {
                     switch mode {
                     case .tuning: tuningContent
                     case .acoustics: acousticsContent
+                    case .monitoring: monitoringContent
                     }
                 }
                 .padding([.horizontal, .bottom], 12)
@@ -44,7 +46,7 @@ struct ContentView: View {
                     ForEach(AppMode.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .help("System tuning (⌥⌘1) or acoustic analysis (⌥⌘2)")
+                .help("System tuning (⌥⌘1), acoustic analysis (⌥⌘2) or live monitoring (⌥⌘3)")
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { showSetup = true } label: { Label("Setup", systemImage: "slider.horizontal.3") }
@@ -52,6 +54,7 @@ struct ContentView: View {
                 switch mode {
                 case .tuning: tuningActions
                 case .acoustics: acousticsActions
+                case .monitoring: monitoringActions
                 }
             }
         }
@@ -67,6 +70,8 @@ struct ContentView: View {
             Picker("View", selection: $tuningTab) { ForEach(TuningTab.allCases) { Text($0.rawValue).tag($0) } }
         case .acoustics:
             Picker("View", selection: $acousticsTab) { ForEach(AcousticsTab.allCases) { Text($0.rawValue).tag($0) } }
+        case .monitoring:
+            Picker("View", selection: $monitoringTab) { ForEach(MonitoringTab.allCases) { Text($0.rawValue).tag($0) } }
         }
     }
 
@@ -125,6 +130,26 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder private var monitoringContent: some View {
+        switch monitoringTab {
+        case .rta: RTAView()
+        case .spl: SPLView()
+        }
+    }
+
+    @ViewBuilder private var monitoringActions: some View {
+        Button {
+            if model.monitor.isRunning { model.monitor.stop(model) } else { Task { await model.monitor.start(model) } }
+        } label: {
+            Label(model.monitor.isRunning ? "Stop" : "Start", systemImage: model.monitor.isRunning ? "stop.circle" : "play.circle")
+        }
+        .disabled(model.isMeasuring)
+        .help("Start or stop listening on the mics from Measurement Setup")
+        Button { model.monitor.reset() } label: { Label("Reset", systemImage: "arrow.counterclockwise") }
+            .disabled(!model.monitor.isRunning)
+            .help("Start the meters, averages, maxima and history again")
+    }
+
     @ViewBuilder private var acousticsActions: some View {
         Menu {
             Button("Sweep (impulse response)") { Task { await model.measure() } }
@@ -143,15 +168,21 @@ struct ContentView: View {
         .help("Load WAV impulse responses or REW text exports (⌘I), or WAV recordings for levels and noise")
     }
 
-    /// ⌘1 to ⌘7 pick a view in the current mode; ⌥⌘1 and ⌥⌘2 switch mode.
+    /// ⌘1 to ⌘7 pick a view in the current mode; ⌥⌘1 to ⌥⌘3 switch mode.
     private var shortcuts: some View {
-        let count = mode == .tuning ? TuningTab.allCases.count : AcousticsTab.allCases.count
+        let count: Int
+        switch mode {
+        case .tuning: count = TuningTab.allCases.count
+        case .acoustics: count = AcousticsTab.allCases.count
+        case .monitoring: count = MonitoringTab.allCases.count
+        }
         return ZStack {
             ForEach(0..<count, id: \.self) { i in
                 Button("") {
                     switch mode {
                     case .tuning: tuningTab = TuningTab.allCases[i]
                     case .acoustics: acousticsTab = AcousticsTab.allCases[i]
+                    case .monitoring: monitoringTab = MonitoringTab.allCases[i]
                     }
                 }
                 .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)

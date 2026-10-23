@@ -144,6 +144,20 @@ public final class LiveStream {
         return (read(0, end: refEnd), read(mic + 1, end: micEnd))
     }
 
+    /// Mic `mic`'s samples (from 0) captured from frame `from` up to now, and the frame they end at, to
+    /// read every sample once by passing the end back next time. A reader that fell more than half
+    /// the buffer behind gets only the latest half.
+    public func samples(mic: Int, from: Int) -> (samples: [Double], end: Int) {
+        guard let s = state, mic >= 0, mic + 1 < s.pointee.channelCount else { return ([], from) }
+        let written = s.pointee.written
+        let capacity = s.pointee.capacity
+        let start = max(from, written - capacity / 2, 0)
+        guard written > start else { return ([], written) }
+        let base = s.pointee.ring + (mic + 1) * capacity
+        let mask = capacity - 1
+        return ((start..<written).map { Double(base[$0 & mask]) }, written)
+    }
+
     // MARK: - Units
 
     private func makeUnit() throws -> AudioUnit {

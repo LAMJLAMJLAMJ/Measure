@@ -86,6 +86,8 @@ final class AppModel {
     var autoEQSettings: AutoEQ.Settings { didSet { save(autoEQSettings, key: "autoEQ") } }
     /// The live cross-spectrum analyser.
     let live: LiveAnalyzer
+    /// Live monitoring: SPL meters and the RTA.
+    let monitor: MonitorAnalyzer
 
     var isMeasuring = false
     var status: String?
@@ -102,6 +104,7 @@ final class AppModel {
         target = AppModel.load(key: "target") ?? TargetCurve.Preset.flat.curve
         autoEQSettings = AppModel.load(key: "autoEQ") ?? AutoEQ.Settings()
         live = LiveAnalyzer()
+        monitor = MonitorAnalyzer()
         refreshDevices()
         openProject(projectFolder)
     }
@@ -131,6 +134,7 @@ final class AppModel {
     func measure() async {
         guard !isMeasuring else { return }
         live.stop()
+        monitor.stop()
         guard let out = outputDevice, let input = inputDevice else {
             errorMessage = "Choose an output and an input device in Measurement Setup."
             return
@@ -231,6 +235,7 @@ final class AppModel {
     func recordPlain(duration: Double, label: String) async {
         guard !isMeasuring else { return }
         live.stop()
+        monitor.stop()
         let s = settings
         isMeasuring = true
         errorMessage = nil
@@ -272,6 +277,7 @@ final class AppModel {
     func calibrateSPL(mic id: UUID, reference: Double) async {
         guard !isMeasuring, let mic = micProfiles.first(where: { $0.id == id }) else { return }
         live.stop()
+        monitor.stop()
         guard let index = settings.mics.firstIndex(where: { $0.micName == mic.name }) else {
             errorMessage = "Assign \(mic.name) to a mic input first."
             return

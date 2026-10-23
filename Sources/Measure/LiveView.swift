@@ -88,6 +88,7 @@ final class LiveAnalyzer {
             model.errorMessage = "Without the internal reference the live mode needs a loopback input: set it in Measurement Setup to the input that carries the signal fed to the system."
             return
         }
+        model.monitor.stop(model)
         sampleRate = s.sampleRate
         // The noise repeats every 65 536 samples, so every FFT size up to that sees whole periods.
         let noise = settings.generator ? PinkNoise.periodic(count: 65_536, sampleRate: s.sampleRate) : nil
