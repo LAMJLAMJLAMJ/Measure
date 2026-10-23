@@ -212,7 +212,10 @@ struct TraceList: View {
                         set: { on in if on { model.visible.insert(trace.id) } else { model.visible.remove(trace.id) } }))
                         .labelsHidden()
                         .toggleStyle(.checkbox)
-                    Circle().fill(trace.color).frame(width: 10, height: 10)
+                    ColorPicker("Colour", selection: colorBinding(trace), supportsOpacity: false)
+                        .labelsHidden()
+                        .frame(width: 26)
+                        .help("Choose this measurement's colour")
                     VStack(alignment: .leading, spacing: 2) {
                         Text(trace.info.name).lineLimit(1)
                         Text(subtitle(trace)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -227,6 +230,11 @@ struct TraceList: View {
                 .contextMenu {
                     Button("Edit…") { editing = trace.info }
                     Button("Show Only This") { model.visible = [trace.id] }
+                    Menu("Colour") {
+                        ForEach(TracePalette.names.indices, id: \.self) { i in
+                            Button(TracePalette.names[i]) { setColor(trace, index: i) }
+                        }
+                    }
                     Divider()
                     Button("Delete", role: .destructive) { model.delete([trace.id]) }
                 }
@@ -240,6 +248,24 @@ struct TraceList: View {
         }
         .onDeleteCommand { if let s = model.selection { model.delete([s]) } }
         .sheet(item: $editing) { info in TraceEditor(info: info) }
+    }
+
+    /// The trace's colour, as a binding for the colour well. Choosing one stores it with the trace.
+    private func colorBinding(_ trace: Trace) -> Binding<Color> {
+        Binding(get: { model.traces.first { $0.id == trace.id }?.color ?? trace.color },
+                set: { color in
+                    guard var info = model.traces.first(where: { $0.id == trace.id })?.info, let hex = color.hex,
+                          hex != info.colorHex else { return }
+                    info.colorHex = hex
+                    model.update(info)
+                })
+    }
+
+    private func setColor(_ trace: Trace, index: Int) {
+        guard var info = model.traces.first(where: { $0.id == trace.id })?.info else { return }
+        info.colorHex = nil
+        info.colorIndex = index
+        model.update(info)
     }
 
     private func subtitle(_ trace: Trace) -> String {

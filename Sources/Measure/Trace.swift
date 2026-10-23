@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import Foundation
 import MeasureDSP
 import SwiftUI
@@ -35,6 +36,8 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     var splOffset: Double?
     /// For an average, the names of the traces it was made from.
     var averagedFrom: [String]?
+    /// A colour chosen by the user, as sRGB hex ("#RRGGBB"). Nil uses the palette colour `colorIndex`.
+    var colorHex: String?
 }
 
 /// One measurement in the trace library: an impulse response, an imported frequency response or a plain
@@ -59,7 +62,7 @@ struct Trace: Identifiable {
     private(set) var responseDelay: Double
 
     var id: UUID { info.id }
-    var color: Color { TracePalette.color(info.colorIndex) }
+    var color: Color { info.colorHex.flatMap(Color.init(hex:)) ?? TracePalette.color(info.colorIndex) }
     var window: ResponseWindow { info.window ?? .standard }
 
     /// Sets the frequency response window and recomputes the response. Does nothing for an imported response.
@@ -179,7 +182,25 @@ enum Smoothing: String, CaseIterable, Identifiable {
 
 enum TracePalette {
     static let colors: [Color] = [.blue, .orange, .green, .pink, .purple, .teal, .brown, .red, .indigo, .mint]
+    static let names = ["Blue", "Orange", "Green", "Pink", "Purple", "Teal", "Brown", "Red", "Indigo", "Mint"]
     static func color(_ i: Int) -> Color { colors[((i % colors.count) + colors.count) % colors.count] }
+}
+
+extension Color {
+    /// A colour from "#RRGGBB" (sRGB).
+    init?(hex: String) {
+        let digits = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard digits.count == 6, let v = UInt32(digits, radix: 16) else { return nil }
+        self.init(.sRGB, red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255,
+                  blue: Double(v & 0xFF) / 255)
+    }
+
+    /// "#RRGGBB" in sRGB, or nil when the colour cannot be converted.
+    var hex: String? {
+        guard let c = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        func byte(_ x: CGFloat) -> Int { Int((min(max(x, 0), 1) * 255).rounded()) }
+        return String(format: "#%02X%02X%02X", byte(c.redComponent), byte(c.greenComponent), byte(c.blueComponent))
+    }
 }
 
 /// Thins long signals to a number of points a chart can draw quickly.
