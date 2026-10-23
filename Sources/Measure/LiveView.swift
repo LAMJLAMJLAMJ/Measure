@@ -264,7 +264,7 @@ struct LiveView: View {
                 magnitudeChart(live)
                 if !live.curves.isEmpty { coherenceChart(live).frame(height: 70) }
                 phaseChart(live).frame(height: 150)
-                Text(live.isRunning ? "Thick lines: live. Thin lines: ticked traces, in their colors." : "Stopped. Press Start to measure live; ticked traces are shown in their colors.")
+                Text((live.isRunning ? "Thick lines: live. Thin lines: ticked traces, in their colors." : "Stopped. Press Start to measure live; ticked traces are shown in their colors.") + eqNote(live))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -295,6 +295,11 @@ struct LiveView: View {
                 Button("Capture") { live.capture(model) }
                     .disabled(!live.isRunning || live.blocks == 0)
                     .help("Add each mic's current response to the list as an impulse response")
+                if showsEQ {
+                    Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
+                        .toggleStyle(.button)
+                        .help("Show the Virtual EQ panel, which applies to the live curves")
+                }
             }
             HStack {
                 Picker("FFT", selection: $live.settings.fftSize) {
@@ -319,13 +324,16 @@ struct LiveView: View {
                 Button("Reset") { live.clearDelays(); live.reset() }
                 Spacer()
                 Text(statusText(live)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                if showsEQ {
-                    Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
-                        .toggleStyle(.button)
-                        .help("Show the Virtual EQ panel, which applies to the live curves")
-                }
             }
         }
+    }
+
+    /// Says what the dashed lines are while the Virtual EQ panel is open.
+    private func eqNote(_ live: LiveAnalyzer) -> String {
+        guard showsEQ && showVirtualEQ else { return "" }
+        let n = live.settings.activeEQ.count
+        if n == 0 { return " Virtual EQ: no filters on yet; add one in the panel." }
+        return " Dashed: live curves with the Virtual EQ (\(n) filter\(n == 1 ? "" : "s") on)" + (live.curves.isEmpty ? ", drawn once live is running." : ".")
     }
 
     private func statusText(_ live: LiveAnalyzer) -> String {
@@ -363,6 +371,12 @@ struct LiveView: View {
                 (mic, points.map { ChartPoint(x: $0.x, y: $0.y + ParametricEQ.gainDB(eq, at: $0.x, sampleRate: fs)) })
             }
             : []
+        // A ticked, selected trace with its own EQ is drawn with it too, as on the sweep view.
+        let tracePrediction: (Trace, [ChartPoint])? = showsEQ && showVirtualEQ
+            ? shown.first { $0.0.id == model.selection && !$0.0.activeEQ.isEmpty }.map { trace, points in
+                (trace, points.map { ChartPoint(x: $0.x, y: $0.y + ParametricEQ.gainDB(trace.activeEQ, at: $0.x, sampleRate: trace.eqSampleRate)) })
+            }
+            : nil
         // Scale to the live curves while measuring, otherwise to the traces.
         let levels = calibrated.isEmpty ? shown.flatMap { $0.1 } : calibrated.flatMap { $0.1 }
         let top = ((levels.filter { $0.x >= 20 }.map(\.y).max() ?? 0) + 5).rounded(.up)
@@ -381,6 +395,13 @@ struct LiveView: View {
                         .lineStyle(StrokeStyle(lineWidth: 2.8))
                 }
             }
+            if let tracePrediction {
+                ForEach(tracePrediction.1) { p in
+                    LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Trace", "eq-trace"))
+                        .foregroundStyle(tracePrediction.0.color)
+                        .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 3]))
+                }
+            }
             ForEach(predicted, id: \.0) { mic, points in
                 ForEach(points) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Mic", "eq\(mic)"))
@@ -396,7 +417,8 @@ struct LiveView: View {
         .chartLegend(.hidden)
         .frequencyDataTip(calibrated.map { TipSeries(id: "mic\($0.0)", name: "Live · Mic \($0.0 + 1)", color: color($0.0), points: $0.1) }
                           + predicted.map { TipSeries(id: "eq\($0.0)", name: "Mic \($0.0 + 1) with EQ", color: color($0.0), points: $0.1) }
-                          + shown.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) })
+                          + shown.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
+                          + (tracePrediction.map { [TipSeries(id: "eq-trace", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? []))
         .clipped()
     }
 
