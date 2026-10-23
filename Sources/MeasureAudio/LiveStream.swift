@@ -209,6 +209,9 @@ struct LiveState {
     var signal: UnsafeMutablePointer<Float>
     var signalCount: Int
     var position: Int
+    /// Input frame count when the output played its first frame, -1 before that. The internal
+    /// reference counts from here, so it only lags the input by the interface latency.
+    var outputStartFrame: Int
     var gain: Float
     var outputChannel: Int
     var loopbackOutputChannel: Int
@@ -249,7 +252,7 @@ struct LiveState {
         }
         let state = UnsafeMutablePointer<LiveState>.allocate(capacity: 1)
         state.initialize(to: LiveState(
-            signal: sig, signalCount: signal.count, position: 0, gain: gain,
+            signal: sig, signalCount: signal.count, position: 0, outputStartFrame: -1, gain: gain,
             outputChannel: outputChannel, loopbackOutputChannel: loopbackOutputChannel,
             ring: ring, captureChannels: chans, channelCount: captureChannels.count, capacity: capacity,
             written: 0, peaks: peaks, inputUnit: nil, inputBuffers: buffers, maxFrames: maxFrames))
@@ -278,6 +281,7 @@ private let liveOutputCallback: AURenderCallback = { refCon, _, _, _, frameCount
     let count = state.pointee.signalCount
     let start = state.pointee.position
     let gain = state.pointee.gain
+    if state.pointee.outputStartFrame < 0 { state.pointee.outputStartFrame = state.pointee.written }
     for (channel, buffer) in buffers.enumerated() {
         guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
         let n = min(frames, Int(buffer.mDataByteSize) / MemoryLayout<Float>.size)
@@ -314,14 +318,16 @@ private let liveInputCallback: AURenderCallback = { refCon, actionFlags, timeSta
         let dest = state.pointee.ring + c * capacity
         var peak = state.pointee.peaks[c]
         if source < 0 {
-            // Internal reference: the signal as played, frame for frame with the input. Input and
-            // output start together and run on one clock, so the offset between them is a constant
+            // Internal reference: the signal as played, frame for frame with the input from when the
+            // output started. Both run on one clock, so what is left between them is a constant
             // latency, which the delay finder measures along with the acoustic delay.
             let count = state.pointee.signalCount
+            let origin = state.pointee.outputStartFrame
             guard count > 0 else { continue }
             let gain = state.pointee.gain
             for i in 0..<frames {
-                let v = state.pointee.signal[(start + i) % count] * gain
+                let n = start + i - origin
+                let v = origin < 0 || n < 0 ? 0 : state.pointee.signal[n % count] * gain
                 dest[(start + i) & mask] = v
                 peak = max(peak, abs(v))
             }
