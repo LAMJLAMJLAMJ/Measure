@@ -8,10 +8,21 @@ import SwiftUI
 /// Frequency view draws the predicted result; nothing is sent to a processor.
 struct VirtualEQPanel: View {
     @Environment(AppModel.self) private var model
+    @AppStorage("tuningSource") private var source: TuningSource = .sweep
+
+    /// What the panel edits: the selected trace's EQ, or the live curves' EQ.
+    private struct Target {
+        let title: String
+        let filters: [EQFilter]
+        let sampleRate: Double
+        let color: Color
+        let set: ([EQFilter]) -> Void
+        let addPrediction: (() -> Void)?
+    }
 
     var body: some View {
-        if let trace = model.selectedTrace, trace.hasResponse {
-            editor(trace)
+        if let target {
+            editor(target)
         } else {
             ContentUnavailableView {
                 Label("Virtual EQ", systemImage: "slider.vertical.3")
@@ -21,19 +32,31 @@ struct VirtualEQPanel: View {
         }
     }
 
-    private func editor(_ trace: Trace) -> some View {
-        let filters = trace.info.eq ?? []
+    private var target: Target? {
+        if source == .crossSpectrum {
+            let live = model.live
+            return Target(title: "Live curves", filters: live.settings.eq ?? [], sampleRate: model.settings.sampleRate,
+                          color: .primary, set: { live.settings.eq = $0.isEmpty ? nil : $0 }, addPrediction: nil)
+        }
+        guard let trace = model.selectedTrace, trace.hasResponse else { return nil }
+        let id = trace.id
+        return Target(title: trace.info.name, filters: trace.info.eq ?? [], sampleRate: trace.eqSampleRate,
+                      color: trace.color, set: { model.setEQ($0, for: id) }, addPrediction: { model.addEQPrediction(for: id) })
+    }
+
+    private func editor(_ target: Target) -> some View {
+        let filters = target.filters
         return VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Virtual EQ").font(.headline)
-                Text(trace.info.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(target.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            eqCurve(trace).frame(height: 110)
+            eqCurve(target).frame(height: 110)
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(filters) { filter in
-                        FilterRow(filter: binding(trace.id, filter), index: (filters.firstIndex { $0.id == filter.id } ?? 0) + 1) {
-                            model.setEQ(filters.filter { $0.id != filter.id }, for: trace.id)
+                        FilterRow(filter: binding(filter), index: (filters.firstIndex { $0.id == filter.id } ?? 0) + 1) {
+                            target.set(filters.filter { $0.id != filter.id })
                         }
                     }
                     if filters.isEmpty {
@@ -45,7 +68,7 @@ struct VirtualEQPanel: View {
             HStack {
                 Menu("Add Filter") {
                     ForEach(EQFilter.Kind.allCases) { kind in
-                        Button(kind.rawValue) { model.setEQ(filters + [defaultFilter(kind)], for: trace.id) }
+                        Button(kind.rawValue) { target.set(filters + [defaultFilter(kind)]) }
                     }
                 }
                 .fixedSize()
@@ -53,25 +76,35 @@ struct VirtualEQPanel: View {
                 Menu("More") {
                     Button("Copy Parameters") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString("\(trace.info.name)\n" + ParametricEQ.description(filters), forType: .string)
+                        NSPasteboard.general.setString("\(target.title)\n" + ParametricEQ.description(filters), forType: .string)
                     }
-                    Button("Add Predicted Response as Trace") { model.addEQPrediction(for: trace.id) }
+                    if let add = target.addPrediction {
+                        Button("Add Predicted Response as Trace") { add() }
+                    }
                     Divider()
-                    Button("Remove All Filters", role: .destructive) { model.setEQ([], for: trace.id) }
+                    Button("Remove All Filters", role: .destructive) { target.set([]) }
                 }
                 .fixedSize()
                 .disabled(filters.isEmpty)
             }
-            Text("Biquads as in the Audio EQ Cookbook at \(String(format: "%g", trace.eqSampleRate / 1000)) kHz. The Frequency view draws the predicted response dashed while this panel is open. Prediction only: nothing is sent to a processor.")
+            Text(footnote(target))
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(12)
     }
 
-    /// The filters' combined response on its own, with each filter's centre marked.
-    private func eqCurve(_ trace: Trace) -> some View {
-        let filters = trace.activeEQ
-        let fs = trace.eqSampleRate
+    private func footnote(_ target: Target) -> String {
+        let rate = "Biquads as in the Audio EQ Cookbook at \(String(format: "%g", target.sampleRate / 1000)) kHz."
+        let what = target.addPrediction == nil
+            ? " The live view draws each live curve with this EQ added, dashed, while this panel is open. Capture saves the EQ with the captured traces."
+            : " The Frequency view draws the predicted response dashed while this panel is open."
+        return rate + what + " Prediction only: nothing is sent to a processor."
+    }
+
+    /// The filters' combined response on its own.
+    private func eqCurve(_ target: Target) -> some View {
+        let filters = target.filters.filter(\.enabled)
+        let fs = target.sampleRate
         let points = stride(from: 0.0, through: log2(20_000.0 / 20), by: 1.0 / 24).map { o -> ChartPoint in
             let f = 20 * pow(2, o)
             return ChartPoint(x: f, y: ParametricEQ.gainDB(filters, at: f, sampleRate: fs))
@@ -81,7 +114,7 @@ struct VirtualEQPanel: View {
             RuleMark(y: .value("0 dB", 0)).foregroundStyle(.secondary.opacity(0.5))
             ForEach(points) { p in
                 LineMark(x: .value("Frequency", p.x), y: .value("Gain", max(-extreme, p.y)))
-                    .foregroundStyle(trace.color)
+                    .foregroundStyle(target.color)
             }
         }
         .chartXScale(domain: 20...20_000, type: .log)
@@ -107,14 +140,16 @@ struct VirtualEQPanel: View {
         }
     }
 
-    /// One filter of one trace, bound by id so removing a row never leaves a stale index behind.
-    private func binding(_ traceID: UUID, _ filter: EQFilter) -> Binding<EQFilter> {
-        Binding(get: { model.traces.first { $0.id == traceID }?.info.eq?.first { $0.id == filter.id } ?? filter },
+    /// One filter, bound by id so removing a row never leaves a stale index behind. Reads the
+    /// current target each time, so it follows changes to the selection or the source.
+    private func binding(_ filter: EQFilter) -> Binding<EQFilter> {
+        Binding(get: { target?.filters.first { $0.id == filter.id } ?? filter },
                 set: { new in
-                    guard var filters = model.traces.first(where: { $0.id == traceID })?.info.eq,
-                          let i = filters.firstIndex(where: { $0.id == filter.id }), filters[i] != new else { return }
+                    guard let target, let i = target.filters.firstIndex(where: { $0.id == filter.id }),
+                          target.filters[i] != new else { return }
+                    var filters = target.filters
                     filters[i] = new
-                    model.setEQ(filters, for: traceID)
+                    target.set(filters)
                 })
     }
 }

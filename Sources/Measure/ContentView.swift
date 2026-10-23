@@ -74,7 +74,7 @@ struct ContentView: View {
         switch tuningTab {
         case .impulse: ImpulseView(editsWindow: true)
         case .frequency:
-            if source == .crossSpectrum { LiveView() } else { FrequencyResponseView(showVirtualEQ: $showVirtualEQ) }
+            if source == .crossSpectrum { LiveView(showsEQ: true) } else { FrequencyResponseView(showVirtualEQ: $showVirtualEQ) }
         case .phase:
             if source == .crossSpectrum { LiveView() } else { PhaseView() }
         case .delay: DelayView()
