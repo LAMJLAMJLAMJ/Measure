@@ -203,7 +203,9 @@ struct LevelHistoryChart: View {
         }
         let levels = lines.flatMap { $0.2.map(\.level) }
         let low = ((levels.min() ?? 40) - 5).rounded(.down)
-        let high = max(((levels.max() ?? 100) + 5).rounded(.up), (monitor.settings.limit ?? -300) + 3)
+        let top: Double = ((levels.max() ?? 100) + 5).rounded(.up)
+        let limitTop: Double = (monitor.settings.limit ?? -300) + 3
+        let high = max(top, limitTop)
         if levels.isEmpty {
             EmptyState(text: monitor.isRunning ? "The history starts after the first second" : "Start live monitoring to see the levels over time")
         } else {

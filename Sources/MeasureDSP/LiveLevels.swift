@@ -286,14 +286,22 @@ public final class RealTimeAnalyzer {
         let b = Double(max(1, fraction))
         // Odd fractions put a band on 1 kHz; even ones put band edges there.
         func center(_ x: Int) -> Double {
-            fraction % 2 == 1 ? 1000 * pow(g, Double(x) / b) : 1000 * pow(g, (2 * Double(x) + 1) / (2 * b))
+            let n = Double(x)
+            let exponent: Double = fraction % 2 == 1 ? n / b : (2 * n + 1) / (2 * b)
+            return 1000 * pow(g, exponent)
         }
         let half = pow(g, 1 / (2 * b))
         let first = Int((b * log(low / 1000) / log(g)).rounded(.down)) - 1
         let last = Int((b * log(high / 1000) / log(g)).rounded(.up)) + 1
-        return (first...last).map(center)
-            .filter { $0 >= low / pow(2, 0.01) && $0 <= high * pow(2, 0.01) && $0 * half < sampleRate / 2 }
-            .map { Band(center: $0, lower: $0 / half, upper: $0 * half) }
+        // Spelled out step by step: the compiler times out on this as one chained expression.
+        let lowest = low / pow(2, 0.01), highest = high * pow(2, 0.01), nyquist = sampleRate / 2
+        var out: [Band] = []
+        for x in first...last {
+            let f: Double = center(x)
+            guard f >= lowest, f <= highest, f * half < nyquist else { continue }
+            out.append(Band(center: f, lower: f / half, upper: f * half))
+        }
+        return out
     }
 
     public init(fftSize: Int, sampleRate fs: Double, fraction: Int) {
