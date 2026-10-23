@@ -67,6 +67,9 @@ struct VirtualEQPanel: View {
                     }
                 }
             }
+            // A small ideal height: otherwise the list asks for the height of all its rows, and with the
+            // eight or more filters Auto EQ adds that pushed the window's top and bottom out of view.
+            .frame(minHeight: 60, idealHeight: 200, maxHeight: .infinity)
             AutoEQSection(response: target.response, filters: filters, sampleRate: target.sampleRate, set: target.set)
             HStack {
                 Menu("Add Filter") {
@@ -94,6 +97,7 @@ struct VirtualEQPanel: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(12)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func footnote(_ target: Target) -> String {
