@@ -93,6 +93,8 @@ struct FrequencyResponseView: View {
                 .chartXAxisLabel("Hz")
                 .chartYAxisLabel("dB")
                 .chartLegend(.hidden)
+                .frequencyDataTip(series.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
+                                  + (predicted.map { [TipSeries(id: "eq", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? []))
                 .clipped()
             }
         }

@@ -394,6 +394,9 @@ struct LiveView: View {
         .chartXAxis { frequencyAxis }
         .chartYAxisLabel("dB re reference")
         .chartLegend(.hidden)
+        .frequencyDataTip(calibrated.map { TipSeries(id: "mic\($0.0)", name: "Live · Mic \($0.0 + 1)", color: color($0.0), points: $0.1) }
+                          + predicted.map { TipSeries(id: "eq\($0.0)", name: "Mic \($0.0 + 1) with EQ", color: color($0.0), points: $0.1) }
+                          + shown.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) })
         .clipped()
     }
 
