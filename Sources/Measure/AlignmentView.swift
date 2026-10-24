@@ -15,8 +15,6 @@ struct AlignmentSettings: Codable {
     var smoothing = 12.0
     /// How far either side of the arrivals the automatic alignment looks, ms.
     var span = 10.0
-    /// Include each trace's Virtual EQ, with its phase.
-    var includeEQ = true
 
     func setting(_ id: UUID) -> TimeAlignment.Setting { parts[id] ?? TimeAlignment.Setting() }
 }
@@ -44,6 +42,8 @@ private struct AlignmentCurve: Identifiable {
     let name: String
     let color: Color
     let width: CGFloat
+    /// Dashes for the predicted sum, as for the Virtual EQ prediction; empty for a solid line.
+    var dash: [CGFloat] = []
     let points: [ChartPoint]
 }
 
@@ -97,11 +97,8 @@ struct AlignmentView: View {
             var gain: ((Double) -> Double)? = nil
             if let calibration { gain = { f in -calibration.magnitude(at: f) } }
             let smoothing: Double? = settings.smoothing > 0 ? settings.smoothing : nil
-            guard var part = TimeAlignment.Part(response: trace.rawResponse, start: start, arrival: arrival, grid: grid,
+            guard let part = TimeAlignment.Part(response: trace.rawResponse, start: start, arrival: arrival, grid: grid,
                                             smoothing: smoothing, gain: gain) else { continue }
-            if settings.includeEQ, !trace.activeEQ.isEmpty {
-                part = part.applying(trace.activeEQ, sampleRate: trace.eqSampleRate)
-            }
             data.traces.append(trace)
             data.parts.append(part)
         }
@@ -395,9 +392,6 @@ struct AlignmentView: View {
             }
             .fixedSize()
             .help("Complex smoothing, which keeps the phase")
-            Toggle("Virtual EQ", isOn: $model.alignment.includeEQ)
-                .fixedSize()
-                .help("Include each trace's Virtual EQ, magnitude and phase, as a processor would apply it")
         }
     }
 
@@ -429,9 +423,9 @@ struct AlignmentView: View {
         }
         let (parts, settings) = included(data)
         if parts.count > 1, let sum = TimeAlignment.sum(parts, settings: settings, reference: data.reference) {
-            magnitude.append(AlignmentCurve(id: "sum", name: "Sum", color: .primary, width: 2.4,
+            magnitude.append(AlignmentCurve(id: "sum", name: "Sum", color: .primary, width: 2, dash: [6, 3],
                                             points: points(sum, low: low, phase: false)))
-            phase.append(AlignmentCurve(id: "sum", name: "Sum", color: .primary, width: 2.4,
+            phase.append(AlignmentCurve(id: "sum", name: "Sum", color: .primary, width: 2, dash: [6, 3],
                                         points: points(sum, low: low, phase: true)))
         }
         return (magnitude, phase)
@@ -489,7 +483,7 @@ struct AlignmentView: View {
             AlignmentChart(curves: phase, low: model.alignment.low, high: model.alignment.high,
                            yDomain: -180...180, yLabel: "degrees", yTicks: [-180, -90, 0, 90, 180], unit: "°")
                 .frame(minHeight: 120, maxHeight: .infinity)
-            Text("Phase relative to the reference trace's arrival after its delay. In the shaded range, curves that lie on each other add fully. Each trace is taken within its window on the Impulse view: give subs a window long enough for the low end.")
+            Text("Phase relative to the reference trace's arrival after its delay. The sum is dashed. In the shaded range, curves that lie on each other add fully. Each trace is taken within its window on the Impulse view: give subs a window long enough for the low end.")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
         }
     }
@@ -530,7 +524,7 @@ struct AlignmentView: View {
                 out.append(AlignmentCurve(id: trace.id.uuidString, name: trace.info.name, color: trace.color,
                                           width: 1.2, points: points))
             } else {
-                out.append(AlignmentCurve(id: "sum", name: "Sum", color: .primary, width: 2, points: points))
+                out.append(AlignmentCurve(id: "sum", name: "Sum", color: .primary, width: 1.6, dash: [6, 3], points: points))
             }
         }
         return out
@@ -552,12 +546,12 @@ struct AlignmentView: View {
                             LineMark(x: .value("Time", p.x), y: .value(etc ? "dB" : "Amplitude", p.y),
                                      series: .value("Trace", curve.id))
                                 .foregroundStyle(curve.color)
-                                .lineStyle(StrokeStyle(lineWidth: curve.width))
+                                .lineStyle(StrokeStyle(lineWidth: curve.width, dash: curve.dash))
                         }
                     }
                     RuleMark(x: .value("Reference", 0.0))
                         .foregroundStyle(Color.secondary.opacity(0.5))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
                 }
                 .chartXScale(domain: low...high)
                 .chartYScale(domain: yDomain)
@@ -567,7 +561,7 @@ struct AlignmentView: View {
                 .clipped()
                 .frame(minHeight: 200, maxHeight: .infinity)
             }
-            Text("The whole impulse responses after each delay, polarity and gain, and their sum (thick), scaled to the largest. The dashed line is the reference trace's arrival. Virtual EQ and mic calibration are not applied here.")
+            Text("The whole impulse responses after each delay, polarity and gain, and their sum (dashed), scaled to the largest. The vertical line is the reference trace's arrival.")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
         }
     }
@@ -593,7 +587,7 @@ private struct AlignmentChart: View {
                 ForEach(curve.points) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value(yLabel, p.y), series: .value("Trace", curve.id))
                         .foregroundStyle(curve.color)
-                        .lineStyle(StrokeStyle(lineWidth: curve.width))
+                        .lineStyle(StrokeStyle(lineWidth: curve.width, dash: curve.dash))
                 }
             }
         }
