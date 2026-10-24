@@ -26,6 +26,7 @@ enum TuningTab: String, CaseIterable, Identifiable {
     case phase = "Phase"
     case delay = "Delay"
     case alignment = "Alignment"
+    case distortion = "Distortion"
     case sti = "STI"
     var id: String { rawValue }
 }
