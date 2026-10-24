@@ -5,7 +5,7 @@ import Foundation
 /// L·ln(k) earlier for harmonic k (L is the sweep's rate). Windowed apart and transformed, each gives
 /// that harmonic's level against frequency; with an exponential sweep no further correction is needed.
 /// Harmonic k produced while the sweep plays f sounds at k·f, so it is read there and drawn at f.
-public struct HarmonicDistortion: Codable, Equatable {
+public struct HarmonicDistortion: Codable, Hashable {
     /// Fundamental frequencies, Hz, log-spaced.
     public var frequencies: [Double]
     /// Level of the fundamental at each frequency, dB re the sweep's full scale (as the impulse response).
