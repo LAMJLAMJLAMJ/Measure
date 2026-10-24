@@ -4,8 +4,16 @@ import Foundation
 public enum TimeFrequency {
     /// Energy-time curve: the Hilbert envelope of the impulse response in dB, 0 dB at its peak.
     public static func energyTimeCurve(_ ir: [Double]) -> [Double] {
-        let fft = FFT(size: FFT.size(atLeast: ir.count))
-        var spectrum = fft.forward(ir)
+        let env = envelope(ir)
+        let peak = max(env.max() ?? 1, .leastNonzeroMagnitude)
+        return env.map { 10 * log10(max($0 / peak, 1e-30)) }
+    }
+
+    /// The squared Hilbert envelope of `x`: its instantaneous power, not normalised.
+    public static func envelope(_ x: [Double]) -> [Double] {
+        guard !x.isEmpty else { return [] }
+        let fft = FFT(size: FFT.size(atLeast: x.count))
+        var spectrum = fft.forward(x)
         // Analytic signal: double the positive frequencies, keep DC and Nyquist, drop the negatives.
         for k in 1..<(spectrum.count - 1) {
             spectrum.real[k] *= 2
@@ -17,9 +25,7 @@ public enum TimeFrequency {
             full.imag[k] = spectrum.imag[k]
         }
         let analytic = fft.transform(full, inverse: true)
-        let env = (0..<ir.count).map { analytic.real[$0] * analytic.real[$0] + analytic.imag[$0] * analytic.imag[$0] }
-        let peak = max(env.max() ?? 1, .leastNonzeroMagnitude)
-        return env.map { 10 * log10(max($0 / peak, 1e-30)) }
+        return (0..<x.count).map { analytic.real[$0] * analytic.real[$0] + analytic.imag[$0] * analytic.imag[$0] }
     }
 
     /// A grid of levels in dB: `levels[t][f]` at `times[t]` (seconds) and `frequencies[f]` (Hz).

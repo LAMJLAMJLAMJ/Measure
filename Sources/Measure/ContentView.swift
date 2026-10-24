@@ -83,6 +83,7 @@ struct ContentView: View {
         case .phase:
             if source == .crossSpectrum { LiveView() } else { PhaseView() }
         case .delay: DelayView()
+        case .alignment: AlignmentView()
         case .sti: STIView()
         }
     }
