@@ -24,6 +24,9 @@ public struct SweepMeasurementResult {
     public let micPeakLevels: [Double]
     /// Peak level of the loopback recording, dBFS. A clipped loopback distorts every impulse response.
     public let loopbackPeakLevel: Double?
+    /// Harmonic distortion of each mic's recording, in the same order. Nil where the sweep was too
+    /// short to separate the harmonics.
+    public let distortion: [HarmonicDistortion?]
 }
 
 public enum SweepProcessing {
@@ -62,10 +65,21 @@ public enum SweepProcessing {
         }
 
         let scale = gain ?? 1
-        let irs = mics.map { mic -> [Double] in
-            let ir = Deconvolution.impulseResponse(recording: mic, reference: reference, sampleRate: sweep.sampleRate,
-                                                   band: band, length: length)
-            return scale == 1 ? ir : ir.map { $0 * scale }
+        var irs: [[Double]] = []
+        var distortion: [HarmonicDistortion?] = []
+        for mic in mics {
+            // The whole circular result: the harmonics sit before the linear response, wrapped to the end.
+            let full = Deconvolution.impulseResponse(recording: mic, reference: reference, sampleRate: sweep.sampleRate,
+                                                     band: band, length: Int.max)
+            let ir = Array(full.prefix(length))
+            irs.append(scale == 1 ? ir : ir.map { $0 * scale })
+            var d = HarmonicDistortion.analyze(impulseResponse: full, sweep: sweep)
+            if scale != 1, d != nil {
+                let shift = 20 * log10(scale)
+                d!.fundamental = d!.fundamental.map { $0 + shift }
+                d!.harmonics = d!.harmonics.map { $0.map { $0.map { $0 + shift } } }
+            }
+            distortion.append(d)
         }
 
         func peakDB(_ x: [Double]) -> Double {
@@ -76,7 +90,7 @@ public enum SweepProcessing {
         return SweepMeasurementResult(sampleRate: sweep.sampleRate, impulseResponses: irs,
                                       timingReference: loopback == nil ? .generated : .loopback,
                                       loopbackLatency: latency, loopbackGain: gain, micPeakLevels: peaks,
-                                      loopbackPeakLevel: loopback.map(peakDB))
+                                      loopbackPeakLevel: loopback.map(peakDB), distortion: distortion)
     }
 
     private static func energy(_ x: [Double]) -> Double {
