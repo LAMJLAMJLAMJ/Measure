@@ -104,8 +104,9 @@ public enum PinkNoise {
     /// Pink noise that repeats every `count` samples (a power of two): flat power per octave from
     /// `low` to `high`, random phase, scaled to a peak of 1. When the analyser's FFT is the same
     /// length, every block holds whole periods, so the transfer function has no leakage.
+    /// `white` gives flat power per hertz instead.
     public static func periodic(count: Int, sampleRate: Double, low: Double = 20, high: Double = 20_000,
-                                seed: UInt64 = 0x5EED) -> [Double] {
+                                seed: UInt64 = 0x5EED, white: Bool = false) -> [Double] {
         let fft = FFT(size: count)
         var spectrum = SplitComplex(count: count / 2 + 1)
         var state = seed
@@ -119,7 +120,7 @@ public enum PinkNoise {
         for k in 1..<(count / 2) {
             let f = Double(k) * sampleRate / Double(count)
             guard f >= low && f <= high else { continue }
-            let amplitude = 1 / f.squareRoot()
+            let amplitude = white ? 1 : 1 / f.squareRoot()
             let phase = 2 * Double.pi * random()
             spectrum.real[k] = amplitude * cos(phase)
             spectrum.imag[k] = amplitude * sin(phase)
