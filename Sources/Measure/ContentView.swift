@@ -11,6 +11,7 @@ struct ContentView: View {
     @AppStorage("showVirtualEQ") private var showVirtualEQ = false
     @State private var showSetup = false
     @State private var showPlainRecording = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         NavigationSplitView {
@@ -41,6 +42,12 @@ struct ContentView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { openWindow(id: "generator") } label: {
+                    Label("Signal Generator", systemImage: model.generator.isRunning ? "waveform.circle.fill" : "waveform.circle")
+                }
+                .help("Open the signal generator: a test signal on any outputs, with meters for it and every mic input")
+            }
             ToolbarItem(placement: .principal) {
                 Picker("Mode", selection: $mode) {
                     ForEach(AppMode.allCases) { Text($0.rawValue).tag($0) }

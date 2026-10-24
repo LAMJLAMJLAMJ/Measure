@@ -19,15 +19,30 @@ public struct LiveRouting {
     public var outputChannel: Int
     /// A second output that also gets the noise, for a loopback cable to the reference input. From 0.
     public var loopbackOutputChannel: Int?
+    /// More outputs that play the signal too, from 0: the signal generator plays on any set of outputs.
+    public var extraOutputChannels: [Int]
 
     public init(inputDevice: AudioDevice, referenceChannel: Int?, micChannels: [Int],
-                outputDevice: AudioDevice?, outputChannel: Int, loopbackOutputChannel: Int?) {
+                outputDevice: AudioDevice?, outputChannel: Int, loopbackOutputChannel: Int?,
+                extraOutputChannels: [Int] = []) {
         self.inputDevice = inputDevice
         self.referenceChannel = referenceChannel
         self.micChannels = micChannels
         self.outputDevice = outputDevice
         self.outputChannel = outputChannel
         self.loopbackOutputChannel = loopbackOutputChannel
+        self.extraOutputChannels = extraOutputChannels
+    }
+
+    /// The outputs that play the signal, as bits of a mask (channel 0 is bit 0; channels from 64 up are left out).
+    var outputMask: UInt64 {
+        LiveRouting.mask([outputChannel] + [loopbackOutputChannel].compactMap { $0 } + extraOutputChannels)
+    }
+
+    static func mask(_ channels: [Int]) -> UInt64 {
+        var m: UInt64 = 0
+        for c in channels where c >= 0 && c < 64 { m |= 1 << UInt64(c) }
+        return m
     }
 
     func validate() throws {
@@ -35,7 +50,7 @@ public struct LiveRouting {
             throw AudioEngineError.channelOutOfRange(device: inputDevice.name, channel: c + 1, available: inputDevice.inputChannels)
         }
         if let out = outputDevice {
-            for c in [outputChannel] + [loopbackOutputChannel].compactMap({ $0 }) where c < 0 || c >= out.outputChannels {
+            for c in [outputChannel] + [loopbackOutputChannel].compactMap({ $0 }) + extraOutputChannels where c < 0 || c >= out.outputChannels {
                 throw AudioEngineError.channelOutOfRange(device: out.name, channel: c + 1, available: out.outputChannels)
             }
         }
@@ -77,8 +92,7 @@ public final class LiveStream {
         micCount = routing.micChannels.count
 
         let s = LiveState.make(signal: signal ?? [], gain: Float(pow(10, level / 20)),
-                               outputChannel: routing.outputChannel,
-                               loopbackOutputChannel: routing.loopbackOutputChannel ?? -1,
+                               outputMask: routing.outputMask,
                                // -1: the internal reference, made from the signal in the input callback.
                                captureChannels: [routing.referenceChannel ?? -1] + routing.micChannels,
                                inputChannelCount: routing.inputDevice.inputChannels)
@@ -111,6 +125,11 @@ public final class LiveStream {
     /// Changes the noise level, dB re the signal's peak, while running.
     public func setLevel(_ level: Double) {
         state?.pointee.gain = Float(pow(10, level / 20))
+    }
+
+    /// Changes which outputs play the signal while running, from 0.
+    public func setOutputChannels(_ channels: [Int]) {
+        state?.pointee.outputMask = LiveRouting.mask(channels)
     }
 
     /// Frames captured since the start.
@@ -148,12 +167,22 @@ public final class LiveStream {
     /// read every sample once by passing the end back next time. A reader that fell more than half
     /// the buffer behind gets only the latest half.
     public func samples(mic: Int, from: Int) -> (samples: [Double], end: Int) {
-        guard let s = state, mic >= 0, mic + 1 < s.pointee.channelCount else { return ([], from) }
+        guard mic >= 0 else { return ([], from) }
+        return samples(channel: mic + 1, from: from)
+    }
+
+    /// The reference's samples (with an internal reference, the signal as played), read as `samples(mic:from:)`.
+    public func referenceSamples(from: Int) -> (samples: [Double], end: Int) {
+        samples(channel: 0, from: from)
+    }
+
+    private func samples(channel: Int, from: Int) -> (samples: [Double], end: Int) {
+        guard let s = state, channel >= 0, channel < s.pointee.channelCount else { return ([], from) }
         let written = s.pointee.written
         let capacity = s.pointee.capacity
         let start = max(from, written - capacity / 2, 0)
         guard written > start else { return ([], written) }
-        let base = s.pointee.ring + (mic + 1) * capacity
+        let base = s.pointee.ring + channel * capacity
         let mask = capacity - 1
         return ((start..<written).map { Double(base[$0 & mask]) }, written)
     }
@@ -227,8 +256,8 @@ struct LiveState {
     /// reference counts from here, so it only lags the input by the interface latency.
     var outputStartFrame: Int
     var gain: Float
-    var outputChannel: Int
-    var loopbackOutputChannel: Int
+    /// The outputs that play the signal, one bit per channel.
+    var outputMask: UInt64
 
     /// One ring buffer per captured channel, `capacity` (a power of two) samples each.
     var ring: UnsafeMutablePointer<Float>
@@ -244,7 +273,7 @@ struct LiveState {
     var inputBuffers: UnsafeMutableAudioBufferListPointer
     var maxFrames: Int
 
-    static func make(signal: [Double], gain: Float, outputChannel: Int, loopbackOutputChannel: Int,
+    static func make(signal: [Double], gain: Float, outputMask: UInt64,
                      captureChannels: [Int], inputChannelCount: Int) -> UnsafeMutablePointer<LiveState> {
         let sig = UnsafeMutablePointer<Float>.allocate(capacity: max(1, signal.count))
         for i in signal.indices { sig[i] = Float(signal[i]) }
@@ -267,7 +296,7 @@ struct LiveState {
         let state = UnsafeMutablePointer<LiveState>.allocate(capacity: 1)
         state.initialize(to: LiveState(
             signal: sig, signalCount: signal.count, position: 0, outputStartFrame: -1, gain: gain,
-            outputChannel: outputChannel, loopbackOutputChannel: loopbackOutputChannel,
+            outputMask: outputMask,
             ring: ring, captureChannels: chans, channelCount: captureChannels.count, capacity: capacity,
             written: 0, peaks: peaks, inputUnit: nil, inputBuffers: buffers, maxFrames: maxFrames))
         return state
@@ -286,7 +315,8 @@ struct LiveState {
     }
 }
 
-/// Plays the signal in a loop on the measurement (and loopback) channel; silence elsewhere.
+/// Plays the signal in a loop on the outputs in the mask (the measurement and loopback channels, and any
+/// more); silence elsewhere.
 private let liveOutputCallback: AURenderCallback = { refCon, _, _, _, frameCount, ioData in
     let state = refCon.assumingMemoryBound(to: LiveState.self)
     guard let ioData else { return noErr }
@@ -296,10 +326,11 @@ private let liveOutputCallback: AURenderCallback = { refCon, _, _, _, frameCount
     let start = state.pointee.position
     let gain = state.pointee.gain
     if state.pointee.outputStartFrame < 0 { state.pointee.outputStartFrame = state.pointee.written }
+    let mask = state.pointee.outputMask
     for (channel, buffer) in buffers.enumerated() {
         guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
         let n = min(frames, Int(buffer.mDataByteSize) / MemoryLayout<Float>.size)
-        if count > 0 && (channel == state.pointee.outputChannel || channel == state.pointee.loopbackOutputChannel) {
+        if count > 0 && channel < 64 && (mask >> UInt64(channel)) & 1 == 1 {
             var p = start
             for i in 0..<n {
                 data[i] = state.pointee.signal[p] * gain

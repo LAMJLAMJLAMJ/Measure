@@ -33,6 +33,13 @@ struct MeasureApp: App {
                 Button("Show Project in Finder") { NSWorkspace.shared.open(model.projectFolder) }
             }
         }
+
+        Window("Signal Generator", id: "generator") {
+            GeneratorView()
+                .environment(model)
+                .frame(minWidth: 560, minHeight: 420)
+        }
+        .defaultSize(width: 640, height: 520)
     }
 }
 

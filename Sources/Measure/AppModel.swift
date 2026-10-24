@@ -90,6 +90,8 @@ final class AppModel {
     let live: LiveAnalyzer
     /// Live monitoring: SPL meters and the RTA.
     let monitor: MonitorAnalyzer
+    /// The signal generator window's test signal and meters.
+    let generator: GeneratorModel
 
     var isMeasuring = false
     var status: String?
@@ -108,6 +110,7 @@ final class AppModel {
         alignment = AppModel.load(key: "alignment") ?? AlignmentSettings()
         live = LiveAnalyzer()
         monitor = MonitorAnalyzer()
+        generator = GeneratorModel()
         refreshDevices()
         openProject(projectFolder)
     }
@@ -138,6 +141,7 @@ final class AppModel {
         guard !isMeasuring else { return }
         live.stop()
         monitor.stop()
+        generator.stop()
         guard let out = outputDevice, let input = inputDevice else {
             errorMessage = "Choose an output and an input device in Measurement Setup."
             return
@@ -239,6 +243,7 @@ final class AppModel {
         guard !isMeasuring else { return }
         live.stop()
         monitor.stop()
+        generator.stop()
         let s = settings
         isMeasuring = true
         errorMessage = nil
@@ -281,6 +286,7 @@ final class AppModel {
         guard !isMeasuring, let mic = micProfiles.first(where: { $0.id == id }) else { return }
         live.stop()
         monitor.stop()
+        generator.stop()
         guard let index = settings.mics.firstIndex(where: { $0.micName == mic.name }) else {
             errorMessage = "Assign \(mic.name) to a mic input first."
             return
