@@ -263,6 +263,14 @@ extension AppModel {
         let responses = calibratedLiveCurves.map { FrequencyResponse(frequencies: $0.1.map(\.x), magnitude: $0.1.map(\.y)) }
         return responses.isEmpty ? nil : FrequencyResponse.average(responses, method: .power)
     }
+
+    /// What the live view's target sits on and Auto EQ fits: the live curves' average while there
+    /// are any, otherwise the selected ticked trace (or the first ticked one), with its calibration.
+    var liveFitResponse: FrequencyResponse? {
+        if let live = liveAverageResponse { return live }
+        let ticked = visibleTraces.filter(\.hasResponse)
+        return (ticked.first { $0.id == selection } ?? ticked.first).map { calibratedResponse($0) }
+    }
 }
 
 struct LiveView: View {
@@ -405,8 +413,7 @@ struct LiveView: View {
         // The target sits on the live curves' average while measuring, otherwise on the selected trace.
         var targetPoints: [TargetPoint]?
         if showsEQ && showTarget {
-            let selected = shown.first { $0.0.id == model.selection } ?? shown.first
-            if let response = model.liveAverageResponse ?? selected.map({ model.calibratedResponse($0.0) }) {
+            if let response = model.liveFitResponse {
                 targetPoints = model.targetPoints(alignedTo: response)
             }
         }
