@@ -56,6 +56,12 @@ struct MeasureApp: App {
                     .disabled(model.visible.isEmpty)
                 Button("Add Set to This Project…") { addSet(model) }
                 Divider()
+                Button("Export Impulse Responses…") { model.requestImpulseExport() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                Button("Copy Plot") { PlotCapture.copy() }
+                    .keyboardShortcut("c", modifiers: [.command, .option])
+                Button("Save Plot as PNG…") { PlotCapture.save() }
+                Divider()
                 Button("Show Project in Finder") { NSWorkspace.shared.activateFileViewerSelecting([model.projectFolder]) }
             }
         }

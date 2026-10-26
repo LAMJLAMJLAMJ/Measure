@@ -214,6 +214,16 @@ struct AutoEQSection: View {
                 Button("Auto EQ to Target") { run() }
                     .disabled(response == nil)
                     .help("Add filters that bring the response close to the target. Filters you added yourself stay and are taken into account; filters from an earlier Auto EQ are replaced.")
+                Menu("Clear") {
+                    Button("Remove All Filters") { clear(onlyAuto: false) }
+                    Button("Remove Auto EQ Filters Only") { clear(onlyAuto: true) }
+                        .disabled(!filters.contains { $0.auto == true })
+                } primaryAction: {
+                    clear(onlyAuto: false)
+                }
+                .fixedSize()
+                .disabled(filters.isEmpty)
+                .help("Remove every filter. Click and hold (or use the arrow) to remove only the ones Auto EQ added.")
                 Button { showSettings = true } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.borderless)
                     .help("Auto EQ settings")
@@ -230,6 +240,11 @@ struct AutoEQSection: View {
             }
         }
         .onChange(of: model.selection) { summary = nil }
+    }
+
+    private func clear(onlyAuto: Bool) {
+        set(onlyAuto ? filters.filter { $0.auto != true } : [])
+        summary = nil
     }
 
     private func run() {

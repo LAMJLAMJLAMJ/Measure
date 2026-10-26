@@ -367,3 +367,78 @@ extension SoundLevel {
         return 20 * log10(WeightingFilter.analogue(w, f) / WeightingFilter.analogue(w, 1000))
     }
 }
+
+/// A meter's record second by second, kept for export: per weighting, the mean square of each second,
+/// its highest Fast mean square, and the Slow mean square at its end.
+public struct LevelLog: Equatable {
+    public var energy: [[Double]]
+    public var fastMax: [[Double]]
+    public var slow: [[Double]]
+
+    public init(energy: [[Double]], fastMax: [[Double]], slow: [[Double]]) {
+        self.energy = energy
+        self.fastMax = fastMax
+        self.slow = slow
+    }
+
+    public init(_ meter: SoundLevelMeter) {
+        self.init(energy: meter.secondEnergy, fastMax: meter.secondFast, slow: meter.secondSlow)
+    }
+
+    /// Whole seconds recorded.
+    public var seconds: Int { energy.first?.count ?? 0 }
+
+    /// One mic's log for the CSV: its name, the dB added to its levels (calibration and offset) and
+    /// the unit they are then in.
+    public struct Column {
+        public var name: String
+        public var offset: Double
+        public var unit: String
+        public var log: LevelLog
+        public init(name: String, offset: Double, unit: String, log: LevelLog) {
+            self.name = name
+            self.offset = offset
+            self.unit = unit
+            self.log = log
+        }
+    }
+
+    /// A CSV with a row per second: the time it ended (when `start` is given) and the seconds since
+    /// the start, then for each mic and weighting the Leq over that second, the highest Fast level in
+    /// it and the Slow level at its end, to 0.1 dB.
+    public static func csv(_ mics: [Column], start: Date?) -> String {
+        let weightings = SoundLevel.FrequencyWeighting.allCases
+        var header = ["Time", "Elapsed s"]
+        for m in mics {
+            for w in weightings {
+                let l = "L\(w.rawValue)"
+                header += ["\(m.name) \(l)eq,1s (\(m.unit))", "\(m.name) \(l)Fmax (\(m.unit))", "\(m.name) \(l)S (\(m.unit))"]
+            }
+        }
+        var lines = [header.map(field).joined(separator: ",")]
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let rows = mics.map(\.log.seconds).max() ?? 0
+        for s in 0..<rows {
+            var row = [start.map { formatter.string(from: $0.addingTimeInterval(Double(s + 1))) } ?? "", "\(s + 1)"]
+            for m in mics {
+                for k in weightings.indices {
+                    for series in [m.log.energy, m.log.fastMax, m.log.slow] {
+                        if k < series.count, s < series[k].count {
+                            row.append(String(format: "%.1f", SoundLevelMeter.db(series[k][s]) + m.offset))
+                        } else {
+                            row.append("")
+                        }
+                    }
+                }
+            }
+            lines.append(row.joined(separator: ","))
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private static func field(_ s: String) -> String {
+        s.contains(",") || s.contains("\"") ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s
+    }
+}

@@ -109,6 +109,9 @@ final class MonitorAnalyzer {
     var sampleRate = 48_000.0
     /// Names of the mics being monitored, by index, for labels.
     var micNames: [String] = []
+    /// Each mic's record second by second since the start or the last reset, for export. Kept after
+    /// stopping, until monitoring starts again.
+    @ObservationIgnored private(set) var levelLogs: [LevelLog] = []
 
     @ObservationIgnored private var engine: MonitorEngine?
     @ObservationIgnored private var loop: Task<Void, Never>?
@@ -157,6 +160,7 @@ final class MonitorAnalyzer {
         self.engine = engine
         snapshot = MonitorSnapshot()
         histories = [:]
+        levelLogs = []
         startDate = Date()
         isRunning = true
         loop = Task.detached(priority: .userInitiated) { [weak self] in
@@ -166,20 +170,32 @@ final class MonitorAnalyzer {
                 guard let settings = await self?.settings else { return }
                 let snap = engine.update(settings)
                 var histories: [UUID: [Double]]?
+                var logs: [LevelLog]?
                 if snap.seconds != lastSecond {
                     lastSecond = snap.seconds
                     histories = engine.histories(settings)
+                    logs = engine.logs()
                 }
-                await self?.apply(snap, histories: histories)
+                await self?.apply(snap, histories: histories, logs: logs)
             }
         }
     }
 
     /// Takes the engine's latest results, unless monitoring has stopped since.
-    private func apply(_ snap: MonitorSnapshot, histories: [UUID: [Double]]?) {
+    private func apply(_ snap: MonitorSnapshot, histories: [UUID: [Double]]?, logs: [LevelLog]?) {
         guard isRunning else { return }
         snapshot = snap
         if let histories { self.histories = histories }
+        if let logs { levelLogs = logs }
+    }
+
+    /// The level log as CSV, a row per second, with each mic's calibration and offset applied.
+    func logCSV(_ model: AppModel) -> String {
+        let columns = levelLogs.indices.map { i in
+            LevelLog.Column(name: i < micNames.count ? micNames[i] : "Mic \(i + 1)", offset: offset(model, mic: i) ?? 0,
+                            unit: unit(model, mic: i), log: levelLogs[i])
+        }
+        return LevelLog.csv(columns, start: startDate)
     }
 
     func stop(_ model: AppModel? = nil) {
@@ -197,6 +213,7 @@ final class MonitorAnalyzer {
         engine?.reset()
         snapshot = MonitorSnapshot()
         histories = [:]
+        levelLogs = []
         startDate = Date()
     }
 
@@ -310,6 +327,9 @@ final class MonitorEngine {
         }
         return snap
     }
+
+    /// Each mic's record second by second.
+    func logs() -> [LevelLog] { meters.map { LevelLog($0) } }
 
     /// Each meter's history, one value a second.
     func histories(_ settings: MonitorSettings) -> [UUID: [Double]] {

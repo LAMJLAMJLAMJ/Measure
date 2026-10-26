@@ -68,6 +68,9 @@ struct ContentView: View {
         .background { shortcuts }
         .sheet(isPresented: $showSetup) { SetupView() }
         .sheet(isPresented: $showPlainRecording) { PlainRecordingSheet() }
+        .sheet(item: Binding(get: { model.exportRequest }, set: { model.exportRequest = $0 })) { request in
+            ImpulseExportSheet(ids: request.traces)
+        }
         .navigationTitle(model.projectFolder.lastPathComponent)
     }
 
@@ -326,6 +329,8 @@ struct TraceList: View {
             Button("Rename") { startRename(trace) }
             Button("Edit…") { editing = trace.info }
             Button("Show Only This") { model.visible = [trace.id] }
+            Button("Export Impulse Response…") { model.exportRequest = ExportRequest(traces: [trace.id]) }
+                .disabled(trace.impulseResponse == nil)
             Menu("Move to Folder") {
                 Button("None (Top Level)") { model.move([trace.id], to: nil) }
                     .disabled(folderID(trace) == nil)

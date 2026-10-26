@@ -158,6 +158,7 @@ struct DistortionView: View {
             .chartLegend(.hidden)
             .frequencyDataTip(tips, unit: unit)
             .clipped()
+            .exportablePlot("Distortion")
             .frame(minHeight: 220, maxHeight: .infinity)
             legend(curves)
         }

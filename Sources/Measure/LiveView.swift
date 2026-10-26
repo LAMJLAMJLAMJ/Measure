@@ -263,6 +263,14 @@ extension AppModel {
         let responses = calibratedLiveCurves.map { FrequencyResponse(frequencies: $0.1.map(\.x), magnitude: $0.1.map(\.y)) }
         return responses.isEmpty ? nil : FrequencyResponse.average(responses, method: .power)
     }
+
+    /// What the live view's target sits on and Auto EQ fits: the live curves' average while there
+    /// are any, otherwise the selected ticked trace (or the first ticked one), with its calibration.
+    var liveFitResponse: FrequencyResponse? {
+        if let live = liveAverageResponse { return live }
+        let ticked = visibleTraces.filter(\.hasResponse)
+        return (ticked.first { $0.id == selection } ?? ticked.first).map { calibratedResponse($0) }
+    }
 }
 
 struct LiveView: View {
@@ -293,8 +301,12 @@ struct LiveView: View {
 
     private func controls(_ live: LiveAnalyzer) -> some View {
         @Bindable var live = live
+        // The controls wrap onto further lines when the window (or the Virtual EQ panel beside it)
+        // leaves too little width, instead of squeezing labels to a letter a line.
         return VStack(alignment: .leading, spacing: 6) {
-            HStack {
+            FlowLayout(spacing: 8, lineSpacing: 6) {
+                // Groups keep the builder short; the layout still places each control on its own.
+                Group {
                 Button(live.isRunning ? "Stop" : "Start") {
                     if live.isRunning { live.stop(model) } else { Task { await live.start(model) } }
                 }
@@ -312,7 +324,6 @@ struct LiveView: View {
                     Slider(value: $live.settings.level, in: -60...0, step: 1).frame(width: 120)
                     Text("\(Int(live.settings.level)) dBFS peak").monospacedDigit().frame(width: 100, alignment: .leading)
                 }
-                Spacer()
                 Button("Capture") { live.capture(model) }
                     .disabled(!live.isRunning || live.blocks == 0)
                     .help("Add each mic's current response to the list as an impulse response")
@@ -322,8 +333,8 @@ struct LiveView: View {
                         .toggleStyle(.button)
                         .help("Show the Virtual EQ panel, which applies to the live curves")
                 }
-            }
-            HStack {
+                }
+                Group {
                 Picker("FFT", selection: $live.settings.fftSize) {
                     ForEach([8192, 16_384, 32_768, 65_536], id: \.self) { n in
                         Text("\(n / 1024)k (\(String(format: "%.2f", Double(n) / model.settings.sampleRate)) s)").tag(n)
@@ -344,7 +355,9 @@ struct LiveView: View {
                     .disabled(live.blocks == 0)
                     .help("Line the reference up with each mic, from the peak of its impulse response")
                 Button("Reset") { live.clearDelays(); live.reset() }
-                Spacer()
+                }
+            }
+            HStack {
                 Text(statusText(live)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -400,8 +413,7 @@ struct LiveView: View {
         // The target sits on the live curves' average while measuring, otherwise on the selected trace.
         var targetPoints: [TargetPoint]?
         if showsEQ && showTarget {
-            let selected = shown.first { $0.0.id == model.selection } ?? shown.first
-            if let response = model.liveAverageResponse ?? selected.map({ model.calibratedResponse($0.0) }) {
+            if let response = model.liveFitResponse {
                 targetPoints = model.targetPoints(alignedTo: response)
             }
         }
@@ -459,6 +471,7 @@ struct LiveView: View {
         .chartLegend(.hidden)
         .frequencyDataTip(tips)
         .clipped()
+        .exportablePlot("Live response")
     }
 
     private func coherenceChart(_ live: LiveAnalyzer) -> some View {
@@ -504,6 +517,7 @@ struct LiveView: View {
         .chartYAxisLabel("degrees")
         .chartLegend(.hidden)
         .clipped()
+        .exportablePlot("Live phase")
     }
 
     private var frequencyAxis: some AxisContent {

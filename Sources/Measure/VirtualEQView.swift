@@ -38,7 +38,7 @@ struct VirtualEQPanel: View {
         if source == .crossSpectrum {
             let live = model.live
             return Target(title: "Live curves", filters: live.settings.eq ?? [], sampleRate: model.settings.sampleRate,
-                          color: .primary, response: model.liveAverageResponse, set: { live.settings.eq = $0.isEmpty ? nil : $0 }, addPrediction: nil)
+                          color: .primary, response: model.liveFitResponse, set: { live.settings.eq = $0.isEmpty ? nil : $0 }, addPrediction: nil)
         }
         guard let trace = model.selectedTrace, trace.hasResponse else { return nil }
         let id = trace.id

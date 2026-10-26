@@ -5,6 +5,12 @@ import MeasureAudio
 import MeasureDSP
 import Observation
 
+/// Traces chosen for the impulse response export sheet.
+struct ExportRequest: Identifiable {
+    let id = UUID()
+    let traces: [UUID]
+}
+
 /// A measurement microphone and its calibration, kept with the mic rather than with the input it uses.
 struct MicProfile: Codable, Identifiable, Hashable {
     var id = UUID()
@@ -491,6 +497,69 @@ final class AppModel {
             selection = selection ?? traces.last?.id
             status = nil
         }
+    }
+
+    // MARK: - Export
+
+    /// Impulse responses waiting for the export sheet.
+    var exportRequest: ExportRequest?
+
+    /// Opens the export sheet for the ticked impulse responses, or the selected one when none is ticked.
+    func requestImpulseExport() {
+        let ticked = traces.filter { visible.contains($0.id) && $0.impulseResponse != nil }.map(\.id)
+        let ids = ticked.isEmpty ? [selectedTrace].compactMap { $0?.impulseResponse == nil ? nil : $0?.id } : ticked
+        guard !ids.isEmpty else {
+            errorMessage = "Tick or select a measured impulse response to export."
+            return
+        }
+        exportRequest = ExportRequest(traces: ids)
+    }
+
+    /// Writes impulse responses as WAV files: each to its own file in the folder `url`, one to the file
+    /// `url`, or all as the channels of the one file `url` when `combine` is set.
+    func exportImpulseResponses(_ ids: [UUID], options: ImpulseExport, combine: Bool, to url: URL) {
+        let chosen = ids.compactMap { id in traces.first { $0.id == id && $0.impulseResponse != nil } }
+        guard let first = chosen.first else { return }
+        let trimmed = chosen.map { options.trimmed($0.impulseResponse!, onset: $0.onset, sampleRate: $0.info.sampleRate) }
+        var gains: [Double] = []
+        do {
+            if combine && chosen.count > 1 {
+                guard chosen.allSatisfy({ $0.info.sampleRate == first.info.sampleRate }) else {
+                    errorMessage = "The impulse responses have different sample rates, so they cannot share one file."
+                    return
+                }
+                // One gain for all, so the channels keep their relative levels; shorter ones are padded.
+                let n = trimmed.map(\.count).max() ?? 0
+                let padded = trimmed.map { $0 + [Double](repeating: 0, count: n - $0.count) }
+                let out = options.levelled(padded)
+                gains.append(out.gain)
+                try WAV.write(AudioData(sampleRate: first.info.sampleRate, channels: out.channels), to: url, format: options.format)
+            } else if chosen.count == 1 {
+                let out = options.levelled([trimmed[0]])
+                gains.append(out.gain)
+                try WAV.write(AudioData(sampleRate: first.info.sampleRate, mono: out.channels[0]), to: url, format: options.format)
+            } else {
+                var taken = Set(((try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []).map { $0.lowercased() })
+                for (trace, x) in zip(chosen, trimmed) {
+                    let name = ImpulseExport.fileName(trace.info.name, taken: taken)
+                    taken.insert(name.lowercased())
+                    let out = options.levelled([x])
+                    gains.append(out.gain)
+                    try WAV.write(AudioData(sampleRate: trace.info.sampleRate, mono: out.channels[0]),
+                                  to: url.appendingPathComponent(name), format: options.format)
+                }
+            }
+        } catch {
+            errorMessage = "Could not export: \(error.localizedDescription)"
+            return
+        }
+        let files = combine || chosen.count == 1 ? url.lastPathComponent : "\(chosen.count) files in \(url.lastPathComponent)"
+        var note = "Exported \(files)"
+        // Scaled down only to keep a fixed-point file from clipping, which the person did not ask for.
+        if options.normalizeTo == nil, let g = gains.min(), g < -0.05 {
+            note += String(format: ", scaled by %.1f dB to fit the format", g)
+        }
+        status = note
     }
 
     // MARK: - Measurement sets
