@@ -559,6 +559,7 @@ struct AlignmentView: View {
                 .chartYAxisLabel(etc ? "dB" : "")
                 .chartLegend(.hidden)
                 .clipped()
+                .exportablePlot("Alignment")
                 .frame(minHeight: 200, maxHeight: .infinity)
             }
             Text("The whole impulse responses after each delay, polarity and gain, and their sum (dashed), scaled to the largest. The vertical line is the reference trace's arrival.")
@@ -605,6 +606,7 @@ private struct AlignmentChart: View {
         .chartLegend(.hidden)
         .frequencyDataTip(tips, unit: unit)
         .clipped()
+        .exportablePlot("Alignment")
     }
 }
 #endif

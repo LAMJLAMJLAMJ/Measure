@@ -137,4 +137,20 @@ final class LiveLevelsTests: XCTestCase {
         XCTAssertEqual(SoundLevel.weightingDB(.a, at: 8000), -1.1, accuracy: 0.05)
         XCTAssertEqual(SoundLevel.weightingDB(.z, at: 50), 0)
     }
+
+    func testLevelLogCSV() {
+        // Three weightings; two seconds, at 0.01 mean square (-20 dB) and 0.1 (-10 dB).
+        let series = [[0.01, 0.1], [0.01, 0.1], [0.01, 0.1]]
+        let log = LevelLog(energy: series, fastMax: series, slow: series)
+        XCTAssertEqual(log.seconds, 2)
+        let start = Date(timeIntervalSince1970: 0)
+        let csv = LevelLog.csv([LevelLog.Column(name: "Mic, 1", offset: 100, unit: "dB SPL", log: log)], start: start)
+        let lines = csv.split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.count, 3)
+        XCTAssertTrue(lines[0].hasPrefix("Time,Elapsed s,\"Mic, 1 LAeq,1s (dB SPL)\""))
+        let row = lines[2].split(separator: ",").map(String.init)
+        XCTAssertEqual(row[1], "2")
+        XCTAssertEqual(row[2], "90.0")
+        XCTAssertEqual(row.count, 2 + 9)
+    }
 }

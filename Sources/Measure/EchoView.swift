@@ -115,6 +115,7 @@ struct EchoView: View {
         .chartYAxisLabel("EK")
         .chartLegend(.hidden)
         .clipped()
+        .exportablePlot("Echo")
     }
 
     /// Every echo of every trace in time order, and one line with the highest EK for a trace without any.

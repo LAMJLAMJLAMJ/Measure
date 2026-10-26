@@ -125,6 +125,7 @@ struct FrequencyResponseView: View {
                                   + (predicted.map { [TipSeries(id: "eq", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? [])
                                   + targetTip(targetPoints), zoom: $zoom)
                 .clipped()
+                .exportablePlot("Frequency response")
                 .zoomScrollBars($zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true, yShown: yShown)
             }
         }
@@ -201,6 +202,7 @@ struct PhaseView: View {
                 .frequencyDataTip(series.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) },
                                   unit: "°", zoom: $zoom)
                 .clipped()
+                .exportablePlot("Phase")
                 .zoomScrollBars($zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true)
                 Text("Phase within each trace's window. Shorten the window on the Impulse view to leave out reflections and clean it up.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -355,6 +357,7 @@ struct ImpulseView: View {
                     }
                 }
                 .clipped()
+                .exportablePlot("Impulse response")
                 .zoomScrollBars($zoom, xFull: xFull, yFull: yRange)
                 if let window {
                     WindowPreview(trace: reference, window: window)
@@ -555,6 +558,7 @@ struct WindowPreview: View {
         .chartYAxisLabel("dB")
         .chartLegend(.hidden)
         .clipped()
+        .exportablePlot("Window preview")
         .task(id: Key(trace: trace.id, window: window, smoothing: model.smoothing)) { await compute() }
     }
 
@@ -623,6 +627,7 @@ struct DecayView: View {
                 .chartForegroundStyleScale(["EDT": Color.secondary, "T20": Color.orange, "T30": Color.red])
                 .chartZoomDrag($zoom)
                 .clipped()
+                .exportablePlot("Reverb decay")
                 .zoomScrollBars($zoom, xFull: timeRange, yFull: levelRange)
                 .frame(minHeight: 80)
                 Text("Schroeder decay of \(trace.info.name) with the fitted lines (EDT 0 to -10 dB, T20 -5 to -25 dB, T30 -5 to -35 dB). The curve ends where the decay meets the noise. Drag across the chart to zoom in.")
@@ -863,6 +868,7 @@ struct SpectrogramView: View {
                     if let grid, computedFor == key(trace) {
                         if mode == .spectrogram {
                             Heatmap(grid: grid, low: lowFrequency, high: highFrequency)
+                                .exportablePlot("Spectrogram")
                         } else { Waterfall(grid: grid) }
                     } else {
                         ProgressView("Computing…").frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1087,6 +1093,7 @@ struct Waterfall: View {
         }
         .chartYAxisLabel("dB")
         .clipped()
+        .exportablePlot("Waterfall")
         .overlay(alignment: .topTrailing) { colourBar.padding(.top, 4).padding(.trailing, 40) }
     }
 

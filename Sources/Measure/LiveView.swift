@@ -459,6 +459,7 @@ struct LiveView: View {
         .chartLegend(.hidden)
         .frequencyDataTip(tips)
         .clipped()
+        .exportablePlot("Live response")
     }
 
     private func coherenceChart(_ live: LiveAnalyzer) -> some View {
@@ -504,6 +505,7 @@ struct LiveView: View {
         .chartYAxisLabel("degrees")
         .chartLegend(.hidden)
         .clipped()
+        .exportablePlot("Live phase")
     }
 
     private var frequencyAxis: some AxisContent {

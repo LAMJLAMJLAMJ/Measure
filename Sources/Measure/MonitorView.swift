@@ -1,7 +1,9 @@
 #if os(macOS)
+import AppKit
 import Charts
 import MeasureDSP
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Colours of the SPL meters, also used for their lines in the history.
 private let meterColors: [Color] = [.orange, .cyan, .pink, .yellow]
@@ -53,6 +55,9 @@ struct SPLView: View {
                     Text("All").tag(0)
                 }
                 .fixedSize()
+                Button("Export Log…") { exportLog(monitor) }
+                    .disabled(monitor.snapshot.seconds == 0)
+                    .help("Save every mic's levels second by second as CSV: LAeq, LAFmax and LAS over each second, and the same for C and Z, with calibrations and offsets applied")
                 Spacer()
                 Text(monitor.isRunning ? "Running \(elapsedText(monitor.snapshot.seconds))" : "Stopped. Press Start in the toolbar to listen on the mics from Measurement Setup.")
                     .font(.callout).foregroundStyle(.secondary).monospacedDigit()
@@ -62,6 +67,24 @@ struct SPLView: View {
             MicOffsetsRow()
             LevelHistoryChart()
             StatisticsRow()
+        }
+    }
+}
+
+extension SPLView {
+    private func exportLog(_ monitor: MonitorAnalyzer) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HHmm"
+        panel.nameFieldStringValue = "SPL log \(formatter.string(from: monitor.startDate ?? Date())).csv"
+        panel.message = "A row per second since monitoring started or was reset"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try monitor.logCSV(model).write(to: url, atomically: true, encoding: .utf8)
+            model.status = "Saved the SPL log as \(url.lastPathComponent)"
+        } catch {
+            model.errorMessage = "Could not save the SPL log: \(error.localizedDescription)"
         }
     }
 }
@@ -283,6 +306,7 @@ struct LevelHistoryChart: View {
             .chartYScale(domain: low...max(high, low + 10))
             .chartYAxisLabel("dB")
             .chartLegend(.hidden)
+            .exportablePlot("SPL history")
         }
     }
 
@@ -488,6 +512,7 @@ struct RTAView: View {
         .chartXAxisLabel("Hz")
         .chartYAxisLabel("dB")
         .clipped()
+        .exportablePlot("RTA")
     }
 }
 #endif
