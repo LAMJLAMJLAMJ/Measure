@@ -1,8 +1,8 @@
 // swift-tools-version: 5.9
 
 // The iPad remote for Measure. Open this folder in Xcode (or Swift Playgrounds on a Mac), choose
-// your iPad as the run destination and press Run. The screens live in the main package's
-// MeasureRemoteUI library, two folders up.
+// your iPad as the run destination and press Run. Shared/ is a copy of Sources/MeasureRemote and
+// Sources/MeasureRemoteUI made by scripts/sync-remote-app.sh: change those, not the copies.
 
 import AppleProductTypes
 import PackageDescription
@@ -40,16 +40,13 @@ let package = Package(
             ]
         )
     ],
-    dependencies: [
-        .package(name: "Measure", path: "../..")
-    ],
     targets: [
         .executableTarget(
             name: "AppModule",
-            dependencies: [
-                .product(name: "MeasureRemoteUI", package: "Measure")
-            ],
-            path: "."
-        )
+            dependencies: ["MeasureRemoteUI"],
+            path: "App"
+        ),
+        .target(name: "MeasureRemote", path: "Shared/MeasureRemote"),
+        .target(name: "MeasureRemoteUI", dependencies: ["MeasureRemote"], path: "Shared/MeasureRemoteUI")
     ]
 )

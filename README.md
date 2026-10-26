@@ -13,7 +13,7 @@ The first prototype covers sweep measurement and ISO 3382 room acoustics. The fa
 | `Sources/Measure` | The Mac app (SwiftUI). |
 | `Sources/MeasureRemote` | The messages and the Bonjour link between the Mac app and the iPad remote. |
 | `Sources/MeasureRemoteUI` | The iPad remote's screens (SwiftUI). |
-| `RemoteApp/Measure Remote.swiftpm` | The iPad app itself: open it in Xcode to install it on an iPad. |
+| `RemoteApp/Measure Remote.swiftpm` | The iPad app itself: open it in Xcode to install it on an iPad. Its `Shared` folder is a copy of the two folders above, made by `scripts/sync-remote-app.sh`. |
 | `Sources/measure-cli` | A command-line tool for measuring, analysing files and making sweeps before the app exists. |
 | `Tests/MeasureDSPTests` | Tests on generated signals with known answers. Comparisons with MATLAB and the measurement database come later. |
 

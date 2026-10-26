@@ -19,6 +19,8 @@ jobs:
         run: ./scripts/build-app.sh
       - name: Build the iPad remote's screens for iOS
         run: xcodebuild -scheme MeasureRemoteUI -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -quiet build
+      - name: Check the iPad app's copy of the remote code is up to date
+        run: ./scripts/sync-remote-app.sh && git diff --exit-code -- RemoteApp && test -z "$(git status --porcelain -- RemoteApp)"
       - name: Build the iPad remote app
         working-directory: RemoteApp/Measure Remote.swiftpm
         run: xcodebuild -scheme 'Measure Remote' -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -quiet build
