@@ -206,15 +206,18 @@ private struct ZoomScrollBar: View {
 
     var body: some View {
         GeometryReader { geo in
-            let length = max(vertical ? geo.size.height : geo.size.width, 1)
+            let length = Double(max(vertical ? geo.size.height : geo.size.width, 1))
             let a = fraction(shown.lowerBound), b = fraction(shown.upperBound)
             if b - a < 0.999 {
-                let thumb = max(16, (b - a) * length)
-                let start = min(vertical ? (1 - b) * length : a * length, length - thumb)
+                let thumb = CGFloat(max(16, (b - a) * length))
+                let start = CGFloat(min(vertical ? (1 - b) * length : a * length, length - Double(thumb)))
                 ZStack(alignment: .topLeading) {
                     Capsule().fill(Color.secondary.opacity(0.12))
                         .contentShape(Rectangle())
-                        .onTapGesture { p in centre(at: vertical ? 1 - p.y / length : p.x / length) }
+                        .onTapGesture { p in
+                            let along = Double(vertical ? p.y : p.x) / length
+                            centre(at: vertical ? 1 - along : along)
+                        }
                     Capsule().fill(Color.secondary.opacity(dragStart == nil ? 0.45 : 0.7))
                         .frame(width: vertical ? geo.size.width : thumb, height: vertical ? thumb : geo.size.height)
                         .offset(x: vertical ? 0 : start, y: vertical ? start : 0)
@@ -222,7 +225,7 @@ private struct ZoomScrollBar: View {
                             .onChanged { value in
                                 let from = dragStart ?? shown
                                 dragStart = from
-                                let moved = vertical ? -value.translation.height : value.translation.width
+                                let moved = Double(vertical ? -value.translation.height : value.translation.width)
                                 scroll(shifted(from, by: moved / length))
                             }
                             .onEnded { _ in dragStart = nil })
