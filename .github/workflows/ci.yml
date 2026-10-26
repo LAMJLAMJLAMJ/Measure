@@ -17,6 +17,11 @@ jobs:
         run: swift test -c release
       - name: Bundle the app
         run: ./scripts/build-app.sh
+      - name: Build the iPad remote's screens for iOS
+        run: xcodebuild -scheme MeasureRemoteUI -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -quiet build
+      - name: Build the iPad remote app
+        working-directory: RemoteApp/Measure Remote.swiftpm
+        run: xcodebuild -scheme 'Measure Remote' -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -quiet build
 
   linux:
     name: Build and test (Linux, portable FFT)

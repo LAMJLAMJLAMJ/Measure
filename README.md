@@ -11,6 +11,9 @@ The first prototype covers sweep measurement and ISO 3382 room acoustics. The fa
 | `Sources/MeasureDSP` | The analysis core. It has no user interface and no audio hardware code, so it can be tested on its own. |
 | `Sources/MeasureAudio` | Core Audio device list and sweep playback and recording (macOS only). |
 | `Sources/Measure` | The Mac app (SwiftUI). |
+| `Sources/MeasureRemote` | The messages and the Bonjour link between the Mac app and the iPad remote. |
+| `Sources/MeasureRemoteUI` | The iPad remote's screens (SwiftUI). |
+| `RemoteApp/Measure Remote.swiftpm` | The iPad app itself: open it in Xcode to install it on an iPad. |
 | `Sources/measure-cli` | A command-line tool for measuring, analysing files and making sweeps before the app exists. |
 | `Tests/MeasureDSPTests` | Tests on generated signals with known answers. Comparisons with MATLAB and the measurement database come later. |
 
@@ -79,6 +82,22 @@ open build/Measure.app
   - **Live monitoring:** press Start in the toolbar to listen on every mic input from Measurement Setup (nothing is played; it stops the sweep and the cross-spectrum analyser, and they stop it). Levels are dB SPL for a mic with an SPL offset (Setup > Calibrate…), otherwise dB re full scale. Reset starts the meters, maxima, averages and history again.
     - **SPL:** up to four meters, as in Smaart SPL. Each has its own mic, A, C or Z weighting, and average: Fast (125 ms), Slow (1 s), a moving Leq over the last 1, 5, 10 or 15 minutes (over the time so far until the window has filled), or the Leq since the start. Each shows its level, its maximum (LAFmax and so on for Fast and Slow, the highest value of the moving Leq for the others), a bar, and "Overload" when the input comes within 1 dB of full scale. An A limit and a C limit turn A- or C-weighted meters above them red and are drawn on the history (red and purple). A mic offset for each mic (dB) is added to its levels on top of its calibration: for a mic without a calibrator reading, or to refer a level to another place; a mic with only an offset reads in dB rather than dB SPL. The history plots each meter's level once a second (the highest Fast level in each second, the Slow level at its end, or the Leq ending with it) over the last 5 or 15 minutes, 1 or 4 hours, or everything, with Max, L10, L50 and L90 of one meter below. The weightings follow IEC 61672-1 (as in Levels); the broadband meters use the mic's SPL offset but not its calibration curve.
     - **RTA:** the spectrum of one mic in 1/1, 1/3, 1/6, 1/12 or 1/24 octave bands (IEC 61260-1 base-ten), A, C or Z weighted, with the mic's calibration curve, Fast, Slow or running average, and peak hold. The bands come from an FFT of the latest block (8k to 64k, Hann window); each bin is shared between the bands it overlaps, so a longer block resolves the low bands better but reacts more slowly. The total level and the loudest band are shown above.
+
+## iPad remote
+
+Measure Remote runs on an iPad (or iPhone) on the same Wi-Fi as the Mac. From it you can name the position and start a sweep, see the latest or a chosen measurement's frequency response, start and stop the live mode and see its curves, start and stop the signal generator and set its level, and start, stop and reset SPL monitoring and read the meters.
+
+On the Mac, turn on iPad Remote (the iPad button in the toolbar, or Measurement > iPad Remote). The Mac is then advertised on the local network and the remote finds it on its own; with more than one Mac it asks which. The remote's name appears at the bottom right of the Mac's window while it is connected.
+
+To install the remote on your iPad (free, with your own Apple ID):
+
+1. In Xcode on the Mac, add your Apple ID under Xcode > Settings > Accounts. This gives you a Personal Team.
+2. Connect the iPad by cable the first time and tap Trust on it. Turn on Settings > Privacy & Security > Developer Mode on the iPad (it restarts). Later, Xcode can install over Wi-Fi.
+3. Open `RemoteApp/Measure Remote.swiftpm` in Xcode, choose the iPad as the run destination, choose your team under Signing & Capabilities for the Measure Remote target, and press Run.
+4. If the iPad says the developer is not trusted, allow it under Settings > General > VPN & Device Management.
+5. Allow local network access when the iPad asks, and when the Mac asks (System Settings > Privacy & Security > Local Network). If the Mac's firewall asks, allow incoming connections for Measure.
+
+An app installed with a free Personal Team stops opening after 7 days; press Run in Xcode again to renew it. After pulling changes, rebuild the Mac app and press Run again for the iPad.
 
 ## Measuring from Terminal
 

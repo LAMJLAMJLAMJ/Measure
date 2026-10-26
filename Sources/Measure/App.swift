@@ -62,6 +62,8 @@ struct MeasureApp: App {
                     .keyboardShortcut("c", modifiers: [.command, .option])
                 Button("Save Plot as PNG…") { PlotCapture.save() }
                 Divider()
+                Toggle("iPad Remote", isOn: Binding(get: { model.remote.enabled }, set: { model.remote.enabled = $0 }))
+                Divider()
                 Button("Show Project in Finder") { NSWorkspace.shared.activateFileViewerSelecting([model.projectFolder]) }
             }
         }

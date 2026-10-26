@@ -48,6 +48,9 @@ struct ContentView: View {
                 }
                 .help("Open the signal generator: a test signal on any outputs, with meters for it and every mic input")
             }
+            ToolbarItem(placement: .navigation) {
+                RemoteToggle()
+            }
             ToolbarItem(placement: .principal) {
                 Picker("Mode", selection: $mode) {
                     ForEach(AppMode.allCases) { Text($0.rawValue).tag($0) }
@@ -224,6 +227,11 @@ struct StatusBar: View {
             } else {
                 Text(model.status ?? setupSummary).foregroundStyle(.secondary)
                 Spacer()
+            }
+            if !model.remote.remotes.isEmpty {
+                Label(model.remote.remotes.joined(separator: ", "), systemImage: "ipad.landscape")
+                    .foregroundStyle(.secondary)
+                    .help("Connected remotes")
             }
         }
         .font(.callout)

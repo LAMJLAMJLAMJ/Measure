@@ -101,6 +101,8 @@ final class AppModel {
     let monitor: MonitorAnalyzer
     /// The signal generator window's test signal and meters.
     let generator: GeneratorModel
+    /// The iPad remote's link to this Mac.
+    let remote: RemoteHost
 
     var isMeasuring = false
     var status: String?
@@ -122,8 +124,10 @@ final class AppModel {
         live = LiveAnalyzer()
         monitor = MonitorAnalyzer()
         generator = GeneratorModel()
+        remote = RemoteHost()
         refreshDevices()
         openProject(projectFolder)
+        remote.attach(self)
     }
 
     var selectedTrace: Trace? { traces.first { $0.id == selection } }
