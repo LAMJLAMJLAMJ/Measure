@@ -1,4 +1,5 @@
 #if os(macOS)
+import MeasureDSP
 import SwiftUI
 
 struct ContentView: View {
@@ -224,6 +225,13 @@ struct StatusBar: View {
                 Text(error).lineLimit(2)
                 Spacer()
                 Button("Dismiss") { model.errorMessage = nil }.buttonStyle(.borderless)
+            } else if let warning = model.measurementWarning, !model.isMeasuring {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(warning.severe ? Color.red : Color.orange)
+                Text(warning.text).lineLimit(4)
+                    .help(warning.text)
+                Spacer()
+                Button("Dismiss") { model.measurementWarning = nil }.buttonStyle(.borderless)
             } else {
                 Text(model.status ?? setupSummary).foregroundStyle(.secondary)
                 Spacer()
@@ -293,6 +301,17 @@ struct TraceList: View {
     }
 
     /// One measurement: tick to show it, its colour, name and details. Drag it onto a folder to file it.
+    /// A warning triangle for a measurement that clipped or has too little range above the noise.
+    private func qualityBadge(_ issues: [MeasurementQuality.Issue]) -> some View {
+        let severe = issues.contains(where: \.isSevere)
+        return HStack {
+            Spacer(minLength: 0)
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(severe ? Color.red : Color.orange)
+                .help(issues.map(\.message).joined(separator: "\n"))
+        }
+    }
+
     private func row(_ trace: Trace) -> some View {
         HStack(spacing: 8) {
             Toggle("", isOn: Binding(
@@ -328,6 +347,7 @@ struct TraceList: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(3)
                 }
             }
+            if !trace.qualityIssues.isEmpty { qualityBadge(trace.qualityIssues) }
         }
         .help(trace.info.notes)
         .tag(trace.id)

@@ -69,6 +69,32 @@ struct STISettings: Codable, Equatable {
     }
 }
 
+/// What went wrong with a sweep, for the status bar.
+struct MeasurementWarning: Equatable {
+    var text: String
+    /// Clipping, a level too low to use, or too little range even for T20: measure again.
+    var severe: Bool
+
+    /// The problems of the traces of one sweep, or nil when there are none.
+    init?(_ traces: [Trace], loopbackPeak: Double?) {
+        var lines: [String] = []
+        var severe = false
+        if let loop = loopbackPeak, loop > MeasurementQuality.clipLevel {
+            let issue = MeasurementQuality.Issue.loopbackClipped(peak: loop)
+            lines.append(issue.message)
+            severe = true
+        }
+        for (i, trace) in traces.enumerated() where !trace.qualityIssues.isEmpty {
+            let prefix = traces.count > 1 ? "Mic \(i + 1): " : ""
+            lines.append(prefix + trace.qualityIssues.map(\.message).joined(separator: " "))
+            severe = severe || trace.qualityIssues.contains(where: \.isSevere)
+        }
+        guard !lines.isEmpty else { return nil }
+        text = lines.joined(separator: "\n")
+        self.severe = severe
+    }
+}
+
 struct SetupError: Error, CustomStringConvertible {
     let message: String
     var description: String { message }
@@ -107,6 +133,9 @@ final class AppModel {
     var isMeasuring = false
     var status: String?
     var errorMessage: String?
+    /// Problems found in the last sweep (clipping, low level, low signal-to-noise), shown in the status
+    /// bar until dismissed or the next measurement.
+    var measurementWarning: MeasurementWarning?
 
     @ObservationIgnored private var calibrations: [String: FrequencyResponse] = [:]
     @ObservationIgnored private var loadTask: Task<Void, Never>?
@@ -164,6 +193,7 @@ final class AppModel {
         let s = settings
         isMeasuring = true
         errorMessage = nil
+        measurementWarning = nil
         status = "Measuring…"
         defer { isMeasuring = false }
 
@@ -218,21 +248,13 @@ final class AppModel {
 
             for trace in made { add(trace) }
             selection = made.first?.id
-            let peaks = made.compactMap(\.info.peakLevel)
-            if let loop = loopbackPeak, loop > -1 {
-                status = "Done, but the loopback input clipped (peak \(String(format: "%.1f", loop)) dBFS). Lower the level or the loopback gain."
-            } else if let worst = peaks.max(), worst > -1 {
-                status = "Done, but a mic clipped (peak \(String(format: "%.1f", worst)) dBFS). Lower the level."
-            } else if let quiet = peaks.min(), quiet < -50 {
-                status = "Done, but the level was low (peak \(String(format: "%.1f", quiet)) dBFS). Raise the level or gain."
-            } else {
-                var text = "Measured \(made.count) mic\(made.count == 1 ? "" : "s")."
-                if let ppm = recording.driftPPM { text += String(format: " Input and output clocks differ by %.1f ppm (corrected).", ppm) }
-                if recording.separateDevices && recording.loopback == nil {
-                    text += " Separate devices without a loopback: arrival times are approximate."
-                }
-                status = text
+            measurementWarning = MeasurementWarning(made, loopbackPeak: loopbackPeak)
+            var text = "Measured \(made.count) mic\(made.count == 1 ? "" : "s")."
+            if let ppm = recording.driftPPM { text += String(format: " Input and output clocks differ by %.1f ppm (corrected).", ppm) }
+            if recording.separateDevices && recording.loopback == nil {
+                text += " Separate devices without a loopback: arrival times are approximate."
             }
+            status = text
         } catch {
             status = nil
             errorMessage = "\(error)"

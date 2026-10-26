@@ -126,7 +126,7 @@ final class RemoteHost {
         var s = RemoteState()
         s.projectName = model.projectFolder.deletingPathExtension().lastPathComponent
         s.status = model.status ?? ""
-        s.error = model.errorMessage ?? model.generator.errorMessage
+        s.error = model.errorMessage ?? model.generator.errorMessage ?? model.measurementWarning?.text
         s.isMeasuring = model.isMeasuring
         s.position = model.settings.position
 

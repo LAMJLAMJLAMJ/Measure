@@ -67,6 +67,8 @@ struct Trace: Identifiable {
 
     // Derived once, when the trace is made.
     let acoustics: RoomAcousticsResult?
+    /// Clipping, low level or too little range above the noise for the reverberation times.
+    let qualityIssues: [MeasurementQuality.Issue]
     /// Frequency response within the window (or as imported).
     private(set) var rawResponse: FrequencyResponse
     /// Energy-time curve in dB, one value per sample.
@@ -109,6 +111,9 @@ struct Trace: Identifiable {
         let fs = info.sampleRate
         onset = RoomAcoustics.onsetIndex(impulseResponse)
         acoustics = RoomAcoustics.analyze(impulseResponse: impulseResponse, sampleRate: fs)
+        // Only sweeps measured here: an imported response may have been trimmed before its noise.
+        qualityIssues = info.source == .sweep
+            ? MeasurementQuality.check(micPeak: info.peakLevel, acoustics: acoustics) : []
         (rawResponse, responseDelay) = Trace.windowedResponse(impulseResponse, onset: onset, sampleRate: fs,
                                                               window: info.window ?? .standard)
         energyTime = TimeFrequency.energyTimeCurve(impulseResponse)
@@ -120,6 +125,7 @@ struct Trace: Identifiable {
         self.importedResponse = frequencyResponse
         self.recording = nil
         acoustics = nil
+        qualityIssues = []
         rawResponse = frequencyResponse
         energyTime = []
         onset = 0
@@ -132,6 +138,7 @@ struct Trace: Identifiable {
         self.importedResponse = nil
         self.recording = recording
         acoustics = nil
+        qualityIssues = []
         rawResponse = FrequencyResponse(frequencies: [], magnitude: [])
         energyTime = []
         onset = 0
