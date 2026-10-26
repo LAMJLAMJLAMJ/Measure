@@ -146,4 +146,33 @@ struct ZoomControls: View {
         }
     }
 }
+
+/// Drag across a chart to zoom into that part of it, for a chart with no other pointer interaction.
+private struct ZoomDrag: ViewModifier {
+    @Binding var zoom: ChartZoom
+    @State private var box: ZoomBox?
+
+    func body(content: Content) -> some View {
+        content.chartOverlay { proxy in
+            GeometryReader { geo in
+                if let anchor = proxy.plotFrame {
+                    let plot = geo[anchor]
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 4)
+                            .onChanged { box = ZoomBox(start: $0.startLocation, end: $0.location) }
+                            .onEnded { value in
+                                ZoomBox(start: value.startLocation, end: value.location).apply(to: &zoom, proxy: proxy, plot: plot)
+                                box = nil
+                            })
+                    if let box { box.view(in: plot) }
+                }
+            }
+        }
+    }
+}
+
+extension View {
+    /// Lets a drag across the chart zoom into it.
+    func chartZoomDrag(_ zoom: Binding<ChartZoom>) -> some View { modifier(ZoomDrag(zoom: zoom)) }
+}
 #endif

@@ -574,11 +574,17 @@ struct WindowPreview: View {
 struct DecayView: View {
     @Environment(AppModel.self) private var model
     @State private var bandIndex = -1
+    @State private var zoom = ChartZoom()
+    private let levelRange: ClosedRange<Double> = -80...0
 
     var body: some View {
         if let trace = model.selectedTrace, let acoustics = trace.acoustics {
             let params = bandIndex >= 0 && bandIndex < acoustics.bands.count ? acoustics.bands[bandIndex] : acoustics.broadband
             let fs = trace.info.sampleRate
+            let timeRange = 0...max(Double(params.decayCurve.count) / fs * 1000, 1)
+            let shown = zoom.xDomain(timeRange)
+            let first = min(max(0, Int((shown.lowerBound / 1000 * fs).rounded(.down))), params.decayCurve.count)
+            let last = max(first, min(params.decayCurve.count, Int((shown.upperBound / 1000 * fs).rounded(.up)) + 1))
             VStack(alignment: .leading) {
                 HStack {
                     Picker("Band", selection: $bandIndex) {
@@ -586,11 +592,12 @@ struct DecayView: View {
                         ForEach(acoustics.bands.indices, id: \.self) { i in Text("\(acoustics.bands[i].band!.description) Hz").tag(i) }
                     }
                     .frame(width: 200)
+                    ZoomControls(zoom: $zoom, xFull: timeRange, yFull: levelRange)
                     Spacer()
                     Text(summary(params)).font(.callout.monospacedDigit())
                 }
                 Chart {
-                    ForEach(ChartData.points(params.decayCurve, range: 0..<params.decayCurve.count, zero: 0, sampleRate: fs, envelope: true)) { p in
+                    ForEach(ChartData.points(params.decayCurve, range: first..<last, zero: 0, sampleRate: fs, envelope: true)) { p in
                         LineMark(x: .value("Time", p.x), y: .value("Level", p.y), series: .value("Curve", "Schroeder"))
                             .foregroundStyle(trace.color)
                     }
@@ -602,12 +609,14 @@ struct DecayView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 4]))
                         .annotation(position: .top, alignment: .trailing) { Text("noise floor").font(.caption2).foregroundStyle(.secondary) }
                 }
-                .chartYScale(domain: -80...0)
+                .chartXScale(domain: shown)
+                .chartYScale(domain: zoom.yDomain(levelRange))
                 .chartXAxisLabel("ms from onset")
                 .chartYAxisLabel("dB")
                 .chartForegroundStyleScale(["EDT": Color.secondary, "T20": Color.orange, "T30": Color.red])
+                .chartZoomDrag($zoom)
                 .clipped()
-                Text("Schroeder decay of \(trace.info.name) with the fitted lines (EDT 0 to -10 dB, T20 -5 to -25 dB, T30 -5 to -35 dB). The curve ends where the decay meets the noise.")
+                Text("Schroeder decay of \(trace.info.name) with the fitted lines (EDT 0 to -10 dB, T20 -5 to -25 dB, T30 -5 to -35 dB). The curve ends where the decay meets the noise. Drag across the chart to zoom in.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         } else {
