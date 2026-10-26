@@ -823,6 +823,10 @@ struct SpectrogramView: View {
     @State private var mode: Mode = .spectrogram
     /// Seconds analysed from just before the direct sound.
     @AppStorage("spectrogram.length") private var length = 1.0
+    /// The waterfall's window length and the time between its slices, ms, and how many slices.
+    @AppStorage("waterfall.window") private var waterfallWindow = 300.0
+    @AppStorage("waterfall.step") private var waterfallStep = 10.0
+    @AppStorage("waterfall.slices") private var waterfallSlices = 25
     @State private var grid: TimeFrequency.Grid?
     @State private var computedFor: String = ""
 
@@ -839,6 +843,8 @@ struct SpectrogramView: View {
                         .frame(width: 70)
                         .help("How much of the impulse response to analyse, in seconds from just before the direct sound: 0.02 to 60")
                     Text("s")
+                } else {
+                    waterfallControls
                 }
             }
             if let trace = model.selectedTrace, trace.impulseResponse != nil {
@@ -852,7 +858,7 @@ struct SpectrogramView: View {
                 .task(id: key(trace)) { await compute(trace) }
                 Text(mode == .spectrogram
                      ? "Level over time and frequency for \(lengthText) from 5 ms before the direct sound (\(TimeFrequencySettings(length: length, sampleRate: trace.info.sampleRate).windowSize)-point Hann window)."
-                     : "Cumulative spectral decay: the spectrum from successively later start times, 10 ms apart, 300 ms windows.")
+                     : "Cumulative spectral decay: the spectrum from successively later start times, \(number(waterfallStep)) ms apart, \(number(waterfallWindow)) ms windows, coloured from the first slice (dark blue) to the last (yellow).")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 EmptyState(text: "Select a measured or imported impulse response")
@@ -860,13 +866,41 @@ struct SpectrogramView: View {
         }
     }
 
-    private func key(_ trace: Trace) -> String { "\(trace.id)-\(mode.rawValue)-\(mode == .spectrogram ? length : 0)" }
+    private func key(_ trace: Trace) -> String {
+        let settings = mode == .spectrogram ? "\(length)" : "\(waterfallWindow)-\(waterfallStep)-\(waterfallSlices)"
+        return "\(trace.id)-\(mode.rawValue)-\(settings)"
+    }
+
+    private func number(_ v: Double) -> String { String(format: "%g", v) }
+
+    private var waterfallControls: some View {
+        HStack(spacing: 6) {
+            Text("Window")
+            TextField("Window", value: Binding(get: { waterfallWindow }, set: { waterfallWindow = min(max($0, 2), 2000) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 60)
+                .help("Length of each slice's window, ms: 2 to 2000. Longer windows resolve lower frequencies.")
+            Text("ms   Step")
+            TextField("Step", value: Binding(get: { waterfallStep }, set: { waterfallStep = min(max($0, 0.1), 500) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 60)
+                .help("Time between the start of one slice and the next, ms: 0.1 to 500")
+            Text("ms   Slices")
+            TextField("Slices", value: Binding(get: { waterfallSlices }, set: { waterfallSlices = min(max($0, 2), 100) }),
+                      format: .number)
+                .frame(width: 45)
+                .help("How many slices: 2 to 100")
+        }
+        .textFieldStyle(.roundedBorder)
+        .fixedSize()
+    }
 
     private var lengthText: String { length == 1 ? "the first second" : String(format: "%g s", length) }
 
     private func compute(_ trace: Trace) async {
         guard let ir = trace.impulseResponse else { return }
         let fs = trace.info.sampleRate, onset = trace.onset, mode = mode, k = key(trace), length = length
+        let window = waterfallWindow / 1000, step = waterfallStep / 1000, slices = waterfallSlices
         let result = await Task.detached(priority: .userInitiated) { () -> TimeFrequency.Grid in
             let start = max(0, onset - Int(0.005 * fs))
             if mode == .spectrogram {
@@ -874,7 +908,7 @@ struct SpectrogramView: View {
                 let slice = Array(ir[start..<min(ir.count, start + Int(length * fs))])
                 return TimeFrequency.spectrogram(slice, sampleRate: fs, windowSize: settings.windowSize, hop: settings.hop)
             }
-            return TimeFrequency.waterfall(ir, sampleRate: fs, start: start, windowLength: 0.3, slices: 25, step: 0.01)
+            return TimeFrequency.waterfall(ir, sampleRate: fs, start: start, windowLength: window, slices: slices, step: step)
         }.value
         grid = result
         computedFor = k
@@ -959,7 +993,7 @@ struct Waterfall: View {
                 let i = slice.0
                 ForEach(slice.1) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Slice", i))
-                        .foregroundStyle(Color.accentColor.opacity(1 - 0.85 * Double(i) / Double(max(1, slices.count - 1))))
+                        .foregroundStyle(parula(Double(i) / Double(max(1, slices.count - 1))))
                         .lineStyle(StrokeStyle(lineWidth: 1))
                 }
             }
@@ -974,6 +1008,35 @@ struct Waterfall: View {
         }
         .chartYAxisLabel("dB")
         .clipped()
+        .overlay(alignment: .topTrailing) { colourBar.padding(.top, 4).padding(.trailing, 40) }
     }
+
+    /// The slices' colours from first to last, with their start times.
+    private var colourBar: some View {
+        HStack(spacing: 4) {
+            Text("0 ms").font(.caption2)
+            LinearGradient(colors: (0...8).map { parula(Double($0) / 8) }, startPoint: .leading, endPoint: .trailing)
+                .frame(width: 90, height: 8)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+            Text("\(Int(((grid.times.last ?? 0) * 1000).rounded())) ms").font(.caption2)
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 4).fill(.regularMaterial))
+    }
+}
+
+/// The parula colour map (MATLAB's default), from dark blue at 0 through teal and green to yellow at 1:
+/// ten samples of it, interpolated linearly.
+func parula(_ t: Double) -> Color {
+    let stops: [(Double, Double, Double)] = [
+        (0.2422, 0.1504, 0.6603), (0.2803, 0.2782, 0.9221), (0.2440, 0.4358, 0.9988), (0.1540, 0.5902, 0.9218),
+        (0.0297, 0.7082, 0.8163), (0.1938, 0.7758, 0.6251), (0.5044, 0.7993, 0.3480), (0.8634, 0.7406, 0.1596),
+        (0.9892, 0.8136, 0.1885), (0.9769, 0.9839, 0.0805),
+    ]
+    let x = min(max(t, 0), 1) * Double(stops.count - 1)
+    let i = min(Int(x), stops.count - 2)
+    let f = x - Double(i)
+    let a = stops[i], b = stops[i + 1]
+    return Color(red: a.0 + (b.0 - a.0) * f, green: a.1 + (b.1 - a.1) * f, blue: a.2 + (b.2 - a.2) * f)
 }
 #endif
