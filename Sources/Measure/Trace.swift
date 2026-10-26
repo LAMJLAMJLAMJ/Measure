@@ -44,6 +44,15 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     var eq: [EQFilter]?
     /// Harmonic distortion separated from the sweep recording. Only for sweeps measured by this app.
     var distortion: HarmonicDistortion?
+    /// The folder the trace is in, in the list. Nil at the top level.
+    var folder: UUID?
+}
+
+/// A folder in the trace list, to group measurements. Only a label: the files stay where they are.
+struct TraceFolder: Codable, Identifiable, Hashable {
+    var id = UUID()
+    var name: String
+    var expanded = true
 }
 
 /// One measurement in the trace library: an impulse response, an imported frequency response or a plain
@@ -278,6 +287,19 @@ enum ProjectStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(info).write(to: folder.appendingPathComponent(info.id.uuidString).appendingPathExtension("json"))
+    }
+
+    /// The project's list folders, in folders.json (which the trace loader skips: it is not a trace).
+    static func saveFolders(_ folders: [TraceFolder], in folder: URL) throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(folders).write(to: folder.appendingPathComponent("folders.json"))
+    }
+
+    static func loadFolders(from folder: URL) -> [TraceFolder] {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent("folders.json")) else { return [] }
+        return (try? JSONDecoder().decode([TraceFolder].self, from: data)) ?? []
     }
 
     static func delete(_ id: UUID, in folder: URL) {

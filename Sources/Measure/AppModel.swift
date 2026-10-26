@@ -70,6 +70,8 @@ struct SetupError: Error, CustomStringConvertible {
 @Observable @MainActor
 final class AppModel {
     var traces: [Trace] = []
+    /// Folders in the trace list, top first.
+    var folders: [TraceFolder] = []
     /// Traces drawn in the views (the overlay).
     var visible: Set<UUID> = []
     /// The trace whose details (acoustics table, decay) are shown.
@@ -415,6 +417,49 @@ final class AppModel {
         }
     }
 
+    // MARK: - Folders
+
+    /// Adds a folder at the top of the list and returns its id.
+    @discardableResult
+    func addFolder(named name: String = "New Folder") -> UUID {
+        let f = TraceFolder(name: name)
+        folders.insert(f, at: 0)
+        saveFolders()
+        return f.id
+    }
+
+    func renameFolder(_ id: UUID, to name: String) {
+        guard let i = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[i].name = name
+        saveFolders()
+    }
+
+    func setExpanded(_ id: UUID, _ expanded: Bool) {
+        guard let i = folders.firstIndex(where: { $0.id == id }), folders[i].expanded != expanded else { return }
+        folders[i].expanded = expanded
+        saveFolders()
+    }
+
+    /// Removes a folder. Its measurements stay, at the top level.
+    func deleteFolder(_ id: UUID) {
+        move(Set(traces.filter { $0.info.folder == id }.map(\.id)), to: nil)
+        folders.removeAll { $0.id == id }
+        saveFolders()
+    }
+
+    /// Puts traces in a folder, or at the top level for nil.
+    func move(_ ids: Set<UUID>, to folder: UUID?) {
+        for i in traces.indices where ids.contains(traces[i].id) && traces[i].info.folder != folder {
+            traces[i].info.folder = folder
+            try? ProjectStore.saveInfo(traces[i].info, in: projectFolder)
+        }
+        if let folder { setExpanded(folder, true) }
+    }
+
+    private func saveFolders() {
+        do { try ProjectStore.saveFolders(folders, in: projectFolder) } catch { errorMessage = "Could not save the folders: \(error)" }
+    }
+
     func update(_ info: TraceInfo) {
         guard let i = traces.firstIndex(where: { $0.id == info.id }) else { return }
         traces[i].info = info
@@ -424,6 +469,7 @@ final class AppModel {
     /// Opens a project folder. Loading analyses every trace, so it runs off the main thread.
     func openProject(_ folder: URL) {
         projectFolder = folder
+        folders = ProjectStore.loadFolders(from: folder)
         traces = []
         visible = []
         selection = nil

@@ -245,70 +245,205 @@ struct TraceList: View {
     @State private var newName = ""
     @State private var choosingColour: UUID?
     @FocusState private var nameFocused: Bool
+    @State private var renamingFolder: UUID?
+    @State private var folderName = ""
+    @FocusState private var folderFocused: Bool
 
     var body: some View {
         @Bindable var model = model
+        let folderIDs = Set(model.folders.map(\.id))
+        let topLevel = model.traces.reversed().filter { trace in
+            guard let id = trace.info.folder else { return true }
+            return !folderIDs.contains(id)
+        }
         List(selection: $model.selection) {
-            ForEach(model.traces.reversed()) { trace in
-                HStack(spacing: 8) {
-                    Toggle("", isOn: Binding(
-                        get: { model.visible.contains(trace.id) },
-                        set: { on in if on { model.visible.insert(trace.id) } else { model.visible.remove(trace.id) } }))
-                        .labelsHidden()
-                        .toggleStyle(.checkbox)
-                    Button { choosingColour = trace.id } label: {
-                        Circle().fill(trace.color).frame(width: 12, height: 12)
-                            .overlay(Circle().strokeBorder(.secondary.opacity(0.5), lineWidth: 0.5))
+            ForEach(model.folders) { folder in
+                DisclosureGroup(isExpanded: expanded(folder.id)) {
+                    ForEach(model.traces.reversed().filter { trace in trace.info.folder == folder.id }) { trace in
+                        row(trace)
                     }
-                    .buttonStyle(.plain)
-                    .help("Choose this measurement's colour")
-                    .popover(isPresented: Binding(get: { choosingColour == trace.id },
-                                                  set: { if !$0 { choosingColour = nil } })) {
-                        colourChooser(trace)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        if renaming == trace.id {
-                            TextField("Name", text: $newName)
-                                .textFieldStyle(.roundedBorder)
-                                .focused($nameFocused)
-                                .onSubmit { commitRename(trace.id) }
-                                .onExitCommand { renaming = nil }
-                                .onChange(of: nameFocused) { _, focused in if !focused { commitRename(trace.id) } }
-                        } else {
-                            Text(trace.info.name).lineLimit(1)
-                                .onTapGesture(count: 2) { startRename(trace) }
-                        }
-                        Text(subtitle(trace)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        if let names = trace.info.averagedFrom {
-                            Text("Average of " + names.joined(separator: ", "))
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                        }
-                    }
-                }
-                .help(trace.info.notes)
-                .tag(trace.id)
-                .contextMenu {
-                    Button("Rename") { startRename(trace) }
-                    Button("Edit…") { editing = trace.info }
-                    Button("Show Only This") { model.visible = [trace.id] }
-                    Menu("Colour") {
-                        ForEach(TracePalette.names.indices, id: \.self) { i in
-                            Button(TracePalette.names[i]) { setColor(trace, index: i) }
-                        }
-                    }
-                    Divider()
-                    Button("Delete", role: .destructive) { model.delete([trace.id]) }
+                } label: {
+                    folderLabel(folder)
                 }
             }
+            ForEach(topLevel) { trace in
+                row(trace)
+            }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .overlay {
-            if model.traces.isEmpty {
+            if model.traces.isEmpty && model.folders.isEmpty {
                 ContentUnavailableView("No measurements", systemImage: "waveform.path",
                                        description: Text("Press Measure (⌘M) or import impulse responses (⌘I)."))
             }
         }
         .onDeleteCommand { if let s = model.selection { model.delete([s]) } }
         .sheet(item: $editing) { info in TraceEditor(info: info) }
+    }
+
+    /// One measurement: tick to show it, its colour, name and details. Drag it onto a folder to file it.
+    private func row(_ trace: Trace) -> some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: Binding(
+                get: { model.visible.contains(trace.id) },
+                set: { on in if on { model.visible.insert(trace.id) } else { model.visible.remove(trace.id) } }))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+            Button { choosingColour = trace.id } label: {
+                Circle().fill(trace.color).frame(width: 12, height: 12)
+                    .overlay(Circle().strokeBorder(.secondary.opacity(0.5), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .help("Choose this measurement's colour")
+            .popover(isPresented: Binding(get: { choosingColour == trace.id },
+                                          set: { if !$0 { choosingColour = nil } })) {
+                colourChooser(trace)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                if renaming == trace.id {
+                    TextField("Name", text: $newName)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($nameFocused)
+                        .onSubmit { commitRename(trace.id) }
+                        .onExitCommand { renaming = nil }
+                        .onChange(of: nameFocused) { _, focused in if !focused { commitRename(trace.id) } }
+                } else {
+                    Text(trace.info.name).lineLimit(1)
+                        .onTapGesture(count: 2) { startRename(trace) }
+                }
+                Text(subtitle(trace)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if let names = trace.info.averagedFrom {
+                    Text("Average of " + names.joined(separator: ", "))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                }
+            }
+        }
+        .help(trace.info.notes)
+        .tag(trace.id)
+        .draggable(trace.id.uuidString)
+        .dropDestination(for: String.self) { items, _ in drop(items, into: folderID(trace)) }
+        .contextMenu {
+            Button("Rename") { startRename(trace) }
+            Button("Edit…") { editing = trace.info }
+            Button("Show Only This") { model.visible = [trace.id] }
+            Menu("Move to Folder") {
+                Button("None (Top Level)") { model.move([trace.id], to: nil) }
+                    .disabled(folderID(trace) == nil)
+                if !model.folders.isEmpty { Divider() }
+                ForEach(model.folders) { f in
+                    Button(f.name) { model.move([trace.id], to: f.id) }
+                        .disabled(folderID(trace) == f.id)
+                }
+                Divider()
+                Button("New Folder…") {
+                    let id = model.addFolder()
+                    model.move([trace.id], to: id)
+                    startRenameFolder(id)
+                }
+            }
+            Menu("Colour") {
+                ForEach(TracePalette.names.indices, id: \.self) { i in
+                    Button(TracePalette.names[i]) { setColor(trace, index: i) }
+                }
+            }
+            Divider()
+            Button("Delete", role: .destructive) { model.delete([trace.id]) }
+        }
+    }
+
+    // MARK: - Folders
+
+    /// The trace's folder, if that folder still exists.
+    private func folderID(_ trace: Trace) -> UUID? {
+        guard let id = trace.info.folder, model.folders.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    private func expanded(_ id: UUID) -> Binding<Bool> {
+        Binding(get: { model.folders.first { $0.id == id }?.expanded ?? true },
+                set: { model.setExpanded(id, $0) })
+    }
+
+    /// Moves dragged traces (their ids as text) into a folder, or to the top level for nil.
+    private func drop(_ items: [String], into folder: UUID?) -> Bool {
+        let ids = Set(items.compactMap(UUID.init(uuidString:))).intersection(model.traces.map(\.id))
+        guard !ids.isEmpty else { return false }
+        model.move(ids, to: folder)
+        return true
+    }
+
+    private func folderLabel(_ folder: TraceFolder) -> some View {
+        let members = model.traces.filter { $0.info.folder == folder.id }.map(\.id)
+        let shown = Binding(
+            get: { !members.isEmpty && members.allSatisfy { model.visible.contains($0) } },
+            set: { on in if on { model.visible.formUnion(members) } else { model.visible.subtract(members) } })
+        return HStack(spacing: 8) {
+            Toggle("", isOn: shown)
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .disabled(members.isEmpty)
+                .help("Show or hide every measurement in this folder")
+            Image(systemName: "folder").foregroundStyle(.secondary)
+            if renamingFolder == folder.id {
+                TextField("Folder name", text: $folderName)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($folderFocused)
+                    .onSubmit { commitFolderRename(folder.id) }
+                    .onExitCommand { renamingFolder = nil }
+                    .onChange(of: folderFocused) { _, focused in if !focused { commitFolderRename(folder.id) } }
+            } else {
+                Text(folder.name).fontWeight(.medium).lineLimit(1)
+                    .onTapGesture(count: 2) { startRenameFolder(folder.id) }
+            }
+            Spacer(minLength: 0)
+            Text("\(members.count)").font(.caption).foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+        .dropDestination(for: String.self) { items, _ in drop(items, into: folder.id) }
+        .contextMenu {
+            Button("Rename") { startRenameFolder(folder.id) }
+            Button("Show Only This Folder") { model.visible = Set(members) }
+                .disabled(members.isEmpty)
+            Divider()
+            Button("Delete Folder") { model.deleteFolder(folder.id) }
+                .help("Removes the folder; its measurements stay, at the top level")
+        }
+    }
+
+    /// New Folder, and a place to drop measurements to take them out of their folders.
+    private var bottomBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                startRenameFolder(model.addFolder())
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
+            .buttonStyle(.borderless)
+            .help("Add a folder to the list, then drag measurements onto it")
+            Spacer(minLength: 0)
+            if !model.folders.isEmpty {
+                Text("Drop here for the top level").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.bar)
+        .contentShape(Rectangle())
+        .dropDestination(for: String.self) { items, _ in drop(items, into: nil) }
+    }
+
+    private func startRenameFolder(_ id: UUID) {
+        folderName = model.folders.first { $0.id == id }?.name ?? ""
+        renamingFolder = id
+        DispatchQueue.main.async { folderFocused = true }
+    }
+
+    private func commitFolderRename(_ id: UUID) {
+        guard renamingFolder == id else { return }
+        renamingFolder = nil
+        let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        model.renameFolder(id, to: name)
     }
 
     private func startRename(_ trace: Trace) {
