@@ -961,7 +961,26 @@ struct Heatmap: View {
         .overlay(alignment: .bottomTrailing) {
             Text("0 to \(Int((grid.times.last ?? 0) * 1000)) ms →").font(.caption2).foregroundStyle(labelColor).padding(4)
         }
+        .overlay(alignment: .topTrailing) { legend.padding(6) }
         .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    /// The colour scale: level below the loudest point, and the axes.
+    private var legend: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Text("−60 dB").font(.caption2)
+                LinearGradient(colors: stride(from: -60.0, through: 0, by: 7.5).map { color($0) },
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 110, height: 8)
+                    .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(.separator))
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                Text("0 dB").font(.caption2)
+            }
+            Text("Level re the loudest point · Hz up · time across").font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding(5)
+        .background(RoundedRectangle(cornerRadius: 4).fill(.regularMaterial))
     }
 
     private var labelColor: Color { colorScheme == .dark ? .white : .black }
@@ -1013,12 +1032,15 @@ struct Waterfall: View {
 
     /// The slices' colours from first to last, with their start times.
     private var colourBar: some View {
-        HStack(spacing: 4) {
-            Text("0 ms").font(.caption2)
-            LinearGradient(colors: (0...8).map { parula(Double($0) / 8) }, startPoint: .leading, endPoint: .trailing)
-                .frame(width: 90, height: 8)
-                .clipShape(RoundedRectangle(cornerRadius: 2))
-            Text("\(Int(((grid.times.last ?? 0) * 1000).rounded())) ms").font(.caption2)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Text("0 ms").font(.caption2)
+                LinearGradient(colors: (0...8).map { parula(Double($0) / 8) }, startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 90, height: 8)
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                Text("\(Int(((grid.times.last ?? 0) * 1000).rounded())) ms").font(.caption2)
+            }
+            Text("Slice start after the direct sound").font(.caption2).foregroundStyle(.secondary)
         }
         .padding(4)
         .background(RoundedRectangle(cornerRadius: 4).fill(.regularMaterial))
