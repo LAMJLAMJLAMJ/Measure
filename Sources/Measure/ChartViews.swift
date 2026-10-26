@@ -110,6 +110,7 @@ struct FrequencyResponseView: View {
                 }
                 .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
                 .chartYScale(domain: yShown)
+                .chartPlotStyle { $0.clipped() }
                 .chartXAxis {
                     AxisMarks(values: zoomedFrequencyTicks(in: zoom.xDomain(FrequencyResponseView.fullFrequencies))) { value in
                         AxisGridLine()
@@ -182,6 +183,7 @@ struct PhaseView: View {
                 }
                 .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
                 .chartYScale(domain: zoom.yDomain(yFull))
+                .chartPlotStyle { $0.clipped() }
                 .chartXAxis {
                     AxisMarks(values: zoomedFrequencyTicks(in: zoom.xDomain(FrequencyResponseView.fullFrequencies))) { value in
                         AxisGridLine()
@@ -337,6 +339,7 @@ struct ImpulseView: View {
                 }
                 .chartXScale(domain: shown)
                 .chartYScale(domain: zoom.yDomain(yRange))
+                .chartPlotStyle { $0.clipped() }
                 .chartXAxisLabel("ms")
                 .chartYAxisLabel(mode == .etc ? "dB" : "normalised")
                 .chartLegend(.hidden)
@@ -611,13 +614,16 @@ struct DecayView: View {
                 }
                 .chartXScale(domain: shown)
                 .chartYScale(domain: zoom.yDomain(levelRange))
+                .chartPlotStyle { $0.clipped() }
                 .chartXAxisLabel("ms from onset")
                 .chartYAxisLabel("dB")
                 .chartForegroundStyleScale(["EDT": Color.secondary, "T20": Color.orange, "T30": Color.red])
                 .chartZoomDrag($zoom)
                 .clipped()
+                .frame(minHeight: 80)
                 Text("Schroeder decay of \(trace.info.name) with the fitted lines (EDT 0 to -10 dB, T20 -5 to -25 dB, T30 -5 to -35 dB). The curve ends where the decay meets the noise. Drag across the chart to zoom in.")
                     .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
         } else {
             EmptyState(text: "Select a measured or imported impulse response")
@@ -678,10 +684,7 @@ enum Metric: String, CaseIterable, Identifiable {
 /// Decay curve above the reverberation table.
 struct ReverbView: View {
     var body: some View {
-        VSplitView {
-            DecayView().frame(minHeight: 220).padding(.bottom, 8)
-            ParametersPanel(set: .reverb).frame(minHeight: 220).padding(.top, 8)
-        }
+        ParametersPanel(set: .reverb, showsDecay: true)
     }
 }
 
@@ -693,27 +696,52 @@ struct ParametersPanel: View {
     }
 
     let set: ParameterSet
+    /// Show the selected trace's decay curve above the table.
+    var showsDecay = false
     @Environment(AppModel.self) private var model
     @State private var metric: Metric?
 
+    // The sections are panes with small minimum heights, so all of them fit in a short window; drag
+    // the dividers to give one more room.
     var body: some View {
         let traces = model.visibleTraces.filter { $0.acoustics != nil }
-        let shown = metric.flatMap { set.metrics.contains($0) ? $0 : nil } ?? set.metrics[0]
-        VStack(alignment: .leading, spacing: 12) {
-            if let trace = model.selectedTrace, let a = trace.acoustics {
+        VSplitView {
+            if showsDecay {
+                DecayView()
+                    .frame(minHeight: 150, idealHeight: 300, maxHeight: .infinity)
+                    .padding(.bottom, 6)
+            }
+            tableSection
+                .frame(minHeight: 110, idealHeight: 220, maxHeight: .infinity)
+                .padding(.vertical, 6)
+            if traces.count > 1 {
+                comparison(traces)
+                    .frame(minHeight: 120, idealHeight: 200, maxHeight: .infinity)
+                    .padding(.top, 6)
+            }
+        }
+    }
+
+    @ViewBuilder private var tableSection: some View {
+        if let trace = model.selectedTrace, let a = trace.acoustics {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("\(trace.info.name): ISO 3382-1, octave bands").font(.headline)
+                    Text("\(trace.info.name): ISO 3382-1, octave bands").font(.headline).lineLimit(1)
                     Spacer()
                     Button("Copy All as CSV") { copyCSV(rows(a)) }
                 }
                 table(rows(a))
                     .font(.body.monospacedDigit())
-                    .frame(minHeight: 180)
-            } else {
-                EmptyState(text: "Select a measured or imported impulse response")
+                    .frame(minHeight: 60)
             }
+        } else {
+            EmptyState(text: "Select a measured or imported impulse response")
+        }
+    }
 
-            if traces.count > 1 {
+    private func comparison(_ traces: [Trace]) -> some View {
+        let shown = metric.flatMap { set.metrics.contains($0) ? $0 : nil } ?? set.metrics[0]
+        return VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Compare shown traces").font(.headline)
                     Picker("Metric", selection: Binding(get: { shown }, set: { metric = $0 })) {
@@ -735,8 +763,7 @@ struct ParametersPanel: View {
                     }
                 }
                 .chartYAxisLabel(shown.unit)
-                .frame(minHeight: 160)
-            }
+                .frame(minHeight: 80)
         }
     }
 
