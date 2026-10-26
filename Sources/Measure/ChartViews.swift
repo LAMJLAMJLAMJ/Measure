@@ -125,6 +125,7 @@ struct FrequencyResponseView: View {
                                   + (predicted.map { [TipSeries(id: "eq", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? [])
                                   + targetTip(targetPoints), zoom: $zoom)
                 .clipped()
+                .zoomScrollBars($zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true, yShown: yShown)
             }
         }
     }
@@ -200,6 +201,7 @@ struct PhaseView: View {
                 .frequencyDataTip(series.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) },
                                   unit: "°", zoom: $zoom)
                 .clipped()
+                .zoomScrollBars($zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true)
                 Text("Phase within each trace's window. Shorten the window on the Impulse view to leave out reflections and clean it up.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -353,6 +355,7 @@ struct ImpulseView: View {
                     }
                 }
                 .clipped()
+                .zoomScrollBars($zoom, xFull: xFull, yFull: yRange)
                 if let window {
                     WindowPreview(trace: reference, window: window)
                         .frame(height: 150)
@@ -620,6 +623,7 @@ struct DecayView: View {
                 .chartForegroundStyleScale(["EDT": Color.secondary, "T20": Color.orange, "T30": Color.red])
                 .chartZoomDrag($zoom)
                 .clipped()
+                .zoomScrollBars($zoom, xFull: timeRange, yFull: levelRange)
                 .frame(minHeight: 80)
                 Text("Schroeder decay of \(trace.info.name) with the fitted lines (EDT 0 to -10 dB, T20 -5 to -25 dB, T30 -5 to -35 dB). The curve ends where the decay meets the noise. Drag across the chart to zoom in.")
                     .font(.caption).foregroundStyle(.secondary)

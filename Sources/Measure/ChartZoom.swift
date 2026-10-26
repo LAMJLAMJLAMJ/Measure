@@ -171,7 +171,96 @@ private struct ZoomDrag: ViewModifier {
     }
 }
 
+/// Scroll bars beside and under a chart, to move along it while zoomed. Each shows only while its
+/// axis shows less than the whole: drag the thumb, or click the track to centre the view there.
+private struct ZoomScrollBars: ViewModifier {
+    @Binding var zoom: ChartZoom
+    let xFull: ClosedRange<Double>
+    let yFull: ClosedRange<Double>
+    let xLog: Bool
+    /// What the level axis shows now, which can be a preset range less than `yFull` when not zoomed.
+    let yShown: ClosedRange<Double>
+
+    func body(content: Content) -> some View {
+        VStack(spacing: 3) {
+            HStack(spacing: 3) {
+                content
+                ZoomScrollBar(vertical: true, full: yFull, shown: yShown, log: false) { zoom.y = $0 }
+                    .frame(width: 9)
+            }
+            ZoomScrollBar(vertical: false, full: xFull, shown: zoom.xDomain(xFull), log: xLog) { zoom.x = $0 }
+                .frame(height: 9)
+                .padding(.trailing, 12)
+        }
+    }
+}
+
+private struct ZoomScrollBar: View {
+    let vertical: Bool
+    let full: ClosedRange<Double>
+    let shown: ClosedRange<Double>
+    let log: Bool
+    let scroll: (ClosedRange<Double>) -> Void
+    @State private var dragStart: ClosedRange<Double>?
+
+    var body: some View {
+        GeometryReader { geo in
+            let length = max(vertical ? geo.size.height : geo.size.width, 1)
+            let a = fraction(shown.lowerBound), b = fraction(shown.upperBound)
+            if b - a < 0.999 {
+                let thumb = max(16, (b - a) * length)
+                let start = min(vertical ? (1 - b) * length : a * length, length - thumb)
+                ZStack(alignment: .topLeading) {
+                    Capsule().fill(Color.secondary.opacity(0.12))
+                        .contentShape(Rectangle())
+                        .onTapGesture { p in centre(at: vertical ? 1 - p.y / length : p.x / length) }
+                    Capsule().fill(Color.secondary.opacity(dragStart == nil ? 0.45 : 0.7))
+                        .frame(width: vertical ? geo.size.width : thumb, height: vertical ? thumb : geo.size.height)
+                        .offset(x: vertical ? 0 : start, y: vertical ? start : 0)
+                        .gesture(DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let from = dragStart ?? shown
+                                dragStart = from
+                                let moved = vertical ? -value.translation.height : value.translation.width
+                                scroll(shifted(from, by: moved / length))
+                            }
+                            .onEnded { _ in dragStart = nil })
+                }
+            }
+        }
+    }
+
+    private func map(_ v: Double) -> Double { log ? log10(max(v, 1e-12)) : v }
+    private func unmap(_ v: Double) -> Double { log ? pow(10, v) : v }
+
+    /// Where `v` sits along the whole axis, 0 to 1.
+    private func fraction(_ v: Double) -> Double {
+        let lo = map(full.lowerBound), hi = map(full.upperBound)
+        return hi > lo ? (map(v) - lo) / (hi - lo) : 0
+    }
+
+    /// `range` moved by `amount` of the whole axis, kept inside it.
+    private func shifted(_ range: ClosedRange<Double>, by amount: Double) -> ClosedRange<Double> {
+        let lo = map(full.lowerBound), hi = map(full.upperBound)
+        let width = map(range.upperBound) - map(range.lowerBound)
+        let a = min(max(map(range.lowerBound) + amount * (hi - lo), lo), hi - width)
+        return unmap(a)...unmap(a + width)
+    }
+
+    private func centre(at f: Double) {
+        let half = (fraction(shown.upperBound) - fraction(shown.lowerBound)) / 2
+        scroll(shifted(shown, by: f - half - fraction(shown.lowerBound)))
+    }
+}
+
 extension View {
+    /// Adds scroll bars to move along a zoomed chart.
+    func zoomScrollBars(_ zoom: Binding<ChartZoom>, xFull: ClosedRange<Double>, yFull: ClosedRange<Double>,
+                        xLog: Bool = false, yShown: ClosedRange<Double>? = nil) -> some View {
+        modifier(ZoomScrollBars(zoom: zoom, xFull: xFull, yFull: yFull, xLog: xLog,
+                                yShown: yShown ?? zoom.wrappedValue.yDomain(yFull)))
+    }
+
     /// Lets a drag across the chart zoom into it.
     func chartZoomDrag(_ zoom: Binding<ChartZoom>) -> some View { modifier(ZoomDrag(zoom: zoom)) }
 }
