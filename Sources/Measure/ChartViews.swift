@@ -823,6 +823,9 @@ struct SpectrogramView: View {
     @State private var mode: Mode = .spectrogram
     /// Seconds analysed from just before the direct sound.
     @AppStorage("spectrogram.length") private var length = 1.0
+    /// The spectrogram's frequency axis, Hz.
+    @AppStorage("spectrogram.low") private var lowFrequency = 20.0
+    @AppStorage("spectrogram.high") private var highFrequency = 20_000.0
     /// The waterfall's window length and the time between its slices, ms, and how many slices.
     @AppStorage("waterfall.window") private var waterfallWindow = 300.0
     @AppStorage("waterfall.step") private var waterfallStep = 10.0
@@ -843,6 +846,7 @@ struct SpectrogramView: View {
                         .frame(width: 70)
                         .help("How much of the impulse response to analyse, in seconds from just before the direct sound: 0.02 to 60")
                     Text("s")
+                    frequencyFields
                 } else {
                     waterfallControls
                 }
@@ -850,7 +854,9 @@ struct SpectrogramView: View {
             if let trace = model.selectedTrace, trace.impulseResponse != nil {
                 Group {
                     if let grid, computedFor == key(trace) {
-                        if mode == .spectrogram { Heatmap(grid: grid) } else { Waterfall(grid: grid) }
+                        if mode == .spectrogram {
+                            Heatmap(grid: grid, low: lowFrequency, high: highFrequency)
+                        } else { Waterfall(grid: grid) }
                     } else {
                         ProgressView("Computing…").frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
@@ -872,6 +878,27 @@ struct SpectrogramView: View {
     }
 
     private func number(_ v: Double) -> String { String(format: "%g", v) }
+
+    /// Lowest and highest frequency shown, kept at least an octave apart within 1 Hz to 96 kHz.
+    private var frequencyFields: some View {
+        HStack(spacing: 6) {
+            Text("   From")
+            TextField("From", value: Binding(get: { lowFrequency },
+                                             set: { lowFrequency = min(max($0, 1), highFrequency / 2) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 65)
+                .help("Lowest frequency shown, Hz")
+            Text("to")
+            TextField("To", value: Binding(get: { highFrequency },
+                                           set: { highFrequency = min(max($0, lowFrequency * 2), 96_000) }),
+                      format: .number.precision(.fractionLength(0)))
+                .frame(width: 70)
+                .help("Highest frequency shown, Hz. Above half the sample rate there is nothing to show.")
+            Text("Hz")
+        }
+        .textFieldStyle(.roundedBorder)
+        .fixedSize()
+    }
 
     private var waterfallControls: some View {
         HStack(spacing: 6) {
@@ -933,12 +960,15 @@ struct TimeFrequencySettings {
 /// Draws a spectrogram grid on a log frequency axis.
 struct Heatmap: View {
     let grid: TimeFrequency.Grid
+    var low = 20.0
+    var high = 20_000.0
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Canvas { context, size in
             let rows = 160
-            let fLow = 20.0, fHigh = min(20_000, grid.frequencies.last ?? 20_000)
+            let fHigh = min(high, grid.frequencies.last ?? high)
+            let fLow = min(low, fHigh / 2)
             let top = grid.levels.flatMap { $0 }.max() ?? 0
             let cols = grid.times.count
             guard cols > 0 else { return }
@@ -953,7 +983,7 @@ struct Heatmap: View {
                     context.fill(Path(CGRect(x: x, y: y, width: w + 0.5, height: h + 0.5)), with: .color(color(level)))
                 }
             }
-            for f in frequencyTicks where f >= fLow && f <= fHigh {
+            for f in zoomedFrequencyTicks(in: fLow...fHigh) {
                 let y = size.height * (1 - CGFloat(log(f / fLow) / log(fHigh / fLow)))
                 context.draw(Text(frequencyLabel(f)).font(.caption2).foregroundStyle(labelColor), at: CGPoint(x: 18, y: y))
             }
