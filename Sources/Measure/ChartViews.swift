@@ -43,7 +43,7 @@ struct FrequencyResponseView: View {
         let top = (series.flatMap { $0.1.filter { $0.x >= 20 }.map(\.y) }.max() ?? 0).rounded(.up) + 5
         // Zooming out goes past the preset range, down to 150 dB.
         let yFull = (top - 150)...(top + 10)
-        let yShown = zoom.y.map { zoom.yDomain(yFull) } ?? (top - range)...top
+        let yShown = zoom.y == nil ? (top - range)...top : zoom.yDomain(yFull)
 
         VStack(alignment: .leading) {
             HStack {
