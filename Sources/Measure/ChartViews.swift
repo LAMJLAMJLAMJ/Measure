@@ -821,13 +821,26 @@ struct SpectrogramView: View {
 
     @Environment(AppModel.self) private var model
     @State private var mode: Mode = .spectrogram
+    /// Seconds analysed from just before the direct sound.
+    @AppStorage("spectrogram.length") private var length = 1.0
     @State private var grid: TimeFrequency.Grid?
     @State private var computedFor: String = ""
 
     var body: some View {
         VStack(alignment: .leading) {
-            Picker("Show", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
-                .pickerStyle(.segmented).frame(width: 260)
+            HStack(spacing: 8) {
+                Picker("Show", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
+                    .pickerStyle(.segmented).frame(width: 260)
+                if mode == .spectrogram {
+                    Text("Length")
+                    TextField("Length", value: Binding(get: { length }, set: { length = min(max($0, 0.02), 60) }),
+                              format: .number.precision(.fractionLength(0...3)))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 70)
+                        .help("How much of the impulse response to analyse, in seconds from just before the direct sound: 0.02 to 60")
+                    Text("s")
+                }
+            }
             if let trace = model.selectedTrace, trace.impulseResponse != nil {
                 Group {
                     if let grid, computedFor == key(trace) {
@@ -838,7 +851,7 @@ struct SpectrogramView: View {
                 }
                 .task(id: key(trace)) { await compute(trace) }
                 Text(mode == .spectrogram
-                     ? "Level over time and frequency for the first second after the direct sound (2048-point Hann window)."
+                     ? "Level over time and frequency for \(lengthText) from 5 ms before the direct sound (\(TimeFrequencySettings(length: length, sampleRate: trace.info.sampleRate).windowSize)-point Hann window)."
                      : "Cumulative spectral decay: the spectrum from successively later start times, 10 ms apart, 300 ms windows.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
@@ -847,21 +860,39 @@ struct SpectrogramView: View {
         }
     }
 
-    private func key(_ trace: Trace) -> String { "\(trace.id)-\(mode.rawValue)" }
+    private func key(_ trace: Trace) -> String { "\(trace.id)-\(mode.rawValue)-\(mode == .spectrogram ? length : 0)" }
+
+    private var lengthText: String { length == 1 ? "the first second" : String(format: "%g s", length) }
 
     private func compute(_ trace: Trace) async {
         guard let ir = trace.impulseResponse else { return }
-        let fs = trace.info.sampleRate, onset = trace.onset, mode = mode, k = key(trace)
+        let fs = trace.info.sampleRate, onset = trace.onset, mode = mode, k = key(trace), length = length
         let result = await Task.detached(priority: .userInitiated) { () -> TimeFrequency.Grid in
             let start = max(0, onset - Int(0.005 * fs))
             if mode == .spectrogram {
-                let slice = Array(ir[start..<min(ir.count, start + Int(fs))])
-                return TimeFrequency.spectrogram(slice, sampleRate: fs, windowSize: 2048, hop: 256)
+                let settings = TimeFrequencySettings(length: length, sampleRate: fs)
+                let slice = Array(ir[start..<min(ir.count, start + Int(length * fs))])
+                return TimeFrequency.spectrogram(slice, sampleRate: fs, windowSize: settings.windowSize, hop: settings.hop)
             }
             return TimeFrequency.waterfall(ir, sampleRate: fs, start: start, windowLength: 0.3, slices: 25, step: 0.01)
         }.value
         grid = result
         computedFor = k
+    }
+}
+
+/// The spectrogram's analysis for a length of impulse response: a 2048-point window, shorter for very
+/// short lengths so there are still several columns, and a hop that keeps about 300 columns.
+struct TimeFrequencySettings {
+    let windowSize: Int
+    let hop: Int
+
+    init(length: Double, sampleRate fs: Double) {
+        let samples = max(1, Int(length * fs))
+        var window = 2048
+        while window > 256 && window * 4 > samples { window /= 2 }
+        windowSize = window
+        hop = max(32, samples / 300)
     }
 }
 
