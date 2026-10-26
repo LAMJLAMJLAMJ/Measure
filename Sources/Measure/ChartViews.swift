@@ -46,7 +46,8 @@ struct FrequencyResponseView: View {
         let yShown = zoom.y == nil ? (top - range)...top : zoom.yDomain(yFull)
 
         VStack(alignment: .leading) {
-            HStack {
+            // Wraps onto another line when the Virtual EQ panel leaves too little width.
+            FlowLayout(spacing: 8, lineSpacing: 6) {
                 Picker("Smoothing", selection: $model.smoothing) {
                     ForEach(Smoothing.allCases) { Text($0.rawValue).tag($0) }
                 }
@@ -60,14 +61,6 @@ struct FrequencyResponseView: View {
                 .onChange(of: range) { zoom.y = nil }
                 ZoomControls(zoom: $zoom, xFull: FrequencyResponseView.fullFrequencies,
                              yFull: yFull, xLog: true, yStart: (top - range)...top)
-                Spacer()
-                // One line, cut short when the Virtual EQ panel narrows the view: wrapping made it tall
-                // enough to push the whole window out of shape.
-                Text("Levels in dBFS; mic calibration applied where set\(windowNote)").font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(-1)
-                    .help("Levels in dBFS; mic calibration applied where set\(windowNote)")
                 Menu {
                     ForEach(FrequencyResponse.AverageMethod.allCases) { method in
                         Button("\(method.rawValue) Average of Shown") { model.average(traces.map(\.id), method: method) }
@@ -82,6 +75,10 @@ struct FrequencyResponseView: View {
                 Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
                     .toggleStyle(.button)
                     .help("Show the Virtual EQ panel")
+                Text("Levels in dBFS; mic calibration applied where set\(windowNote)").font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help("Levels in dBFS; mic calibration applied where set\(windowNote)")
             }
             if series.isEmpty {
                 EmptyState(text: "Tick a trace in the list to show it")

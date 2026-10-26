@@ -38,7 +38,12 @@ struct FlowLayout: Layout {
         var rows: [Row] = []
         var row = Row()
         for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
+            var size = subviews[index].sizeThatFits(.unspecified)
+            // Nothing wider than a line: a long text is cut short instead.
+            if width.isFinite && size.width > width {
+                size = subviews[index].sizeThatFits(ProposedViewSize(width: width, height: nil))
+                size.width = min(size.width, width)
+            }
             let needed = row.items.isEmpty ? size.width : row.width + spacing + size.width
             if !row.items.isEmpty && needed > width {
                 rows.append(row)
