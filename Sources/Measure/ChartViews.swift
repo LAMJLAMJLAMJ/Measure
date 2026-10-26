@@ -704,7 +704,9 @@ struct ParametersPanel: View {
     // The sections are panes with small minimum heights, so all of them fit in a short window; drag
     // the dividers to give one more room.
     var body: some View {
-        let traces = model.visibleTraces.filter { $0.acoustics != nil }
+        // The ticked traces, or the selected one when none is ticked.
+        let ticked = model.visibleTraces.filter { $0.acoustics != nil }
+        let traces = ticked.isEmpty ? [model.selectedTrace].compactMap { $0?.acoustics == nil ? nil : $0 } : ticked
         VSplitView {
             if showsDecay {
                 DecayView()
@@ -714,7 +716,7 @@ struct ParametersPanel: View {
             tableSection
                 .frame(minHeight: 110, idealHeight: 220, maxHeight: .infinity)
                 .padding(.vertical, 6)
-            if traces.count > 1 {
+            if !traces.isEmpty {
                 comparison(traces)
                     .frame(minHeight: 120, idealHeight: 200, maxHeight: .infinity)
                     .padding(.top, 6)
@@ -743,7 +745,7 @@ struct ParametersPanel: View {
         let shown = metric.flatMap { set.metrics.contains($0) ? $0 : nil } ?? set.metrics[0]
         return VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Compare shown traces").font(.headline)
+                    Text(traces.count > 1 ? "Compare shown traces" : "\(traces[0].info.name) by band").font(.headline).lineLimit(1)
                     Picker("Metric", selection: Binding(get: { shown }, set: { metric = $0 })) {
                         ForEach(set.metrics) { Text($0.rawValue).tag($0) }
                     }
