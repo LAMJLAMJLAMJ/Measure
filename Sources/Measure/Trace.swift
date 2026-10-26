@@ -42,6 +42,8 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     var colorHex: String?
     /// Virtual EQ filters tried on this trace. A prediction only; the response itself is unchanged.
     var eq: [EQFilter]?
+    /// Harmonic distortion separated from the sweep recording. Only for sweeps measured by this app.
+    var distortion: HarmonicDistortion?
 }
 
 /// One measurement in the trace library: an impulse response, an imported frequency response or a plain

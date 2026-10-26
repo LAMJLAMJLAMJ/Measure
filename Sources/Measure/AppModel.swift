@@ -190,11 +190,12 @@ final class AppModel {
                 let traces = result.impulseResponses.enumerated().map { i, ir -> Trace in
                     let slot = s.mics[i]
                     let label = s.position.isEmpty ? "Mic \(i + 1)" : "\(s.position) · Mic \(i + 1)"
-                    let info = TraceInfo(name: label, date: date, source: .sweep, sampleRate: s.sampleRate,
+                    var info = TraceInfo(name: label, date: date, source: .sweep, sampleRate: s.sampleRate,
                                          mic: slot.micName, position: s.position,
                                          notes: "Input \(slot.channel), output \(s.outputChannel), \(Int(s.sweepLength)) s sweep at \(Int(s.level)) dBFS" + timingNote,
                                          timingReference: result.timingReference,
                                          peakLevel: result.micPeakLevels[i], colorIndex: count + i)
+                    info.distortion = result.distortion[i]
                     return Trace(info: info, impulseResponse: ir)
                 }
                 return (traces, result.loopbackPeakLevel)
