@@ -293,8 +293,12 @@ struct LiveView: View {
 
     private func controls(_ live: LiveAnalyzer) -> some View {
         @Bindable var live = live
+        // The controls wrap onto further lines when the window (or the Virtual EQ panel beside it)
+        // leaves too little width, instead of squeezing labels to a letter a line.
         return VStack(alignment: .leading, spacing: 6) {
-            HStack {
+            FlowLayout(spacing: 8, lineSpacing: 6) {
+                // Groups keep the builder short; the layout still places each control on its own.
+                Group {
                 Button(live.isRunning ? "Stop" : "Start") {
                     if live.isRunning { live.stop(model) } else { Task { await live.start(model) } }
                 }
@@ -312,7 +316,6 @@ struct LiveView: View {
                     Slider(value: $live.settings.level, in: -60...0, step: 1).frame(width: 120)
                     Text("\(Int(live.settings.level)) dBFS peak").monospacedDigit().frame(width: 100, alignment: .leading)
                 }
-                Spacer()
                 Button("Capture") { live.capture(model) }
                     .disabled(!live.isRunning || live.blocks == 0)
                     .help("Add each mic's current response to the list as an impulse response")
@@ -322,8 +325,8 @@ struct LiveView: View {
                         .toggleStyle(.button)
                         .help("Show the Virtual EQ panel, which applies to the live curves")
                 }
-            }
-            HStack {
+                }
+                Group {
                 Picker("FFT", selection: $live.settings.fftSize) {
                     ForEach([8192, 16_384, 32_768, 65_536], id: \.self) { n in
                         Text("\(n / 1024)k (\(String(format: "%.2f", Double(n) / model.settings.sampleRate)) s)").tag(n)
@@ -344,7 +347,9 @@ struct LiveView: View {
                     .disabled(live.blocks == 0)
                     .help("Line the reference up with each mic, from the peak of its impulse response")
                 Button("Reset") { live.clearDelays(); live.reset() }
-                Spacer()
+                }
+            }
+            HStack {
                 Text(statusText(live)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
                     .lineLimit(1)
                     .truncationMode(.tail)
