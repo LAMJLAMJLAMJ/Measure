@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import Foundation
 import MeasureAudio
 import MeasureDSP
@@ -101,6 +102,8 @@ final class AppModel {
 
     @ObservationIgnored private var calibrations: [String: FrequencyResponse] = [:]
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    /// The open project's measurements are still being read.
+    @ObservationIgnored private var loading = false
 
     init() {
         projectFolder = ProjectStore.defaultFolder
@@ -468,22 +471,108 @@ final class AppModel {
 
     /// Opens a project folder. Loading analyses every trace, so it runs off the main thread.
     func openProject(_ folder: URL) {
+        if folder.pathExtension == ProjectStore.setExtension { NSDocumentController.shared.noteNewRecentDocumentURL(folder) }
         projectFolder = folder
         folders = ProjectStore.loadFolders(from: folder)
         traces = []
         visible = []
         selection = nil
         status = "Loading \(folder.lastPathComponent)…"
+        loading = true
         loadTask?.cancel()
         loadTask = Task {
             let loaded = await Task.detached(priority: .userInitiated) { ProjectStore.load(from: folder) }.value
             guard !Task.isCancelled, projectFolder == folder else { return }
+            loading = false
             // Keep anything measured while the project was loading.
             let loadedIDs = Set(loaded.map(\.id))
             traces = loaded + traces.filter { !loadedIDs.contains($0.id) }
             visible.formUnion(loaded.suffix(4).map(\.id))
             selection = selection ?? traces.last?.id
             status = nil
+        }
+    }
+
+    // MARK: - Measurement sets
+
+    /// Saves measurements as a set at `url`, a .measure package: all of them, carrying on in the set as
+    /// Save As does, or only `ids`, leaving the open project as it is. An existing set there is replaced.
+    func saveSet(to url: URL, only ids: Set<UUID>? = nil) {
+        let destination = url.standardizedFileURL
+        let current = projectFolder.standardizedFileURL
+        if ids == nil && destination == current { return }
+        guard !loading else {
+            errorMessage = "Wait until the project has loaded, then save the set."
+            return
+        }
+        // Replacing the open project, or a folder holding it, would delete the measurements being saved.
+        guard destination != current && !current.path.hasPrefix(destination.path + "/") else {
+            errorMessage = "Choose another name: \(destination.lastPathComponent) holds the open project."
+            return
+        }
+        let chosen = traces.filter { ids?.contains($0.id) ?? true }
+        let used = Set(chosen.compactMap(\.info.folder))
+        let manager = FileManager.default
+        do {
+            if manager.fileExists(atPath: destination.path) { try manager.removeItem(at: destination) }
+            try manager.createDirectory(at: destination, withIntermediateDirectories: true)
+            for trace in chosen { try ProjectStore.copy(trace.id, from: projectFolder, to: destination) }
+            try ProjectStore.saveFolders(folders.filter { used.contains($0.id) }, in: destination)
+        } catch {
+            errorMessage = "Could not save the set: \(error.localizedDescription)"
+            return
+        }
+        if ids == nil {
+            // The traces are already loaded: carry on in the set without analysing them again.
+            projectFolder = destination
+            status = nil
+        } else {
+            status = "Saved \(chosen.count) measurement\(chosen.count == 1 ? "" : "s") as \(destination.lastPathComponent)"
+        }
+        NSDocumentController.shared.noteNewRecentDocumentURL(destination)
+    }
+
+    /// Copies the measurements of another set (or project folder) into the open project, with its
+    /// folders. Its measurements outside a folder go into a new folder named after it. Measurements
+    /// already here are skipped.
+    func addSet(from url: URL) {
+        let source = url.standardizedFileURL
+        guard source != projectFolder.standardizedFileURL else { return }
+        let name = source.deletingPathExtension().lastPathComponent
+        let destination = projectFolder
+        status = "Adding \(name)…"
+        Task {
+            let loaded = await Task.detached(priority: .userInitiated) { ProjectStore.load(from: source) }.value
+            guard projectFolder == destination else { return }
+            let have = Set(traces.map(\.id))
+            let new = loaded.filter { !have.contains($0.id) }
+            status = nil
+            guard !new.isEmpty else {
+                errorMessage = loaded.isEmpty ? "\(name) has no measurements." : "Every measurement in \(name) is already here."
+                return
+            }
+            let setFolders = ProjectStore.loadFolders(from: source)
+            let known = Set(folders.map(\.id))
+            let used = Set(new.compactMap(\.info.folder))
+            folders.append(contentsOf: setFolders.filter { used.contains($0.id) && !known.contains($0.id) })
+            let valid = Set(folders.map(\.id))
+            var loose: UUID?
+            for var trace in new {
+                if trace.info.folder.map({ !valid.contains($0) }) ?? true {
+                    if loose == nil { loose = addFolder(named: name) }
+                    trace.info.folder = loose
+                }
+                do {
+                    try ProjectStore.copy(trace.id, from: source, to: destination)
+                    try ProjectStore.saveInfo(trace.info, in: destination)
+                } catch {
+                    errorMessage = "Could not add \(trace.info.name): \(error.localizedDescription)"
+                    continue
+                }
+                traces.append(trace)
+                visible.insert(trace.id)
+            }
+            saveFolders()
         }
     }
 

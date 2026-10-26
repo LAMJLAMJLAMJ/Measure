@@ -260,8 +260,13 @@ enum ChartData {
 
 // MARK: - Storage
 
-/// A project is a folder: one WAV (or text) file and one JSON file per trace.
+/// A project is a folder: one WAV (or text) file and one JSON file per trace, and folders.json for the
+/// list's folders. A measurement set is the same thing in a folder named *.measure, which the Mac shows
+/// as a single file (a package) once Measure.app has declared the type.
 enum ProjectStore {
+    /// The extension of a measurement set.
+    static let setExtension = "measure"
+
     static var defaultFolder: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Measure Projects/Default", isDirectory: true)
@@ -300,6 +305,19 @@ enum ProjectStore {
     static func loadFolders(from folder: URL) -> [TraceFolder] {
         guard let data = try? Data(contentsOf: folder.appendingPathComponent("folders.json")) else { return [] }
         return (try? JSONDecoder().decode([TraceFolder].self, from: data)) ?? []
+    }
+
+    /// Copies one trace's files (its WAV or text file and its JSON) from one project to another.
+    static func copy(_ id: UUID, from source: URL, to destination: URL) throws {
+        let manager = FileManager.default
+        try manager.createDirectory(at: destination, withIntermediateDirectories: true)
+        for ext in ["json", "wav", "txt"] {
+            let from = source.appendingPathComponent(id.uuidString).appendingPathExtension(ext)
+            guard manager.fileExists(atPath: from.path) else { continue }
+            let to = destination.appendingPathComponent(id.uuidString).appendingPathExtension(ext)
+            try? manager.removeItem(at: to)
+            try manager.copyItem(at: from, to: to)
+        }
     }
 
     static func delete(_ id: UUID, in folder: URL) {
