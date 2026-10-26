@@ -830,6 +830,8 @@ struct SpectrogramView: View {
     /// The spectrogram's frequency axis, Hz.
     @AppStorage("spectrogram.low") private var lowFrequency = 20.0
     @AppStorage("spectrogram.high") private var highFrequency = 20_000.0
+    /// FFT window, samples; 0 picks one for the length.
+    @AppStorage("spectrogram.window") private var windowChoice = 0
     /// The waterfall's window length and the time between its slices, ms, and how many slices.
     @AppStorage("waterfall.window") private var waterfallWindow = 300.0
     @AppStorage("waterfall.step") private var waterfallStep = 10.0
@@ -851,6 +853,7 @@ struct SpectrogramView: View {
                         .help("How much of the impulse response to analyse, in seconds from just before the direct sound: 0.02 to 60")
                     Text("s")
                     frequencyFields
+                    windowPicker(sampleRate: model.selectedTrace?.info.sampleRate ?? 48_000)
                 } else {
                     waterfallControls
                 }
@@ -867,7 +870,7 @@ struct SpectrogramView: View {
                 }
                 .task(id: key(trace)) { await compute(trace) }
                 Text(mode == .spectrogram
-                     ? "Level over time and frequency for \(lengthText) from 5 ms before the direct sound (\(TimeFrequencySettings(length: length, sampleRate: trace.info.sampleRate).windowSize)-point Hann window)."
+                     ? "Level over time and frequency for \(lengthText) from 5 ms before the direct sound (\(TimeFrequencySettings(length: length, sampleRate: trace.info.sampleRate, window: windowChoice).windowSize)-point Hann window)."
                      : "Cumulative spectral decay: the spectrum from successively later start times, \(number(waterfallStep)) ms apart, \(number(waterfallWindow)) ms windows, coloured from the first slice (dark blue) to the last (yellow).")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
@@ -877,11 +880,28 @@ struct SpectrogramView: View {
     }
 
     private func key(_ trace: Trace) -> String {
-        let settings = mode == .spectrogram ? "\(length)" : "\(waterfallWindow)-\(waterfallStep)-\(waterfallSlices)"
+        let settings = mode == .spectrogram ? "\(length)-\(windowChoice)" : "\(waterfallWindow)-\(waterfallStep)-\(waterfallSlices)"
         return "\(trace.id)-\(mode.rawValue)-\(settings)"
     }
 
     private func number(_ v: Double) -> String { String(format: "%g", v) }
+
+    /// The FFT window: longer resolves frequency more finely, shorter resolves time more finely.
+    private func windowPicker(sampleRate fs: Double) -> some View {
+        Picker("Window", selection: $windowChoice) {
+            Text("Auto").tag(0)
+            ForEach(TimeFrequencySettings.windowSizes, id: \.self) { n in
+                Text("\(n) (\(milliseconds(n, fs)) ms)").tag(n)
+            }
+        }
+        .frame(width: 210)
+        .help("FFT window in samples, a power of two. Longer resolves frequency more finely (the bins are sample rate ÷ window apart), shorter resolves time more finely. Auto uses 2048, less for very short lengths.")
+    }
+
+    private func milliseconds(_ samples: Int, _ fs: Double) -> String {
+        let ms = Double(samples) / fs * 1000
+        return String(format: ms >= 10 ? "%.0f" : "%.1f", ms)
+    }
 
     /// Lowest and highest frequency shown, kept at least an octave apart within 1 Hz to 96 kHz.
     private var frequencyFields: some View {
@@ -931,15 +951,16 @@ struct SpectrogramView: View {
     private func compute(_ trace: Trace) async {
         guard let ir = trace.impulseResponse else { return }
         let fs = trace.info.sampleRate, onset = trace.onset, mode = mode, k = key(trace), length = length
-        let window = waterfallWindow / 1000, step = waterfallStep / 1000, slices = waterfallSlices
+        let window = windowChoice
+        let windowLength = waterfallWindow / 1000, step = waterfallStep / 1000, slices = waterfallSlices
         let result = await Task.detached(priority: .userInitiated) { () -> TimeFrequency.Grid in
             let start = max(0, onset - Int(0.005 * fs))
             if mode == .spectrogram {
-                let settings = TimeFrequencySettings(length: length, sampleRate: fs)
+                let settings = TimeFrequencySettings(length: length, sampleRate: fs, window: window)
                 let slice = Array(ir[start..<min(ir.count, start + Int(length * fs))])
                 return TimeFrequency.spectrogram(slice, sampleRate: fs, windowSize: settings.windowSize, hop: settings.hop)
             }
-            return TimeFrequency.waterfall(ir, sampleRate: fs, start: start, windowLength: window, slices: slices, step: step)
+            return TimeFrequency.waterfall(ir, sampleRate: fs, start: start, windowLength: windowLength, slices: slices, step: step)
         }.value
         grid = result
         computedFor = k
@@ -949,15 +970,20 @@ struct SpectrogramView: View {
 /// The spectrogram's analysis for a length of impulse response: a 2048-point window, shorter for very
 /// short lengths so there are still several columns, and a hop that keeps about 300 columns.
 struct TimeFrequencySettings {
+    /// The window sizes offered, samples.
+    static let windowSizes = [256, 512, 1024, 2048, 4096, 8192, 16_384, 32_768]
+
     let windowSize: Int
     let hop: Int
 
-    init(length: Double, sampleRate fs: Double) {
+    /// `window` is a chosen size in samples, or 0 to pick one for the length.
+    init(length: Double, sampleRate fs: Double, window chosen: Int = 0) {
         let samples = max(1, Int(length * fs))
         var window = 2048
         while window > 256 && window * 4 > samples { window /= 2 }
-        windowSize = window
-        hop = max(32, samples / 300)
+        windowSize = chosen > 0 ? chosen : window
+        // About 300 columns, and never more than the window apart so no part of the response is skipped.
+        hop = max(32, min(samples / 300, windowSize))
     }
 }
 
