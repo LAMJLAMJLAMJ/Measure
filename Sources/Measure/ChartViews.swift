@@ -7,7 +7,9 @@ import SwiftUI
 let frequencyTicks: [Double] = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
 
 func frequencyLabel(_ f: Double) -> String {
-    f >= 1000 ? "\(Int(f / 1000))k" : "\(Int(f))"
+    guard f >= 1000 else { return "\(Int(f.rounded()))" }
+    let k = f / 1000
+    return k == k.rounded() ? "\(Int(k))k" : String(format: "%.1fk", k)
 }
 
 struct EmptyState: View {
@@ -24,6 +26,10 @@ struct FrequencyResponseView: View {
     @Binding var showVirtualEQ: Bool
     @AppStorage("showTarget") private var showTarget = false
     @State private var range: Double = 50
+    @State private var zoom = ChartZoom()
+
+    /// The whole frequency axis, Hz.
+    static let fullFrequencies: ClosedRange<Double> = 10...20_000
 
     var body: some View {
         @Bindable var model = model
@@ -35,6 +41,9 @@ struct FrequencyResponseView: View {
             ? (traces.first { $0.id == model.selection } ?? traces.first).map { model.targetPoints(alignedTo: model.calibratedResponse($0)) }
             : nil
         let top = (series.flatMap { $0.1.filter { $0.x >= 20 }.map(\.y) }.max() ?? 0).rounded(.up) + 5
+        // Zooming out goes past the preset range, down to 150 dB.
+        let yFull = (top - 150)...(top + 10)
+        let yShown = zoom.y.map { zoom.yDomain(yFull) } ?? (top - range)...top
 
         VStack(alignment: .leading) {
             HStack {
@@ -48,6 +57,9 @@ struct FrequencyResponseView: View {
                     Text("80 dB").tag(80.0)
                 }
                 .frame(width: 140)
+                .onChange(of: range) { zoom.y = nil }
+                ZoomControls(zoom: $zoom, xFull: FrequencyResponseView.fullFrequencies,
+                             yFull: yFull, xLog: true, yStart: (top - range)...top)
                 Spacer()
                 // One line, cut short when the Virtual EQ panel narrows the view: wrapping made it tall
                 // enough to push the whole window out of shape.
@@ -96,10 +108,10 @@ struct FrequencyResponseView: View {
                         }
                     }
                 }
-                .chartXScale(domain: 10...20_000, type: .log)
-                .chartYScale(domain: (top - range)...top)
+                .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
+                .chartYScale(domain: yShown)
                 .chartXAxis {
-                    AxisMarks(values: frequencyTicks) { value in
+                    AxisMarks(values: zoomedFrequencyTicks(in: zoom.xDomain(FrequencyResponseView.fullFrequencies))) { value in
                         AxisGridLine()
                         AxisTick()
                         AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
@@ -110,7 +122,7 @@ struct FrequencyResponseView: View {
                 .chartLegend(.hidden)
                 .frequencyDataTip(series.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
                                   + (predicted.map { [TipSeries(id: "eq", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? [])
-                                  + targetTip(targetPoints))
+                                  + targetTip(targetPoints), zoom: $zoom)
                 .clipped()
             }
         }
@@ -142,11 +154,14 @@ extension FrequencyResponseView {
 
 struct PhaseView: View {
     @Environment(AppModel.self) private var model
+    @State private var zoom = ChartZoom()
+    private let yFull: ClosedRange<Double> = -180...180
 
     var body: some View {
         let series = model.visibleTraces.compactMap { t in t.displayPhase().map { (t, $0) } }
         VStack(alignment: .leading) {
             HStack {
+                ZoomControls(zoom: $zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true)
                 Spacer()
                 Text("Wrapped phase, with the delay to each trace's direct sound removed")
                     .font(.caption).foregroundStyle(.secondary)
@@ -165,19 +180,23 @@ struct PhaseView: View {
                         }
                     }
                 }
-                .chartXScale(domain: 10...20_000, type: .log)
-                .chartYScale(domain: -180...180)
+                .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
+                .chartYScale(domain: zoom.yDomain(yFull))
                 .chartXAxis {
-                    AxisMarks(values: frequencyTicks) { value in
+                    AxisMarks(values: zoomedFrequencyTicks(in: zoom.xDomain(FrequencyResponseView.fullFrequencies))) { value in
                         AxisGridLine()
                         AxisTick()
                         AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
                     }
                 }
-                .chartYAxis { AxisMarks(values: [-180, -90, 0, 90, 180]) }
+                .chartYAxis {
+                    if zoom.y == nil { AxisMarks(values: [-180, -90, 0, 90, 180]) } else { AxisMarks() }
+                }
                 .chartXAxisLabel("Hz")
                 .chartYAxisLabel("degrees")
                 .chartLegend(.hidden)
+                .frequencyDataTip(series.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) },
+                                  unit: "°", zoom: $zoom)
                 .clipped()
                 Text("Phase within each trace's window. Shorten the window on the Impulse view to leave out reflections and clean it up.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -245,6 +264,8 @@ struct ImpulseView: View {
     let editsWindow: Bool
     @State private var dragging: Edge?
     @State private var liveWindow: ResponseWindow?
+    @State private var zoom = ChartZoom()
+    @State private var box: ZoomBox?
 
     init(initialMode: Mode = .etc, initialSpan: Double = 300, editsWindow: Bool = false, storageKey: String = "impulse") {
         _mode = AppStorage(wrappedValue: initialMode, "\(storageKey).mode")
@@ -269,6 +290,11 @@ struct ImpulseView: View {
                     Text("All").tag(0.0)
                 }
                 .frame(width: 140)
+                .onChange(of: span) { zoom = ChartZoom() }
+                .onChange(of: mode) { zoom = ChartZoom() }
+                if let reference {
+                    ZoomControls(zoom: $zoom, xFull: timeRange(reference, window: window), yFull: levelRange)
+                }
                 Spacer()
                 Text("Time from the selected trace's direct sound").font(.caption).foregroundStyle(.secondary)
             }
@@ -277,16 +303,13 @@ struct ImpulseView: View {
             }
             if let reference {
                 let zero = reference.onset
-                let fs = reference.info.sampleRate
-                // Start a little before the direct sound, and before the window's left edge.
-                let preRoll = max(0.005, (window?.left ?? 0) + 0.002)
-                let lo = -min(preRoll, Double(zero) / fs) * 1000
-                let hi = span == 0 ? Double(reference.impulseResponse!.count - zero) / fs * 1000 : lo + span
+                let xFull = timeRange(reference, window: window)
+                let shown = zoom.xDomain(xFull)
                 let yLabel = mode == .etc ? "Level" : "Amplitude"
-                let yRange: ClosedRange<Double> = mode == .etc ? -100...0 : -1...1
+                let yRange = levelRange
                 Chart {
                     ForEach(traces) { trace in
-                        ForEach(points(trace, zero: zero, preRoll: preRoll)) { p in
+                        ForEach(points(trace, zero: zero, shown: shown)) { p in
                             LineMark(x: .value("Time", p.x), y: .value(yLabel, p.y),
                                      series: .value("Trace", trace.id.uuidString))
                                 .foregroundStyle(trace.color)
@@ -312,16 +335,17 @@ struct ImpulseView: View {
                             .lineStyle(StrokeStyle(lineWidth: dragging == .right ? 2.5 : 1.5))
                     }
                 }
-                .chartXScale(domain: lo...max(hi, lo + 1))
-                .chartYScale(domain: yRange)
+                .chartXScale(domain: shown)
+                .chartYScale(domain: zoom.yDomain(yRange))
                 .chartXAxisLabel("ms")
                 .chartYAxisLabel(mode == .etc ? "dB" : "normalised")
                 .chartLegend(.hidden)
                 .chartOverlay { proxy in
-                    if let window {
-                        GeometryReader { geo in
-                            Rectangle().fill(.clear).contentShape(Rectangle())
-                                .gesture(dragGesture(proxy: proxy, geo: geo, window: window, reference: reference))
+                    GeometryReader { geo in
+                        Rectangle().fill(.clear).contentShape(Rectangle())
+                            .gesture(dragGesture(proxy: proxy, geo: geo, window: window, reference: reference))
+                        if let box, let anchor = proxy.plotFrame {
+                            box.view(in: geo[anchor])
                         }
                     }
                 }
@@ -412,19 +436,38 @@ struct ImpulseView: View {
         model.setWindow(window, for: ids)
     }
 
-    /// Drags whichever window edge the drag starts near. The response is recomputed when the drag ends.
-    private func dragGesture(proxy: ChartProxy, geo: GeometryProxy, window: ResponseWindow, reference: Trace) -> some Gesture {
-        DragGesture(minimumDistance: 1)
+    /// The level axis, whole.
+    private var levelRange: ClosedRange<Double> { mode == .etc ? -100...0 : -1...1 }
+
+    /// How far before the direct sound the chart starts: a little, and before the window's left edge.
+    private func preRoll(_ window: ResponseWindow?) -> Double { max(0.005, (window?.left ?? 0) + 0.002) }
+
+    /// The time axis, whole, in ms from the reference's direct sound.
+    private func timeRange(_ reference: Trace, window: ResponseWindow?) -> ClosedRange<Double> {
+        let zero = reference.onset
+        let fs = reference.info.sampleRate
+        let lo = -min(preRoll(window), Double(zero) / fs) * 1000
+        let hi = span == 0 ? Double((reference.impulseResponse?.count ?? zero) - zero) / fs * 1000 : lo + span
+        return lo...max(hi, lo + 1)
+    }
+
+    /// Drags whichever window edge the drag starts near; anywhere else it drags out a box to zoom into.
+    /// The response is recomputed when a window drag ends.
+    private func dragGesture(proxy: ChartProxy, geo: GeometryProxy, window: ResponseWindow?, reference: Trace) -> some Gesture {
+        DragGesture(minimumDistance: 2)
             .onChanged { value in
                 guard let anchor = proxy.plotFrame else { return }
                 let origin = geo[anchor].origin.x
-                if dragging == nil {
+                if dragging == nil && box == nil {
                     let startX = value.startLocation.x - origin
-                    let leftX = proxy.position(forX: -window.left * 1000) ?? .infinity
-                    let rightX = proxy.position(forX: window.right * 1000) ?? .infinity
+                    let leftX = window.flatMap { proxy.position(forX: -$0.left * 1000) } ?? .infinity
+                    let rightX = window.flatMap { proxy.position(forX: $0.right * 1000) } ?? .infinity
                     let dl = abs(startX - leftX), dr = abs(startX - rightX)
-                    guard min(dl, dr) < 12 else { return }
-                    dragging = dl <= dr ? .left : .right
+                    if min(dl, dr) < 12 { dragging = dl <= dr ? .left : .right }
+                }
+                guard dragging != nil, let window else {
+                    box = ZoomBox(start: value.startLocation, end: value.location)
+                    return
                 }
                 guard let ms: Double = proxy.value(atX: value.location.x - origin) else { return }
                 var w = liveWindow ?? window
@@ -435,19 +478,24 @@ struct ImpulseView: View {
                 }
                 liveWindow = w
             }
-            .onEnded { _ in
+            .onEnded { value in
                 if let liveWindow { commit(liveWindow, to: [reference.id]) }
+                if box != nil, let anchor = proxy.plotFrame {
+                    ZoomBox(start: value.startLocation, end: value.location).apply(to: &zoom, proxy: proxy, plot: geo[anchor])
+                }
                 liveWindow = nil
                 dragging = nil
+                box = nil
             }
     }
 
-    private func points(_ trace: Trace, zero: Int, preRoll: Double) -> [ChartPoint] {
+    /// The trace's points across `shown`, ms from sample `zero`, so a zoomed chart keeps its detail.
+    private func points(_ trace: Trace, zero: Int, shown: ClosedRange<Double>) -> [ChartPoint] {
         guard let ir = trace.impulseResponse else { return [] }
         let fs = trace.info.sampleRate
-        let start = max(0, zero - Int(preRoll * fs))
+        let start = min(max(0, zero + Int((shown.lowerBound / 1000 * fs).rounded(.down))), ir.count)
         // Another trace can be shorter than the selected one's onset, so never let the range run backwards.
-        let end = max(start, span == 0 ? ir.count : start + Int(span / 1000 * fs))
+        let end = max(start, min(ir.count, zero + Int((shown.upperBound / 1000 * fs).rounded(.up)) + 1))
         if mode == .etc {
             return ChartData.points(trace.energyTime, range: start..<end, zero: zero, sampleRate: fs, envelope: true)
         }
