@@ -129,7 +129,7 @@ private struct PlotAnchorView: NSViewRepresentable {
 @MainActor
 enum PlotCapture {
     /// The plot the pointer was last over, for the menu commands.
-    static var current: PlotAnchor?
+    nonisolated(unsafe) static var current: PlotAnchor?
 
     /// The plot as drawn in its window, at the screen's resolution, on the window's background.
     static func image(_ anchor: PlotAnchor) -> NSImage? {
@@ -151,14 +151,15 @@ enum PlotCapture {
         return rep.representation(using: .png, properties: [:])
     }
 
-    static func copy(_ anchor: PlotAnchor? = current) {
-        guard let anchor, let image = image(anchor) else { NSSound.beep(); return }
+    /// Copies `anchor`'s plot, or the one the pointer was last over.
+    static func copy(_ anchor: PlotAnchor? = nil) {
+        guard let anchor = anchor ?? current, let image = image(anchor) else { NSSound.beep(); return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([image])
     }
 
-    static func save(_ anchor: PlotAnchor? = current) {
-        guard let anchor, let image = image(anchor), let data = png(image) else { NSSound.beep(); return }
+    static func save(_ anchor: PlotAnchor? = nil) {
+        guard let anchor = anchor ?? current, let image = image(anchor), let data = png(image) else { NSSound.beep(); return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = ImpulseExport.fileName(anchor.name).replacingOccurrences(of: ".wav", with: ".png")
