@@ -21,7 +21,8 @@ struct ChartZoom: Equatable {
     /// Zooms the y axis about its centre. `shown` is what the chart shows when not zoomed, if less than `full`.
     mutating func scaleY(_ factor: Double, full: ClosedRange<Double>, shown: ClosedRange<Double>? = nil) {
         let current = y == nil ? (shown ?? full) : yDomain(full)
-        y = ChartZoom.scaled(current, by: factor, full: full, log: false)
+        // Zoomed out to the whole axis: nil would go back to the smaller preset range, so keep it all.
+        y = ChartZoom.scaled(current, by: factor, full: full, log: false) ?? (shown == nil ? nil : full)
     }
 
     private static func clamped(_ range: ClosedRange<Double>?, to full: ClosedRange<Double>) -> ClosedRange<Double> {
