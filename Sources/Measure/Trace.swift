@@ -44,6 +44,15 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     var eq: [EQFilter]?
     /// Harmonic distortion separated from the sweep recording. Only for sweeps measured by this app.
     var distortion: HarmonicDistortion?
+    /// The folder the trace is in, in the list. Nil at the top level.
+    var folder: UUID?
+}
+
+/// A folder in the trace list, to group measurements. Only a label: the files stay where they are.
+struct TraceFolder: Codable, Identifiable, Hashable {
+    var id = UUID()
+    var name: String
+    var expanded = true
 }
 
 /// One measurement in the trace library: an impulse response, an imported frequency response or a plain
@@ -251,8 +260,13 @@ enum ChartData {
 
 // MARK: - Storage
 
-/// A project is a folder: one WAV (or text) file and one JSON file per trace.
+/// A project is a folder: one WAV (or text) file and one JSON file per trace, and folders.json for the
+/// list's folders. A measurement set is the same thing in a folder named *.measure, which the Mac shows
+/// as a single file (a package) once Measure.app has declared the type.
 enum ProjectStore {
+    /// The extension of a measurement set.
+    static let setExtension = "measure"
+
     static var defaultFolder: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Measure Projects/Default", isDirectory: true)
@@ -278,6 +292,32 @@ enum ProjectStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(info).write(to: folder.appendingPathComponent(info.id.uuidString).appendingPathExtension("json"))
+    }
+
+    /// The project's list folders, in folders.json (which the trace loader skips: it is not a trace).
+    static func saveFolders(_ folders: [TraceFolder], in folder: URL) throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(folders).write(to: folder.appendingPathComponent("folders.json"))
+    }
+
+    static func loadFolders(from folder: URL) -> [TraceFolder] {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent("folders.json")) else { return [] }
+        return (try? JSONDecoder().decode([TraceFolder].self, from: data)) ?? []
+    }
+
+    /// Copies one trace's files (its WAV or text file and its JSON) from one project to another.
+    static func copy(_ id: UUID, from source: URL, to destination: URL) throws {
+        let manager = FileManager.default
+        try manager.createDirectory(at: destination, withIntermediateDirectories: true)
+        for ext in ["json", "wav", "txt"] {
+            let from = source.appendingPathComponent(id.uuidString).appendingPathExtension(ext)
+            guard manager.fileExists(atPath: from.path) else { continue }
+            let to = destination.appendingPathComponent(id.uuidString).appendingPathExtension(ext)
+            try? manager.removeItem(at: to)
+            try manager.copyItem(at: from, to: to)
+        }
     }
 
     static func delete(_ id: UUID, in folder: URL) {

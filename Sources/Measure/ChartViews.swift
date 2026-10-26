@@ -7,7 +7,9 @@ import SwiftUI
 let frequencyTicks: [Double] = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
 
 func frequencyLabel(_ f: Double) -> String {
-    f >= 1000 ? "\(Int(f / 1000))k" : "\(Int(f))"
+    guard f >= 1000 else { return "\(Int(f.rounded()))" }
+    let k = f / 1000
+    return k == k.rounded() ? "\(Int(k))k" : String(format: "%.1fk", k)
 }
 
 struct EmptyState: View {
@@ -24,6 +26,10 @@ struct FrequencyResponseView: View {
     @Binding var showVirtualEQ: Bool
     @AppStorage("showTarget") private var showTarget = false
     @State private var range: Double = 50
+    @State private var zoom = ChartZoom()
+
+    /// The whole frequency axis, Hz.
+    static let fullFrequencies: ClosedRange<Double> = 10...20_000
 
     var body: some View {
         @Bindable var model = model
@@ -35,6 +41,9 @@ struct FrequencyResponseView: View {
             ? (traces.first { $0.id == model.selection } ?? traces.first).map { model.targetPoints(alignedTo: model.calibratedResponse($0)) }
             : nil
         let top = (series.flatMap { $0.1.filter { $0.x >= 20 }.map(\.y) }.max() ?? 0).rounded(.up) + 5
+        // Zooming out goes past the preset range, down to 150 dB.
+        let yFull = (top - 150)...(top + 10)
+        let yShown = zoom.y == nil ? (top - range)...top : zoom.yDomain(yFull)
 
         VStack(alignment: .leading) {
             HStack {
@@ -48,6 +57,9 @@ struct FrequencyResponseView: View {
                     Text("80 dB").tag(80.0)
                 }
                 .frame(width: 140)
+                .onChange(of: range) { zoom.y = nil }
+                ZoomControls(zoom: $zoom, xFull: FrequencyResponseView.fullFrequencies,
+                             yFull: yFull, xLog: true, yStart: (top - range)...top)
                 Spacer()
                 // One line, cut short when the Virtual EQ panel narrows the view: wrapping made it tall
                 // enough to push the whole window out of shape.
@@ -96,10 +108,11 @@ struct FrequencyResponseView: View {
                         }
                     }
                 }
-                .chartXScale(domain: 10...20_000, type: .log)
-                .chartYScale(domain: (top - range)...top)
+                .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
+                .chartYScale(domain: yShown)
+                .chartPlotStyle { $0.clipped() }
                 .chartXAxis {
-                    AxisMarks(values: frequencyTicks) { value in
+                    AxisMarks(values: zoomedFrequencyTicks(in: zoom.xDomain(FrequencyResponseView.fullFrequencies))) { value in
                         AxisGridLine()
                         AxisTick()
                         AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
@@ -110,8 +123,9 @@ struct FrequencyResponseView: View {
                 .chartLegend(.hidden)
                 .frequencyDataTip(series.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
                                   + (predicted.map { [TipSeries(id: "eq", name: "\($0.0.info.name) with EQ", color: $0.0.color, points: $0.1)] } ?? [])
-                                  + targetTip(targetPoints))
+                                  + targetTip(targetPoints), zoom: $zoom)
                 .clipped()
+                .zoomScrollBars($zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true, yShown: yShown)
             }
         }
     }
@@ -142,11 +156,14 @@ extension FrequencyResponseView {
 
 struct PhaseView: View {
     @Environment(AppModel.self) private var model
+    @State private var zoom = ChartZoom()
+    private let yFull: ClosedRange<Double> = -180...180
 
     var body: some View {
         let series = model.visibleTraces.compactMap { t in t.displayPhase().map { (t, $0) } }
         VStack(alignment: .leading) {
             HStack {
+                ZoomControls(zoom: $zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true)
                 Spacer()
                 Text("Wrapped phase, with the delay to each trace's direct sound removed")
                     .font(.caption).foregroundStyle(.secondary)
@@ -165,20 +182,26 @@ struct PhaseView: View {
                         }
                     }
                 }
-                .chartXScale(domain: 10...20_000, type: .log)
-                .chartYScale(domain: -180...180)
+                .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
+                .chartYScale(domain: zoom.yDomain(yFull))
+                .chartPlotStyle { $0.clipped() }
                 .chartXAxis {
-                    AxisMarks(values: frequencyTicks) { value in
+                    AxisMarks(values: zoomedFrequencyTicks(in: zoom.xDomain(FrequencyResponseView.fullFrequencies))) { value in
                         AxisGridLine()
                         AxisTick()
                         AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
                     }
                 }
-                .chartYAxis { AxisMarks(values: [-180, -90, 0, 90, 180]) }
+                .chartYAxis {
+                    if zoom.y == nil { AxisMarks(values: [-180, -90, 0, 90, 180]) } else { AxisMarks() }
+                }
                 .chartXAxisLabel("Hz")
                 .chartYAxisLabel("degrees")
                 .chartLegend(.hidden)
+                .frequencyDataTip(series.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) },
+                                  unit: "°", zoom: $zoom)
                 .clipped()
+                .zoomScrollBars($zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true)
                 Text("Phase within each trace's window. Shorten the window on the Impulse view to leave out reflections and clean it up.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -245,6 +268,8 @@ struct ImpulseView: View {
     let editsWindow: Bool
     @State private var dragging: Edge?
     @State private var liveWindow: ResponseWindow?
+    @State private var zoom = ChartZoom()
+    @State private var box: ZoomBox?
 
     init(initialMode: Mode = .etc, initialSpan: Double = 300, editsWindow: Bool = false, storageKey: String = "impulse") {
         _mode = AppStorage(wrappedValue: initialMode, "\(storageKey).mode")
@@ -269,6 +294,11 @@ struct ImpulseView: View {
                     Text("All").tag(0.0)
                 }
                 .frame(width: 140)
+                .onChange(of: span) { zoom = ChartZoom() }
+                .onChange(of: mode) { zoom = ChartZoom() }
+                if let reference {
+                    ZoomControls(zoom: $zoom, xFull: timeRange(reference, window: window), yFull: levelRange)
+                }
                 Spacer()
                 Text("Time from the selected trace's direct sound").font(.caption).foregroundStyle(.secondary)
             }
@@ -277,16 +307,13 @@ struct ImpulseView: View {
             }
             if let reference {
                 let zero = reference.onset
-                let fs = reference.info.sampleRate
-                // Start a little before the direct sound, and before the window's left edge.
-                let preRoll = max(0.005, (window?.left ?? 0) + 0.002)
-                let lo = -min(preRoll, Double(zero) / fs) * 1000
-                let hi = span == 0 ? Double(reference.impulseResponse!.count - zero) / fs * 1000 : lo + span
+                let xFull = timeRange(reference, window: window)
+                let shown = zoom.xDomain(xFull)
                 let yLabel = mode == .etc ? "Level" : "Amplitude"
-                let yRange: ClosedRange<Double> = mode == .etc ? -100...0 : -1...1
+                let yRange = levelRange
                 Chart {
                     ForEach(traces) { trace in
-                        ForEach(points(trace, zero: zero, preRoll: preRoll)) { p in
+                        ForEach(points(trace, zero: zero, shown: shown)) { p in
                             LineMark(x: .value("Time", p.x), y: .value(yLabel, p.y),
                                      series: .value("Trace", trace.id.uuidString))
                                 .foregroundStyle(trace.color)
@@ -312,20 +339,23 @@ struct ImpulseView: View {
                             .lineStyle(StrokeStyle(lineWidth: dragging == .right ? 2.5 : 1.5))
                     }
                 }
-                .chartXScale(domain: lo...max(hi, lo + 1))
-                .chartYScale(domain: yRange)
+                .chartXScale(domain: shown)
+                .chartYScale(domain: zoom.yDomain(yRange))
+                .chartPlotStyle { $0.clipped() }
                 .chartXAxisLabel("ms")
                 .chartYAxisLabel(mode == .etc ? "dB" : "normalised")
                 .chartLegend(.hidden)
                 .chartOverlay { proxy in
-                    if let window {
-                        GeometryReader { geo in
-                            Rectangle().fill(.clear).contentShape(Rectangle())
-                                .gesture(dragGesture(proxy: proxy, geo: geo, window: window, reference: reference))
+                    GeometryReader { geo in
+                        Rectangle().fill(.clear).contentShape(Rectangle())
+                            .gesture(dragGesture(proxy: proxy, geo: geo, window: window, reference: reference))
+                        if let box, let anchor = proxy.plotFrame {
+                            box.view(in: geo[anchor])
                         }
                     }
                 }
                 .clipped()
+                .zoomScrollBars($zoom, xFull: xFull, yFull: yRange)
                 if let window {
                     WindowPreview(trace: reference, window: window)
                         .frame(height: 150)
@@ -412,19 +442,38 @@ struct ImpulseView: View {
         model.setWindow(window, for: ids)
     }
 
-    /// Drags whichever window edge the drag starts near. The response is recomputed when the drag ends.
-    private func dragGesture(proxy: ChartProxy, geo: GeometryProxy, window: ResponseWindow, reference: Trace) -> some Gesture {
-        DragGesture(minimumDistance: 1)
+    /// The level axis, whole.
+    private var levelRange: ClosedRange<Double> { mode == .etc ? -100...0 : -1...1 }
+
+    /// How far before the direct sound the chart starts: a little, and before the window's left edge.
+    private func preRoll(_ window: ResponseWindow?) -> Double { max(0.005, (window?.left ?? 0) + 0.002) }
+
+    /// The time axis, whole, in ms from the reference's direct sound.
+    private func timeRange(_ reference: Trace, window: ResponseWindow?) -> ClosedRange<Double> {
+        let zero = reference.onset
+        let fs = reference.info.sampleRate
+        let lo = -min(preRoll(window), Double(zero) / fs) * 1000
+        let hi = span == 0 ? Double((reference.impulseResponse?.count ?? zero) - zero) / fs * 1000 : lo + span
+        return lo...max(hi, lo + 1)
+    }
+
+    /// Drags whichever window edge the drag starts near; anywhere else it drags out a box to zoom into.
+    /// The response is recomputed when a window drag ends.
+    private func dragGesture(proxy: ChartProxy, geo: GeometryProxy, window: ResponseWindow?, reference: Trace) -> some Gesture {
+        DragGesture(minimumDistance: 2)
             .onChanged { value in
                 guard let anchor = proxy.plotFrame else { return }
                 let origin = geo[anchor].origin.x
-                if dragging == nil {
+                if dragging == nil && box == nil {
                     let startX = value.startLocation.x - origin
-                    let leftX = proxy.position(forX: -window.left * 1000) ?? .infinity
-                    let rightX = proxy.position(forX: window.right * 1000) ?? .infinity
+                    let leftX = window.flatMap { proxy.position(forX: -$0.left * 1000) } ?? .infinity
+                    let rightX = window.flatMap { proxy.position(forX: $0.right * 1000) } ?? .infinity
                     let dl = abs(startX - leftX), dr = abs(startX - rightX)
-                    guard min(dl, dr) < 12 else { return }
-                    dragging = dl <= dr ? .left : .right
+                    if min(dl, dr) < 12 { dragging = dl <= dr ? .left : .right }
+                }
+                guard dragging != nil, let window else {
+                    box = ZoomBox(start: value.startLocation, end: value.location)
+                    return
                 }
                 guard let ms: Double = proxy.value(atX: value.location.x - origin) else { return }
                 var w = liveWindow ?? window
@@ -435,19 +484,24 @@ struct ImpulseView: View {
                 }
                 liveWindow = w
             }
-            .onEnded { _ in
+            .onEnded { value in
                 if let liveWindow { commit(liveWindow, to: [reference.id]) }
+                if box != nil, let anchor = proxy.plotFrame {
+                    ZoomBox(start: value.startLocation, end: value.location).apply(to: &zoom, proxy: proxy, plot: geo[anchor])
+                }
                 liveWindow = nil
                 dragging = nil
+                box = nil
             }
     }
 
-    private func points(_ trace: Trace, zero: Int, preRoll: Double) -> [ChartPoint] {
+    /// The trace's points across `shown`, ms from sample `zero`, so a zoomed chart keeps its detail.
+    private func points(_ trace: Trace, zero: Int, shown: ClosedRange<Double>) -> [ChartPoint] {
         guard let ir = trace.impulseResponse else { return [] }
         let fs = trace.info.sampleRate
-        let start = max(0, zero - Int(preRoll * fs))
+        let start = min(max(0, zero + Int((shown.lowerBound / 1000 * fs).rounded(.down))), ir.count)
         // Another trace can be shorter than the selected one's onset, so never let the range run backwards.
-        let end = max(start, span == 0 ? ir.count : start + Int(span / 1000 * fs))
+        let end = max(start, min(ir.count, zero + Int((shown.upperBound / 1000 * fs).rounded(.up)) + 1))
         if mode == .etc {
             return ChartData.points(trace.energyTime, range: start..<end, zero: zero, sampleRate: fs, envelope: true)
         }
@@ -526,11 +580,17 @@ struct WindowPreview: View {
 struct DecayView: View {
     @Environment(AppModel.self) private var model
     @State private var bandIndex = -1
+    @State private var zoom = ChartZoom()
+    private let levelRange: ClosedRange<Double> = -80...0
 
     var body: some View {
         if let trace = model.selectedTrace, let acoustics = trace.acoustics {
             let params = bandIndex >= 0 && bandIndex < acoustics.bands.count ? acoustics.bands[bandIndex] : acoustics.broadband
             let fs = trace.info.sampleRate
+            let timeRange = 0...max(Double(params.decayCurve.count) / fs * 1000, 1)
+            let shown = zoom.xDomain(timeRange)
+            let first = min(max(0, Int((shown.lowerBound / 1000 * fs).rounded(.down))), params.decayCurve.count)
+            let last = max(first, min(params.decayCurve.count, Int((shown.upperBound / 1000 * fs).rounded(.up)) + 1))
             VStack(alignment: .leading) {
                 HStack {
                     Picker("Band", selection: $bandIndex) {
@@ -538,11 +598,12 @@ struct DecayView: View {
                         ForEach(acoustics.bands.indices, id: \.self) { i in Text("\(acoustics.bands[i].band!.description) Hz").tag(i) }
                     }
                     .frame(width: 200)
+                    ZoomControls(zoom: $zoom, xFull: timeRange, yFull: levelRange)
                     Spacer()
                     Text(summary(params)).font(.callout.monospacedDigit())
                 }
                 Chart {
-                    ForEach(ChartData.points(params.decayCurve, range: 0..<params.decayCurve.count, zero: 0, sampleRate: fs, envelope: true)) { p in
+                    ForEach(ChartData.points(params.decayCurve, range: first..<last, zero: 0, sampleRate: fs, envelope: true)) { p in
                         LineMark(x: .value("Time", p.x), y: .value("Level", p.y), series: .value("Curve", "Schroeder"))
                             .foregroundStyle(trace.color)
                     }
@@ -554,13 +615,19 @@ struct DecayView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 4]))
                         .annotation(position: .top, alignment: .trailing) { Text("noise floor").font(.caption2).foregroundStyle(.secondary) }
                 }
-                .chartYScale(domain: -80...0)
+                .chartXScale(domain: shown)
+                .chartYScale(domain: zoom.yDomain(levelRange))
+                .chartPlotStyle { $0.clipped() }
                 .chartXAxisLabel("ms from onset")
                 .chartYAxisLabel("dB")
                 .chartForegroundStyleScale(["EDT": Color.secondary, "T20": Color.orange, "T30": Color.red])
+                .chartZoomDrag($zoom)
                 .clipped()
-                Text("Schroeder decay of \(trace.info.name) with the fitted lines (EDT 0 to -10 dB, T20 -5 to -25 dB, T30 -5 to -35 dB). The curve ends where the decay meets the noise.")
+                .zoomScrollBars($zoom, xFull: timeRange, yFull: levelRange)
+                .frame(minHeight: 80)
+                Text("Schroeder decay of \(trace.info.name) with the fitted lines (EDT 0 to -10 dB, T20 -5 to -25 dB, T30 -5 to -35 dB). The curve ends where the decay meets the noise. Drag across the chart to zoom in.")
                     .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
         } else {
             EmptyState(text: "Select a measured or imported impulse response")
@@ -621,10 +688,7 @@ enum Metric: String, CaseIterable, Identifiable {
 /// Decay curve above the reverberation table.
 struct ReverbView: View {
     var body: some View {
-        VSplitView {
-            DecayView().frame(minHeight: 220).padding(.bottom, 8)
-            ParametersPanel(set: .reverb).frame(minHeight: 220).padding(.top, 8)
-        }
+        ParametersPanel(set: .reverb, showsDecay: true)
     }
 }
 
@@ -636,29 +700,56 @@ struct ParametersPanel: View {
     }
 
     let set: ParameterSet
+    /// Show the selected trace's decay curve above the table.
+    var showsDecay = false
     @Environment(AppModel.self) private var model
     @State private var metric: Metric?
 
+    // The sections are panes with small minimum heights, so all of them fit in a short window; drag
+    // the dividers to give one more room.
     var body: some View {
-        let traces = model.visibleTraces.filter { $0.acoustics != nil }
-        let shown = metric.flatMap { set.metrics.contains($0) ? $0 : nil } ?? set.metrics[0]
-        VStack(alignment: .leading, spacing: 12) {
-            if let trace = model.selectedTrace, let a = trace.acoustics {
+        // The ticked traces, or the selected one when none is ticked.
+        let ticked = model.visibleTraces.filter { $0.acoustics != nil }
+        let traces = ticked.isEmpty ? [model.selectedTrace].compactMap { $0?.acoustics == nil ? nil : $0 } : ticked
+        VSplitView {
+            if showsDecay {
+                DecayView()
+                    .frame(minHeight: 150, idealHeight: 300, maxHeight: .infinity)
+                    .padding(.bottom, 6)
+            }
+            tableSection
+                .frame(minHeight: 110, idealHeight: 220, maxHeight: .infinity)
+                .padding(.vertical, 6)
+            if !traces.isEmpty {
+                comparison(traces)
+                    .frame(minHeight: 120, idealHeight: 200, maxHeight: .infinity)
+                    .padding(.top, 6)
+            }
+        }
+    }
+
+    @ViewBuilder private var tableSection: some View {
+        if let trace = model.selectedTrace, let a = trace.acoustics {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("\(trace.info.name): ISO 3382-1, octave bands").font(.headline)
+                    Text("\(trace.info.name): ISO 3382-1, octave bands").font(.headline).lineLimit(1)
                     Spacer()
                     Button("Copy All as CSV") { copyCSV(rows(a)) }
                 }
                 table(rows(a))
                     .font(.body.monospacedDigit())
-                    .frame(minHeight: 180)
-            } else {
-                EmptyState(text: "Select a measured or imported impulse response")
+                    .frame(minHeight: 60)
             }
+        } else {
+            EmptyState(text: "Select a measured or imported impulse response")
+        }
+    }
 
-            if traces.count > 1 {
+    private func comparison(_ traces: [Trace]) -> some View {
+        let shown = metric.flatMap { set.metrics.contains($0) ? $0 : nil } ?? set.metrics[0]
+        return VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Compare shown traces").font(.headline)
+                    Text(traces.count > 1 ? "Compare shown traces" : "\(traces[0].info.name) by band").font(.headline).lineLimit(1)
                     Picker("Metric", selection: Binding(get: { shown }, set: { metric = $0 })) {
                         ForEach(set.metrics) { Text($0.rawValue).tag($0) }
                     }
@@ -678,8 +769,7 @@ struct ParametersPanel: View {
                     }
                 }
                 .chartYAxisLabel(shown.unit)
-                .frame(minHeight: 160)
-            }
+                .frame(minHeight: 80)
         }
     }
 
@@ -735,25 +825,53 @@ struct SpectrogramView: View {
 
     @Environment(AppModel.self) private var model
     @State private var mode: Mode = .spectrogram
+    /// Seconds analysed from just before the direct sound.
+    @AppStorage("spectrogram.length") private var length = 1.0
+    /// The spectrogram's frequency axis, Hz.
+    @AppStorage("spectrogram.low") private var lowFrequency = 20.0
+    @AppStorage("spectrogram.high") private var highFrequency = 20_000.0
+    /// FFT window, samples; 0 picks one for the length.
+    @AppStorage("spectrogram.window") private var windowChoice = 0
+    /// The waterfall's window length and the time between its slices, ms, and how many slices.
+    @AppStorage("waterfall.window") private var waterfallWindow = 300.0
+    @AppStorage("waterfall.step") private var waterfallStep = 10.0
+    @AppStorage("waterfall.slices") private var waterfallSlices = 25
     @State private var grid: TimeFrequency.Grid?
     @State private var computedFor: String = ""
 
     var body: some View {
         VStack(alignment: .leading) {
-            Picker("Show", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
-                .pickerStyle(.segmented).frame(width: 260)
+            HStack(spacing: 8) {
+                Picker("Show", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
+                    .pickerStyle(.segmented).frame(width: 260)
+                if mode == .spectrogram {
+                    Text("Length")
+                    TextField("Length", value: Binding(get: { length }, set: { length = min(max($0, 0.02), 60) }),
+                              format: .number.precision(.fractionLength(0...3)))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 70)
+                        .help("How much of the impulse response to analyse, in seconds from just before the direct sound: 0.02 to 60")
+                    Text("s")
+                    frequencyFields
+                    windowPicker(sampleRate: model.selectedTrace?.info.sampleRate ?? 48_000)
+                } else {
+                    waterfallControls
+                }
+            }
             if let trace = model.selectedTrace, trace.impulseResponse != nil {
                 Group {
                     if let grid, computedFor == key(trace) {
-                        if mode == .spectrogram { Heatmap(grid: grid) } else { Waterfall(grid: grid) }
+                        if mode == .spectrogram {
+                            Heatmap(grid: grid, low: lowFrequency, high: highFrequency)
+                        } else { Waterfall(grid: grid) }
                     } else {
                         ProgressView("Computing…").frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
                 .task(id: key(trace)) { await compute(trace) }
                 Text(mode == .spectrogram
-                     ? "Level over time and frequency for the first second after the direct sound (2048-point Hann window)."
-                     : "Cumulative spectral decay: the spectrum from successively later start times, 10 ms apart, 300 ms windows.")
+                     ? "Level over time and frequency for \(lengthText) from 5 ms before the direct sound (\(TimeFrequencySettings(length: length, sampleRate: trace.info.sampleRate, window: windowChoice).windowSize)-point Hann window)."
+                     : "Cumulative spectral decay: the spectrum from successively later start times, \(number(waterfallStep)) ms apart, \(number(waterfallWindow)) ms windows, coloured from the first slice (dark blue) to the last (yellow).")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 EmptyState(text: "Select a measured or imported impulse response")
@@ -761,33 +879,126 @@ struct SpectrogramView: View {
         }
     }
 
-    private func key(_ trace: Trace) -> String { "\(trace.id)-\(mode.rawValue)" }
+    private func key(_ trace: Trace) -> String {
+        let settings = mode == .spectrogram ? "\(length)-\(windowChoice)" : "\(waterfallWindow)-\(waterfallStep)-\(waterfallSlices)"
+        return "\(trace.id)-\(mode.rawValue)-\(settings)"
+    }
+
+    private func number(_ v: Double) -> String { String(format: "%g", v) }
+
+    /// The FFT window: longer resolves frequency more finely, shorter resolves time more finely.
+    private func windowPicker(sampleRate fs: Double) -> some View {
+        Picker("Window", selection: $windowChoice) {
+            Text("Auto").tag(0)
+            ForEach(TimeFrequencySettings.windowSizes, id: \.self) { n in
+                Text("\(n) (\(milliseconds(n, fs)) ms)").tag(n)
+            }
+        }
+        .frame(width: 210)
+        .help("FFT window in samples, a power of two. Longer resolves frequency more finely (the bins are sample rate ÷ window apart), shorter resolves time more finely. Auto uses 2048, less for very short lengths.")
+    }
+
+    private func milliseconds(_ samples: Int, _ fs: Double) -> String {
+        let ms = Double(samples) / fs * 1000
+        return String(format: ms >= 10 ? "%.0f" : "%.1f", ms)
+    }
+
+    /// Lowest and highest frequency shown, kept at least an octave apart within 1 Hz to 96 kHz.
+    private var frequencyFields: some View {
+        HStack(spacing: 6) {
+            Text("   From")
+            TextField("From", value: Binding(get: { lowFrequency },
+                                             set: { lowFrequency = min(max($0, 1), highFrequency / 2) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 65)
+                .help("Lowest frequency shown, Hz")
+            Text("to")
+            TextField("To", value: Binding(get: { highFrequency },
+                                           set: { highFrequency = min(max($0, lowFrequency * 2), 96_000) }),
+                      format: .number.precision(.fractionLength(0)))
+                .frame(width: 70)
+                .help("Highest frequency shown, Hz. Above half the sample rate there is nothing to show.")
+            Text("Hz")
+        }
+        .textFieldStyle(.roundedBorder)
+        .fixedSize()
+    }
+
+    private var waterfallControls: some View {
+        HStack(spacing: 6) {
+            Text("Window")
+            TextField("Window", value: Binding(get: { waterfallWindow }, set: { waterfallWindow = min(max($0, 2), 2000) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 60)
+                .help("Length of each slice's window, ms: 2 to 2000. Longer windows resolve lower frequencies.")
+            Text("ms   Step")
+            TextField("Step", value: Binding(get: { waterfallStep }, set: { waterfallStep = min(max($0, 0.1), 500) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 60)
+                .help("Time between the start of one slice and the next, ms: 0.1 to 500")
+            Text("ms   Slices")
+            TextField("Slices", value: Binding(get: { waterfallSlices }, set: { waterfallSlices = min(max($0, 2), 100) }),
+                      format: .number)
+                .frame(width: 45)
+                .help("How many slices: 2 to 100")
+        }
+        .textFieldStyle(.roundedBorder)
+        .fixedSize()
+    }
+
+    private var lengthText: String { length == 1 ? "the first second" : String(format: "%g s", length) }
 
     private func compute(_ trace: Trace) async {
         guard let ir = trace.impulseResponse else { return }
-        let fs = trace.info.sampleRate, onset = trace.onset, mode = mode, k = key(trace)
+        let fs = trace.info.sampleRate, onset = trace.onset, mode = mode, k = key(trace), length = length
+        let window = windowChoice
+        let windowLength = waterfallWindow / 1000, step = waterfallStep / 1000, slices = waterfallSlices
         let result = await Task.detached(priority: .userInitiated) { () -> TimeFrequency.Grid in
             let start = max(0, onset - Int(0.005 * fs))
             if mode == .spectrogram {
-                let slice = Array(ir[start..<min(ir.count, start + Int(fs))])
-                return TimeFrequency.spectrogram(slice, sampleRate: fs, windowSize: 2048, hop: 256)
+                let settings = TimeFrequencySettings(length: length, sampleRate: fs, window: window)
+                let slice = Array(ir[start..<min(ir.count, start + Int(length * fs))])
+                return TimeFrequency.spectrogram(slice, sampleRate: fs, windowSize: settings.windowSize, hop: settings.hop)
             }
-            return TimeFrequency.waterfall(ir, sampleRate: fs, start: start, windowLength: 0.3, slices: 25, step: 0.01)
+            return TimeFrequency.waterfall(ir, sampleRate: fs, start: start, windowLength: windowLength, slices: slices, step: step)
         }.value
         grid = result
         computedFor = k
     }
 }
 
+/// The spectrogram's analysis for a length of impulse response: a 2048-point window, shorter for very
+/// short lengths so there are still several columns, and a hop that keeps about 300 columns.
+struct TimeFrequencySettings {
+    /// The window sizes offered, samples.
+    static let windowSizes = [256, 512, 1024, 2048, 4096, 8192, 16_384, 32_768]
+
+    let windowSize: Int
+    let hop: Int
+
+    /// `window` is a chosen size in samples, or 0 to pick one for the length.
+    init(length: Double, sampleRate fs: Double, window chosen: Int = 0) {
+        let samples = max(1, Int(length * fs))
+        var window = 2048
+        while window > 256 && window * 4 > samples { window /= 2 }
+        windowSize = chosen > 0 ? chosen : window
+        // About 300 columns, and never more than the window apart so no part of the response is skipped.
+        hop = max(32, min(samples / 300, windowSize))
+    }
+}
+
 /// Draws a spectrogram grid on a log frequency axis.
 struct Heatmap: View {
     let grid: TimeFrequency.Grid
+    var low = 20.0
+    var high = 20_000.0
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Canvas { context, size in
             let rows = 160
-            let fLow = 20.0, fHigh = min(20_000, grid.frequencies.last ?? 20_000)
+            let fHigh = min(high, grid.frequencies.last ?? high)
+            let fLow = min(low, fHigh / 2)
             let top = grid.levels.flatMap { $0 }.max() ?? 0
             let cols = grid.times.count
             guard cols > 0 else { return }
@@ -802,7 +1013,7 @@ struct Heatmap: View {
                     context.fill(Path(CGRect(x: x, y: y, width: w + 0.5, height: h + 0.5)), with: .color(color(level)))
                 }
             }
-            for f in frequencyTicks where f >= fLow && f <= fHigh {
+            for f in zoomedFrequencyTicks(in: fLow...fHigh) {
                 let y = size.height * (1 - CGFloat(log(f / fLow) / log(fHigh / fLow)))
                 context.draw(Text(frequencyLabel(f)).font(.caption2).foregroundStyle(labelColor), at: CGPoint(x: 18, y: y))
             }
@@ -810,7 +1021,26 @@ struct Heatmap: View {
         .overlay(alignment: .bottomTrailing) {
             Text("0 to \(Int((grid.times.last ?? 0) * 1000)) ms →").font(.caption2).foregroundStyle(labelColor).padding(4)
         }
+        .overlay(alignment: .topTrailing) { legend.padding(6) }
         .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    /// The colour scale: level below the loudest point, and the axes.
+    private var legend: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Text("−60 dB").font(.caption2)
+                LinearGradient(colors: stride(from: -60.0, through: 0, by: 7.5).map { color($0) },
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 110, height: 8)
+                    .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(.separator))
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                Text("0 dB").font(.caption2)
+            }
+            Text("Level re the loudest point · Hz up · time across").font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding(5)
+        .background(RoundedRectangle(cornerRadius: 4).fill(.regularMaterial))
     }
 
     private var labelColor: Color { colorScheme == .dark ? .white : .black }
@@ -842,7 +1072,7 @@ struct Waterfall: View {
                 let i = slice.0
                 ForEach(slice.1) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Slice", i))
-                        .foregroundStyle(Color.accentColor.opacity(1 - 0.85 * Double(i) / Double(max(1, slices.count - 1))))
+                        .foregroundStyle(parula(Double(i) / Double(max(1, slices.count - 1))))
                         .lineStyle(StrokeStyle(lineWidth: 1))
                 }
             }
@@ -857,6 +1087,38 @@ struct Waterfall: View {
         }
         .chartYAxisLabel("dB")
         .clipped()
+        .overlay(alignment: .topTrailing) { colourBar.padding(.top, 4).padding(.trailing, 40) }
     }
+
+    /// The slices' colours from first to last, with their start times.
+    private var colourBar: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Text("0 ms").font(.caption2)
+                LinearGradient(colors: (0...8).map { parula(Double($0) / 8) }, startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 90, height: 8)
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                Text("\(Int(((grid.times.last ?? 0) * 1000).rounded())) ms").font(.caption2)
+            }
+            Text("Slice start after the direct sound").font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 4).fill(.regularMaterial))
+    }
+}
+
+/// The parula colour map (MATLAB's default), from dark blue at 0 through teal and green to yellow at 1:
+/// ten samples of it, interpolated linearly.
+func parula(_ t: Double) -> Color {
+    let stops: [(Double, Double, Double)] = [
+        (0.2422, 0.1504, 0.6603), (0.2803, 0.2782, 0.9221), (0.2440, 0.4358, 0.9988), (0.1540, 0.5902, 0.9218),
+        (0.0297, 0.7082, 0.8163), (0.1938, 0.7758, 0.6251), (0.5044, 0.7993, 0.3480), (0.8634, 0.7406, 0.1596),
+        (0.9892, 0.8136, 0.1885), (0.9769, 0.9839, 0.0805),
+    ]
+    let x = min(max(t, 0), 1) * Double(stops.count - 1)
+    let i = min(Int(x), stops.count - 2)
+    let f = x - Double(i)
+    let a = stops[i], b = stops[i + 1]
+    return Color(red: a.0 + (b.0 - a.0) * f, green: a.1 + (b.1 - a.1) * f, blue: a.2 + (b.2 - a.2) * f)
 }
 #endif

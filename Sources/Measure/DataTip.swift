@@ -25,12 +25,14 @@ struct TipSeries: Identifiable {
 }
 
 /// A data tip for a frequency chart: hover to read the frequency and each curve's level under the
-/// pointer, click to pin it there, click again to unpin.
+/// pointer, click to pin it there, click again to unpin. With a zoom, dragging across the chart zooms in.
 struct FrequencyDataTip: ViewModifier {
     let series: [TipSeries]
     var unit = "dB"
+    var zoom: Binding<ChartZoom>?
     @State private var hover: Double?
     @State private var pinned: Double?
+    @State private var box: ZoomBox?
 
     func body(content: Content) -> some View {
         content.chartOverlay { proxy in
@@ -50,13 +52,27 @@ struct FrequencyDataTip: ViewModifier {
                             .onTapGesture { p in
                                 if pinned != nil { pinned = nil } else { pinned = proxy.value(atX: p.x - plot.minX) }
                             }
-                        if let f = pinned ?? hover {
+                            .gesture(zoomDrag(proxy: proxy, plot: plot), including: zoom == nil ? .none : .all)
+                        if let box {
+                            box.view(in: plot)
+                        } else if let f = pinned ?? hover {
                             tip(f, proxy: proxy, plot: plot)
                         }
                     }
                 }
             }
         }
+    }
+
+    private func zoomDrag(proxy: ChartProxy, plot: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 4)
+            .onChanged { box = ZoomBox(start: $0.startLocation, end: $0.location) }
+            .onEnded { value in
+                if let zoom {
+                    ZoomBox(start: value.startLocation, end: value.location).apply(to: &zoom.wrappedValue, proxy: proxy, plot: plot)
+                }
+                box = nil
+            }
     }
 
     @ViewBuilder
@@ -111,8 +127,8 @@ struct FrequencyDataTip: ViewModifier {
 
 extension View {
     /// Adds a hover and click data tip to a chart with a log frequency axis.
-    func frequencyDataTip(_ series: [TipSeries], unit: String = "dB") -> some View {
-        modifier(FrequencyDataTip(series: series, unit: unit))
+    func frequencyDataTip(_ series: [TipSeries], unit: String = "dB", zoom: Binding<ChartZoom>? = nil) -> some View {
+        modifier(FrequencyDataTip(series: series, unit: unit, zoom: zoom))
     }
 }
 #endif
