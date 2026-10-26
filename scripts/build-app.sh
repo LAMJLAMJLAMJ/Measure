@@ -26,6 +26,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Measure records your measurement microphones during a sweep.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>Measure lets the Measure Remote app on your iPad control it over the local network.</string>
+    <key>NSBonjourServices</key><array><string>_measure-remote._tcp</string></array>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>

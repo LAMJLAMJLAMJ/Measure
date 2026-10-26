@@ -7,6 +7,8 @@ let package = Package(
     products: [
         .library(name: "MeasureDSP", targets: ["MeasureDSP"]),
         .library(name: "MeasureAudio", targets: ["MeasureAudio"]),
+        .library(name: "MeasureRemote", targets: ["MeasureRemote"]),
+        .library(name: "MeasureRemoteUI", targets: ["MeasureRemoteUI"]),
         .executable(name: "measure-cli", targets: ["measure-cli"]),
         .executable(name: "Measure", targets: ["Measure"]),
     ],
@@ -18,7 +20,12 @@ let package = Package(
         // Command-line front end for analysing files, generating sweeps and measuring.
         .executableTarget(name: "measure-cli", dependencies: ["MeasureDSP", "MeasureAudio"]),
         // The Mac app (SwiftUI). Run with `swift run Measure` or bundle with scripts/build-app.sh.
-        .executableTarget(name: "Measure", dependencies: ["MeasureDSP", "MeasureAudio"]),
+        // Messages and the Bonjour link between the Mac app and the iPad remote.
+        .target(name: "MeasureRemote"),
+        // The remote's screens. Used by the iPad app in RemoteApp/Measure Remote.swiftpm.
+        .target(name: "MeasureRemoteUI", dependencies: ["MeasureRemote"]),
+        .executableTarget(name: "Measure", dependencies: ["MeasureDSP", "MeasureAudio", "MeasureRemote"]),
         .testTarget(name: "MeasureDSPTests", dependencies: ["MeasureDSP"]),
+        .testTarget(name: "MeasureRemoteTests", dependencies: ["MeasureRemote"]),
     ]
 )
