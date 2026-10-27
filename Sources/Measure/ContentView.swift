@@ -259,6 +259,7 @@ struct StatusBar: View {
 
 struct TraceList: View {
     @Environment(AppModel.self) private var model
+    @State private var confirmingClear = false
     @State private var editing: TraceInfo?
     @State private var renaming: UUID?
     @State private var newName = ""
@@ -453,6 +454,19 @@ struct TraceList: View {
             }
             .buttonStyle(.borderless)
             .help("Add a folder to the list, then drag measurements onto it")
+            Button {
+                confirmingClear = true
+            } label: {
+                Label("Clear All", systemImage: "trash")
+            }
+            .buttonStyle(.borderless)
+            .disabled(model.traces.isEmpty)
+            .help("Remove every measurement from the list. Their files go to the Trash.")
+            .confirmationDialog("Clear all \(model.traces.count) measurements?", isPresented: $confirmingClear) {
+                Button("Move to Trash", role: .destructive) { model.clearAll() }
+            } message: {
+                Text("Every measurement and folder is removed from the list. The files go to the Trash: Put Back in the Finder returns them, and they reappear the next time this project is opened.")
+            }
             Spacer(minLength: 0)
             if !model.folders.isEmpty {
                 Text("Drop here for the top level").font(.caption).foregroundStyle(.secondary).lineLimit(1)

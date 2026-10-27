@@ -465,6 +465,19 @@ final class AppModel {
         if let s = selection, ids.contains(s) { selection = traces.last?.id }
     }
 
+    /// Clears the list: every measurement's files go to the Trash, and the folders go too.
+    func clearAll() {
+        let count = traces.count
+        for trace in traces { ProjectStore.trash(trace.id, in: projectFolder) }
+        traces = []
+        visible = []
+        selection = nil
+        folders = []
+        saveFolders()
+        measurementWarning = nil
+        status = "Moved \(count) measurement\(count == 1 ? "" : "s") to the Trash."
+    }
+
     /// Sets the frequency response window of the given traces. Imported frequency responses are skipped.
     func setWindow(_ window: ResponseWindow, for ids: Set<UUID>) {
         for i in traces.indices where ids.contains(traces[i].id) && traces[i].impulseResponse != nil {
