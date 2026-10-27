@@ -161,6 +161,13 @@ struct ContentView: View {
         }
         .disabled(model.isMeasuring)
         .help("Start or stop listening on the mics from Measurement Setup")
+        Button {
+            if model.monitor.isPaused { model.monitor.resume() } else { model.monitor.pause() }
+        } label: {
+            Label(model.monitor.isPaused ? "Resume" : "Pause", systemImage: model.monitor.isPaused ? "playpause.fill" : "pause.circle")
+        }
+        .disabled(!model.monitor.isRunning)
+        .help("Pause holds the meters, averages and history and leaves the paused time out; Resume carries on. Stop ends the measurement.")
         Button { model.monitor.reset() } label: { Label("Reset", systemImage: "arrow.counterclockwise") }
             .disabled(!model.monitor.isRunning)
             .help("Start the meters, averages, maxima and history again")

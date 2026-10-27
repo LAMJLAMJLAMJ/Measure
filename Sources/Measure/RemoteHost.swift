@@ -122,6 +122,10 @@ final class RemoteHost {
             Task { await model.monitor.start(model) }
         case .stopMonitor:
             model.monitor.stop(model)
+        case .pauseMonitor:
+            model.monitor.pause()
+        case .resumeMonitor:
+            model.monitor.resume()
         case .resetMonitor:
             model.monitor.reset()
         case .select(let id):
@@ -266,6 +270,7 @@ final class RemoteHost {
         s.generatorOutputCount = generator.outputDevice(model)?.outputChannels ?? 0
 
         s.monitorRunning = model.monitor.isRunning
+        s.monitorPaused = model.monitor.isPaused
         s.meters = model.monitor.isRunning ? meters(model) : []
         let monitor = model.monitor
         s.rtaMic = monitor.settings.rtaMic

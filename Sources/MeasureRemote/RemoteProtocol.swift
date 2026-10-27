@@ -9,7 +9,7 @@ public enum RemoteMessage: Codable, Equatable, Sendable {
 }
 
 /// Bumped when a change to the messages would break an older remote.
-public let remoteProtocolVersion = 4
+public let remoteProtocolVersion = 6
 
 /// The Bonjour service type the Mac advertises. It must also be listed under NSBonjourServices
 /// in both apps' Info.plist.
@@ -27,6 +27,9 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     case startMonitor
     case stopMonitor
     case resetMonitor
+    /// Holds the meters, RTA and history; `resumeMonitor` carries on. Paused time is left out.
+    case pauseMonitor
+    case resumeMonitor
     case select(UUID)
     /// Ticks or unticks a measurement: ticked ones are drawn together.
     case setVisible(UUID, Bool)
@@ -233,6 +236,7 @@ public struct RemoteState: Codable, Equatable, Sendable {
     public var generatorOutputCount = 0
 
     public var monitorRunning = false
+    public var monitorPaused = false
     public var meters: [RemoteMeter] = []
     public var rta: RemoteRTA?
     public var rtaMic = 0

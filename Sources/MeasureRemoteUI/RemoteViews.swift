@@ -625,8 +625,20 @@ struct MonitorTab: View {
                     StartStopButton(running: state.monitorRunning, start: "Start Monitoring", stop: "Stop Monitoring") {
                         client.send(state.monitorRunning ? .stopMonitor : .startMonitor)
                     }
+                    Button {
+                        client.send(state.monitorPaused ? .resumeMonitor : .pauseMonitor)
+                    } label: {
+                        Label(state.monitorPaused ? "Resume" : "Pause",
+                              systemImage: state.monitorPaused ? "play.fill" : "pause.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!state.monitorRunning)
                     Button("Reset") { client.send(.resetMonitor) }
                         .buttonStyle(.bordered)
+                    if state.monitorPaused {
+                        Text("Paused: the levels are held and the paused time is left out.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Spacer()
                 }
                 if state.meters.isEmpty {

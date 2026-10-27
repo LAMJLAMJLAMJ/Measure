@@ -19,6 +19,13 @@ private func elapsedText(_ seconds: Int) -> String {
     String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
 }
 
+/// The SPL view's status: how long it has measured, and whether it is paused.
+@MainActor private func runningText(_ monitor: MonitorAnalyzer) -> String {
+    guard monitor.isRunning else { return "Stopped. Press Start in the toolbar to listen on the mics from Measurement Setup." }
+    let measured = elapsedText(monitor.snapshot.seconds)
+    return monitor.isPaused ? "Paused at \(measured) measured. Resume carries on." : "Running \(measured)"
+}
+
 // MARK: - SPL
 
 struct SPLView: View {
@@ -59,7 +66,7 @@ struct SPLView: View {
                     .disabled(monitor.snapshot.seconds == 0)
                     .help("Save every mic's levels second by second as CSV: LAeq, LAFmax and LAS over each second, and the same for C and Z, with calibrations and offsets applied")
                 Spacer()
-                Text(monitor.isRunning ? "Running \(elapsedText(monitor.snapshot.seconds))" : "Stopped. Press Start in the toolbar to listen on the mics from Measurement Setup.")
+                Text(runningText(monitor))
                     .font(.callout).foregroundStyle(.secondary).monospacedDigit()
                     .lineLimit(1)
                     .layoutPriority(-1)
@@ -324,7 +331,7 @@ struct LevelHistoryChart: View {
             let end = min(history.count, i + step)
             let level = history[i..<end].max()! + offset
             // Second i ends i + 1 seconds after the start.
-            return HistoryPoint(id: i, time: start.addingTimeInterval(Double(i + 1)), level: level)
+            return HistoryPoint(id: i, time: monitor.endDate(ofSecond: i) ?? start.addingTimeInterval(Double(i + 1)), level: level)
         }
     }
 }
