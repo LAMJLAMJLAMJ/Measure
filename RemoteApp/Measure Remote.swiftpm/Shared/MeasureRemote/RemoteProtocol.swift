@@ -9,7 +9,7 @@ public enum RemoteMessage: Codable, Equatable, Sendable {
 }
 
 /// Bumped when a change to the messages would break an older remote.
-public let remoteProtocolVersion = 2
+public let remoteProtocolVersion = 3
 
 /// The Bonjour service type the Mac advertises. It must also be listed under NSBonjourServices
 /// in both apps' Info.plist.
@@ -47,6 +47,54 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     case captureLive
     /// Saves the power average of the ticked measurements as a new measurement, as the Mac's Average does.
     case saveAverage
+    /// One of `RemoteState.generatorSignals`.
+    case setGeneratorSignal(String)
+    case setGeneratorMuted(Bool)
+    /// Sine frequency, Hz.
+    case setGeneratorFrequency(Double)
+    /// Band of the noise and range of the sweep, Hz.
+    case setGeneratorBand(low: Double, high: Double)
+    /// Turns output `channel` (from 1) on or off.
+    case setGeneratorOutput(channel: Int, on: Bool)
+    /// The RTA's mic (an index into `RemoteState.mics`), bands per octave and weighting.
+    case setRTAMic(Int)
+    case setRTAFraction(Int)
+    case setRTAWeighting(String)
+    case resetRTAPeaks
+    /// Seconds of SPL history shown; 0 for everything.
+    case setHistoryRange(Int)
+}
+
+/// The real-time analyser's bands, with the weighting, calibration and offset applied.
+public struct RemoteRTA: Codable, Equatable, Sendable {
+    /// Band centre frequencies, Hz.
+    public var centers: [Double]
+    public var levels: [Double]
+    /// Peak hold.
+    public var peaks: [Double]
+    public var unit: String
+
+    public init(centers: [Double], levels: [Double], peaks: [Double], unit: String) {
+        self.centers = centers
+        self.levels = levels
+        self.peaks = peaks
+        self.unit = unit
+    }
+}
+
+/// One SPL meter's level over time, one value per `secondsPerPoint`, oldest first, ending now.
+public struct RemoteHistory: Codable, Equatable, Sendable {
+    public var label: String
+    public var color: String
+    public var levels: [Double]
+    public var secondsPerPoint: Int
+
+    public init(label: String, color: String, levels: [Double], secondsPerPoint: Int) {
+        self.label = label
+        self.color = color
+        self.levels = levels
+        self.secondsPerPoint = secondsPerPoint
+    }
 }
 
 /// A mic input of the measurement setup.
@@ -167,9 +215,27 @@ public struct RemoteState: Codable, Equatable, Sendable {
     public var generatorLevel: Double = -20
     public var generatorMaxLevel: Double = 0
     public var generatorSignal = ""
+    public var generatorSignals: [String] = []
+    public var generatorMuted = false
+    public var generatorFrequency: Double = 1000
+    public var generatorLow: Double = 20
+    public var generatorHigh: Double = 20_000
+    /// Outputs that play the signal, from 1, and how many the device has.
+    public var generatorOutputs: [Int] = []
+    public var generatorOutputCount = 0
 
     public var monitorRunning = false
     public var meters: [RemoteMeter] = []
+    public var rta: RemoteRTA?
+    public var rtaMic = 0
+    public var rtaFraction = 3
+    public var rtaWeighting = ""
+    public var rtaWeightings: [String] = []
+    public var histories: [RemoteHistory] = []
+    public var historyRange = 900
+    /// Limits for A- and C-weighted meters, drawn on the history.
+    public var limitA: Double?
+    public var limitC: Double?
 
     /// The most recent measurements, newest last.
     public var traces: [RemoteTrace] = []

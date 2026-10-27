@@ -134,6 +134,39 @@ final class RemoteHost {
             if let smoothing = Smoothing(rawValue: name) { model.smoothing = smoothing }
         case .showAverage(let show):
             showAverage = show
+        case .setGeneratorSignal(let name):
+            guard let kind = TestSignal.Kind(rawValue: name) else { return }
+            model.generator.settings.signal.kind = kind
+            model.generator.prepare(sampleRate: model.settings.sampleRate)
+        case .setGeneratorMuted(let muted):
+            model.generator.settings.muted = muted
+        case .setGeneratorFrequency(let f):
+            guard f.isFinite, f > 0 else { return }
+            model.generator.settings.signal.frequency = f
+            model.generator.prepare(sampleRate: model.settings.sampleRate)
+        case .setGeneratorBand(let low, let high):
+            guard low.isFinite, high.isFinite, low > 0, high > low else { return }
+            model.generator.settings.signal.low = low
+            model.generator.settings.signal.high = high
+            model.generator.prepare(sampleRate: model.settings.sampleRate)
+        case .setGeneratorOutput(let channel, let on):
+            var set = Set(model.generator.outputs(model))
+            if on { set.insert(channel) } else { set.remove(channel) }
+            model.generator.settings.outputs = set.sorted()
+        case .setRTAMic(let index):
+            guard model.settings.mics.indices.contains(index) else { return }
+            model.monitor.settings.rtaMic = index
+        case .setRTAFraction(let fraction):
+            guard [1, 3, 6, 12, 24].contains(fraction) else { return }
+            model.monitor.settings.rtaFraction = fraction
+        case .setRTAWeighting(let name):
+            guard let w = SoundLevel.FrequencyWeighting(rawValue: name) else { return }
+            model.monitor.settings.rtaWeighting = w
+        case .resetRTAPeaks:
+            model.monitor.resetPeaks()
+        case .setHistoryRange(let seconds):
+            guard [300, 900, 3600, 14_400, 0].contains(seconds) else { return }
+            model.monitor.settings.historyRange = seconds
         case .captureLive:
             model.live.capture(model)
         case .saveAverage:
@@ -216,9 +249,28 @@ final class RemoteHost {
         s.generatorLevel = generator.settings.level
         s.generatorMaxLevel = generator.maximumLevel
         s.generatorSignal = generator.settings.signal.kind.rawValue
+        s.generatorSignals = TestSignal.Kind.allCases.map(\.rawValue)
+        s.generatorMuted = generator.settings.muted
+        s.generatorFrequency = generator.settings.signal.sineFrequency(sampleRate: model.settings.sampleRate)
+        s.generatorLow = generator.settings.signal.low
+        s.generatorHigh = generator.settings.signal.high
+        s.generatorOutputs = generator.outputs(model)
+        s.generatorOutputCount = generator.outputDevice(model)?.outputChannels ?? 0
 
         s.monitorRunning = model.monitor.isRunning
         s.meters = model.monitor.isRunning ? meters(model) : []
+        let monitor = model.monitor
+        s.rtaMic = monitor.settings.rtaMic
+        s.rtaFraction = monitor.settings.rtaFraction
+        s.rtaWeighting = monitor.settings.rtaWeighting.rawValue
+        s.rtaWeightings = SoundLevel.FrequencyWeighting.allCases.map(\.rawValue)
+        s.historyRange = monitor.settings.historyRange
+        s.limitA = monitor.settings.limitA
+        s.limitC = monitor.settings.limitC
+        if monitor.isRunning {
+            s.rta = rta(model)
+            s.histories = histories(model)
+        }
 
         let measured = model.traces.filter(\.hasResponse).suffix(30)
         s.traces = measured.map { trace in
@@ -245,6 +297,47 @@ final class RemoteHost {
         curveCache = curveCache.filter { ids.contains($0.key) }
         phaseCache = phaseCache.filter { ids.contains($0.key) }
         return s
+    }
+
+    /// The RTA as the Mac draws it: with the weighting, the mic's calibration curve and its offset.
+    private func rta(_ model: AppModel) -> RemoteRTA? {
+        let monitor = model.monitor
+        let snap = monitor.snapshot
+        guard !snap.bands.isEmpty, snap.bands.count == snap.rtaLevels.count,
+              snap.bands.count == snap.rtaPeaks.count else { return nil }
+        let index = monitor.settings.rtaMic
+        let mics = model.settings.mics
+        let cal = index < mics.count ? model.calibration(mic: mics[index].micName) : nil
+        let offset = monitor.offset(model, mic: index) ?? 0
+        let w = monitor.settings.rtaWeighting
+        let shifts = snap.bands.map { SoundLevel.weightingDB(w, at: $0.center) - (cal?.magnitude(at: $0.center) ?? 0) + offset }
+        return RemoteRTA(centers: snap.bands.map(\.center),
+                         levels: zip(snap.rtaLevels, shifts).map { ($0 + $1).roundedTenth },
+                         peaks: zip(snap.rtaPeaks, shifts).map { ($0 + $1).roundedTenth },
+                         unit: monitor.unit(model, mic: index))
+    }
+
+    private static let meterColors = ["#FF9500", "#32ADE6", "#FF2D55", "#FFCC00"]
+
+    /// Each meter's history over the range shown, in its units, at most 300 points (the highest
+    /// value of each stretch, as the Mac draws it).
+    private func histories(_ model: AppModel) -> [RemoteHistory] {
+        let monitor = model.monitor
+        return monitor.settings.meters.enumerated().compactMap { i, meter in
+            guard let history = monitor.histories[meter.id], !history.isEmpty else { return nil }
+            let offset = monitor.offset(model, mic: meter.mic) ?? 0
+            let range = monitor.settings.historyRange
+            let shown = Array(history.suffix(range > 0 ? range : history.count))
+            let step = max(1, Int((Double(shown.count) / 300).rounded(.up)))
+            let levels = stride(from: 0, to: shown.count, by: step).map { j in
+                (shown[j..<min(shown.count, j + step)].max()! + offset).roundedTenth
+            }
+            let names = model.settings.mics.map { $0.micName ?? "Input \($0.channel)" }
+            let name = meter.mic < names.count ? names[meter.mic] : "Mic \(meter.mic + 1)"
+            return RemoteHistory(label: "\(name) · \(meter.average.label(meter.weighting))",
+                                 color: Self.meterColors[i % Self.meterColors.count],
+                                 levels: levels, secondsPerPoint: step)
+        }
     }
 
     private func liveName(_ model: AppModel, mic: Int) -> String {

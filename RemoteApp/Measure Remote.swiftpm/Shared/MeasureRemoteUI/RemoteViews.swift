@@ -459,6 +459,9 @@ struct GeneratorTab: View {
     let state: RemoteState
     @State private var level: Double = -20
     @State private var dragging = false
+    @State private var frequency: Double = 1000
+    @State private var low: Double = 20
+    @State private var high: Double = 20_000
 
     private var range: ClosedRange<Double> {
         let top = max(state.generatorMaxLevel, -79)
@@ -466,33 +469,102 @@ struct GeneratorTab: View {
     }
 
     var body: some View {
-        VStack(spacing: 24) {
-            if !state.generatorSignal.isEmpty {
-                Text(state.generatorSignal).font(.title3).foregroundStyle(.secondary)
+        ScrollView {
+            VStack(spacing: 22) {
+                Picker("Signal", selection: Binding(get: { state.generatorSignal },
+                                                    set: { client.send(.setGeneratorSignal($0)) })) {
+                    ForEach(state.generatorSignals, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 640)
+                signalSettings
+                Text(String(format: "%.1f dBFS RMS", level))
+                    .font(.system(size: 52, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(state.generatorMuted ? .secondary : .primary)
+                HStack(spacing: 16) {
+                    Button { nudge(-1) } label: { Image(systemName: "minus") }
+                        .buttonStyle(.bordered)
+                    Slider(value: $level, in: range, onEditingChanged: { editing in
+                        dragging = editing
+                        if !editing { client.send(.setGeneratorLevel(level)) }
+                    })
+                    Button { nudge(1) } label: { Image(systemName: "plus") }
+                        .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: 560)
+                HStack(spacing: 16) {
+                    StartStopButton(running: state.generatorRunning, start: "Start Generator", stop: "Stop Generator") {
+                        client.send(state.generatorRunning ? .stopGenerator : .startGenerator)
+                    }
+                    Toggle(isOn: Binding(get: { state.generatorMuted }, set: { client.send(.setGeneratorMuted($0)) })) {
+                        Label("Mute", systemImage: state.generatorMuted ? "speaker.slash.fill" : "speaker.wave.2")
+                    }
+                    .toggleStyle(.button)
+                    .controlSize(.large)
+                }
+                outputs
             }
-            Text(String(format: "%.1f dBFS", level))
-                .font(.system(size: 56, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-            HStack(spacing: 16) {
-                Button { nudge(-1) } label: { Image(systemName: "minus") }
-                    .buttonStyle(.bordered)
-                Slider(value: $level, in: range, onEditingChanged: { editing in
-                    dragging = editing
-                    if !editing { client.send(.setGeneratorLevel(level)) }
-                })
-                Button { nudge(1) } label: { Image(systemName: "plus") }
-                    .buttonStyle(.bordered)
-            }
-            .frame(maxWidth: 560)
-            StartStopButton(running: state.generatorRunning, start: "Start Generator", stop: "Stop Generator") {
-                client.send(state.generatorRunning ? .stopGenerator : .startGenerator)
-            }
-            Spacer()
+            .padding(32)
+            .frame(maxWidth: .infinity)
         }
-        .padding(32)
-        .onAppear { level = state.generatorLevel }
+        .onAppear {
+            level = state.generatorLevel
+            frequency = state.generatorFrequency
+            low = state.generatorLow
+            high = state.generatorHigh
+        }
         .onChange(of: state.generatorLevel) { _, new in
             if !dragging { level = new }
+        }
+        .onChange(of: state.generatorFrequency) { _, new in frequency = new }
+        .onChange(of: state.generatorLow) { _, new in low = new }
+        .onChange(of: state.generatorHigh) { _, new in high = new }
+    }
+
+    /// The sine's frequency, or the band of the noise and the sweep.
+    @ViewBuilder private var signalSettings: some View {
+        switch state.generatorSignal {
+        case "Sine":
+            HStack(spacing: 12) {
+                NumberField(title: "Frequency", value: $frequency, unit: "Hz") { client.send(.setGeneratorFrequency(frequency)) }
+                ForEach([63.0, 125, 250, 500, 1000, 2000, 4000, 8000], id: \.self) { f in
+                    Button(f >= 1000 ? "\(Int(f / 1000))k" : "\(Int(f))") {
+                        frequency = f
+                        client.send(.setGeneratorFrequency(f))
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        case "Pink noise", "White noise", "Sweep":
+            HStack(spacing: 16) {
+                NumberField(title: "From", value: $low, unit: "Hz") { client.send(.setGeneratorBand(low: low, high: high)) }
+                NumberField(title: "To", value: $high, unit: "Hz") { client.send(.setGeneratorBand(low: low, high: high)) }
+                Button("Full Range") {
+                    low = 20
+                    high = 20_000
+                    client.send(.setGeneratorBand(low: 20, high: 20_000))
+                }
+                .buttonStyle(.bordered)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private var outputs: some View {
+        if state.generatorOutputCount > 0 {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Outputs").font(.headline)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 52), spacing: 8)], alignment: .leading, spacing: 8) {
+                    ForEach(1...state.generatorOutputCount, id: \.self) { c in
+                        Toggle("\(c)", isOn: Binding(get: { state.generatorOutputs.contains(c) },
+                                                     set: { client.send(.setGeneratorOutput(channel: c, on: $0)) }))
+                            .toggleStyle(.button)
+                    }
+                }
+            }
+            .frame(maxWidth: 560, alignment: .leading)
         }
     }
 
@@ -502,38 +574,227 @@ struct GeneratorTab: View {
     }
 }
 
+/// A number typed in, sent when Return is pressed or the field is left.
+struct NumberField: View {
+    let title: String
+    @Binding var value: Double
+    let unit: String
+    let commit: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+            TextField(title, value: $value, format: .number.precision(.fractionLength(0...1)))
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 90)
+                .focused($focused)
+                .numberKeyboard()
+                .onSubmit(commit)
+                .onChange(of: focused) { _, now in if !now { commit() } }
+            Text(unit).foregroundStyle(.secondary)
+        }
+        .fixedSize()
+    }
+}
+
 // MARK: - SPL monitor
 
 struct MonitorTab: View {
     let client: RemoteClient
     let state: RemoteState
 
-    private let columns = [GridItem(.adaptive(minimum: 220), spacing: 16)]
+    private let columns = [GridItem(.adaptive(minimum: 200), spacing: 12)]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                StartStopButton(running: state.monitorRunning, start: "Start Monitoring", stop: "Stop Monitoring") {
-                    client.send(state.monitorRunning ? .stopMonitor : .startMonitor)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    StartStopButton(running: state.monitorRunning, start: "Start Monitoring", stop: "Stop Monitoring") {
+                        client.send(state.monitorRunning ? .stopMonitor : .startMonitor)
+                    }
+                    Button("Reset") { client.send(.resetMonitor) }
+                        .buttonStyle(.bordered)
+                    Spacer()
                 }
-                Button("Reset") { client.send(.resetMonitor) }
-                    .buttonStyle(.bordered)
-                Spacer()
-            }
-            if state.meters.isEmpty {
-                ContentUnavailableView("No meters", systemImage: "gauge.with.dots.needle.0percent",
-                                       description: Text("Start monitoring to see the levels."))
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 16) {
+                if state.meters.isEmpty {
+                    ContentUnavailableView("No meters", systemImage: "gauge.with.dots.needle.0percent",
+                                           description: Text("Start monitoring to see the levels, the RTA and the history."))
+                } else {
+                    LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(Array(state.meters.enumerated()), id: \.offset) { _, meter in
                             MeterTile(meter: meter)
                         }
                     }
+                    RTASection(client: client, state: state)
+                    HistorySection(client: client, state: state)
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+struct RTASection: View {
+    let client: RemoteClient
+    let state: RemoteState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text("RTA").font(.headline)
+                Picker("Mic", selection: Binding(get: { state.rtaMic }, set: { client.send(.setRTAMic($0)) })) {
+                    ForEach(Array(state.mics.enumerated()), id: \.offset) { i, mic in Text(mic.name).tag(i) }
+                }
+                Picker("Bands", selection: Binding(get: { state.rtaFraction }, set: { client.send(.setRTAFraction($0)) })) {
+                    ForEach([1, 3, 6, 12, 24], id: \.self) { Text("1/\($0) oct").tag($0) }
+                }
+                Picker("Weighting", selection: Binding(get: { state.rtaWeighting }, set: { client.send(.setRTAWeighting($0)) })) {
+                    ForEach(state.rtaWeightings, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                Spacer()
+                Button("Reset Peaks") { client.send(.resetRTAPeaks) }
+                    .buttonStyle(.bordered)
+            }
+            if let rta = state.rta {
+                RTAChart(rta: rta, fraction: state.rtaFraction)
+                    .frame(height: 260)
+            } else {
+                Text("Waiting for the analyser…").foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+struct RTAChart: View {
+    let rta: RemoteRTA
+    let fraction: Int
+
+    private struct Bar: Identifiable {
+        let id: Int
+        let low: Double
+        let high: Double
+        let level: Double
+        let peak: Double
+    }
+
+    private var bars: [Bar] {
+        let half = pow(2, 1 / (2 * Double(max(fraction, 1))))
+        return rta.centers.indices.compactMap { i in
+            guard i < rta.levels.count, i < rta.peaks.count else { return nil }
+            let c = rta.centers[i]
+            return Bar(id: i, low: max(c / half, 20), high: min(c * half, 20_000), level: rta.levels[i], peak: rta.peaks[i])
+        }
+    }
+
+    private var yDomain: ClosedRange<Double> {
+        let top = ((rta.peaks.max() ?? 0) / 10).rounded(.up) * 10 + 5
+        return (top - 75)...top
+    }
+
+    var body: some View {
+        let domain = yDomain
+        Chart(bars) { bar in
+            RectangleMark(xStart: .value("Low", bar.low), xEnd: .value("High", bar.high),
+                          yStart: .value("Bottom", domain.lowerBound), yEnd: .value("Level", max(bar.level, domain.lowerBound)))
+                .foregroundStyle(Color.accentColor.opacity(0.8))
+            RectangleMark(xStart: .value("Low", bar.low), xEnd: .value("High", bar.high),
+                          yStart: .value("Peak", bar.peak - 0.4), yEnd: .value("Peak", bar.peak + 0.4))
+                .foregroundStyle(Color.secondary)
+        }
+        .chartXScale(domain: 20.0...20_000.0, type: .log)
+        .chartYScale(domain: domain)
+        .chartXAxis {
+            AxisMarks(values: [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16_000]) { value in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let f = value.as(Double.self) {
+                        Text(f >= 1000 ? "\(Int(f / 1000))k" : (f == 31.5 ? "31.5" : "\(Int(f))"))
+                    }
                 }
             }
         }
-        .padding()
+        .chartYAxisLabel(rta.unit)
+        .chartPlotStyle { $0.clipped() }
+    }
+}
+
+struct HistorySection: View {
+    let client: RemoteClient
+    let state: RemoteState
+
+    private struct Point: Identifiable {
+        let id: Int
+        let series: String
+        let minutes: Double
+        let level: Double
+    }
+
+    private var points: [Point] {
+        var result: [Point] = []
+        for (n, history) in state.histories.enumerated() {
+            let count = history.levels.count
+            for (j, level) in history.levels.enumerated() {
+                let secondsAgo = Double((count - 1 - j) * history.secondsPerPoint)
+                result.append(Point(id: result.count, series: "\(n)", minutes: -secondsAgo / 60, level: level))
+            }
+        }
+        return result
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text("History").font(.headline)
+                Picker("Range", selection: Binding(get: { state.historyRange }, set: { client.send(.setHistoryRange($0)) })) {
+                    Text("5 min").tag(300)
+                    Text("15 min").tag(900)
+                    Text("1 h").tag(3600)
+                    Text("4 h").tag(14_400)
+                    Text("All").tag(0)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                Spacer()
+                ForEach(Array(state.histories.enumerated()), id: \.offset) { _, history in
+                    HStack(spacing: 4) {
+                        Circle().fill(Color(remoteHex: history.color)).frame(width: 8, height: 8)
+                        Text(history.label).font(.caption)
+                    }
+                }
+            }
+            if state.histories.isEmpty {
+                Text("The history starts after the first second.").foregroundStyle(.secondary)
+            } else {
+                Chart {
+                    ForEach(points) { p in
+                        LineMark(x: .value("Minutes", p.minutes), y: .value("Level", p.level),
+                                 series: .value("Meter", p.series))
+                            .foregroundStyle(by: .value("Meter", p.series))
+                            .lineStyle(StrokeStyle(lineWidth: 1.5))
+                    }
+                    if let a = state.limitA {
+                        RuleMark(y: .value("Limit A", a))
+                            .foregroundStyle(.red)
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    }
+                    if let c = state.limitC {
+                        RuleMark(y: .value("Limit C", c))
+                            .foregroundStyle(.purple)
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    }
+                }
+                .chartForegroundStyleScale(domain: state.histories.indices.map { "\($0)" },
+                                           range: state.histories.map { Color(remoteHex: $0.color) })
+                .chartLegend(.hidden)
+                .chartXAxisLabel("minutes ago")
+                .chartYAxisLabel("dB")
+                .frame(height: 220)
+            }
+        }
     }
 }
 
@@ -827,6 +1088,15 @@ struct DataTip: View {
 }
 
 extension View {
+    /// A keyboard with digits and a Return key on the iPad.
+    @ViewBuilder func numberKeyboard() -> some View {
+        #if os(iOS)
+        keyboardType(.numbersAndPunctuation)
+        #else
+        self
+        #endif
+    }
+
     /// Grouped sections on the iPad; the closest style on the Mac, where this library is also built.
     @ViewBuilder func remoteListStyle() -> some View {
         #if os(iOS)
