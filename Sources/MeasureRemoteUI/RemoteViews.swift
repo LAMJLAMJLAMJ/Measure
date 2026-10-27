@@ -521,6 +521,8 @@ struct ResponseChart: View {
     /// The name of a curve to draw thicker than the others.
     var highlighted: String? = nil
     let empty: String
+    /// The frequency under the finger, while it is on the chart.
+    @State private var touched: Double?
 
     private struct Point: Identifiable {
         let id: Int
@@ -581,6 +583,29 @@ struct ResponseChart: View {
                         .foregroundStyle(Color.primary)
                         .lineStyle(StrokeStyle(lineWidth: point.width))
                 }
+                if let touched {
+                    RuleMark(x: .value("Frequency", touched))
+                        .foregroundStyle(Color.secondary)
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                        .annotation(position: .top, alignment: .center, spacing: 0,
+                                    overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                            DataTip(frequency: touched, rows: tipRows(at: touched))
+                        }
+                }
+            }
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0)
+                            .onChanged { drag in
+                                guard let anchor = proxy.plotFrame else { return }
+                                let x = drag.location.x - geo[anchor].origin.x
+                                if let f: Double = proxy.value(atX: x) {
+                                    touched = min(max(f, 20), 20_000)
+                                }
+                            }
+                            .onEnded { _ in touched = nil })
+                }
             }
             .chartForegroundStyleScale(domain: curves.indices.map { seriesName($0) },
                                        range: curves.map { Color(remoteHex: $0.color) })
@@ -600,6 +625,76 @@ struct ResponseChart: View {
             .chartYAxisLabel("dB")
             .chartPlotStyle { $0.clipped() }
         }
+    }
+}
+
+extension ResponseChart {
+    /// Each curve's level at `frequency`, for the data tip, average last.
+    func tipRows(at frequency: Double) -> [DataTip.Row] {
+        var rows = curves.compactMap { curve in
+            curve.level(at: frequency).map { DataTip.Row(name: curve.name, color: Color(remoteHex: curve.color), level: $0) }
+        }
+        if let average, let level = average.level(at: frequency) {
+            rows.append(DataTip.Row(name: "Average", color: .primary, level: level))
+        }
+        return rows
+    }
+}
+
+extension RemoteCurve {
+    /// The level at `frequency`, interpolated on a log frequency axis. Nil outside the curve.
+    func level(at frequency: Double) -> Double? {
+        let count = min(frequencies.count, levels.count)
+        guard count > 0, frequency >= frequencies[0], frequency <= frequencies[count - 1] else { return nil }
+        var lo = 0
+        var hi = count - 1
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2
+            if frequencies[mid] <= frequency { lo = mid } else { hi = mid }
+        }
+        let f0 = frequencies[lo]
+        let f1 = frequencies[hi]
+        guard f1 > f0 else { return levels[lo] }
+        let w = log(frequency / f0) / log(f1 / f0)
+        return levels[lo] + w * (levels[hi] - levels[lo])
+    }
+}
+
+/// The readout under the finger: the frequency, then each curve's level in its colour.
+struct DataTip: View {
+    struct Row: Identifiable {
+        let name: String
+        let color: Color
+        let level: Double
+        var id: String { name }
+    }
+
+    let frequency: Double
+    let rows: [Row]
+
+    private var frequencyText: String {
+        frequency >= 1000 ? String(format: "%.2f kHz", frequency / 1000) : String(format: "%.0f Hz", frequency)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(frequencyText).font(.callout.bold()).monospacedDigit()
+            ForEach(Array(rows.prefix(10).enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 6) {
+                    Circle().fill(row.color).frame(width: 8, height: 8)
+                    Text(row.name).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(String(format: "%.1f dB", row.level)).monospacedDigit()
+                }
+                .font(.caption)
+            }
+            if rows.count > 10 {
+                Text("and \(rows.count - 10) more").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .frame(minWidth: 150, maxWidth: 240)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

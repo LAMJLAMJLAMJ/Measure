@@ -85,7 +85,7 @@ open build/Measure.app
 
 ## iPad remote
 
-Measure Remote runs on an iPad (or iPhone) on the same Wi-Fi as the Mac. On its Sweep tab you can name the position and start a sweep; set the sweep level and length and which mic inputs it records; run a level check, which plays the sweep in a loop and shows each input's peak over the last sweep (loopback included), marking any input that clipped; and tick measurements to draw them together, with the Mac's smoothing and, if you like, their power average. From the other tabs you can start and stop the live mode and see its curves, start and stop the signal generator and set its level, and start, stop and reset SPL monitoring and read the meters.
+Measure Remote runs on an iPad (or iPhone) on the same Wi-Fi as the Mac. On every chart, drag a finger along the curves to read the frequency and each curve's level. On its Sweep tab you can name the position and start a sweep; set the sweep level and length and which mic inputs it records; run a level check, which plays the sweep in a loop and shows each input's peak over the last sweep (loopback included), marking any input that clipped; and tick measurements to draw them together, with the Mac's smoothing and, if you like, their power average. From the other tabs you can start and stop the live mode and see its curves, start and stop the signal generator and set its level, and start, stop and reset SPL monitoring and read the meters.
 
 On the Mac, turn on iPad Remote (the iPad button in the toolbar, or Measurement > iPad Remote). The Mac is then advertised on the local network and the remote finds it on its own; with more than one Mac it asks which. The remote's name appears at the bottom right of the Mac's window while it is connected.
 
