@@ -73,6 +73,11 @@ struct Trace: Identifiable {
     private(set) var rawResponse: FrequencyResponse
     /// Energy-time curve in dB, one value per sample.
     let energyTime: [Double]
+    /// The energy-time curve's peak, dB re a full-scale sample: added to `energyTime` to draw it
+    /// unnormalised.
+    let energyTimePeak: Double
+    /// The largest sample of the impulse response, for drawing it unnormalised.
+    let impulsePeak: Double
     /// Sample index of the onset (direct sound).
     let onset: Int
     /// Seconds from the start of the frequency response window to the onset, removed from the phase.
@@ -116,7 +121,8 @@ struct Trace: Identifiable {
             ? MeasurementQuality.check(micPeak: info.peakLevel, acoustics: acoustics) : []
         (rawResponse, responseDelay) = Trace.windowedResponse(impulseResponse, onset: onset, sampleRate: fs,
                                                               window: info.window ?? .standard)
-        energyTime = TimeFrequency.energyTimeCurve(impulseResponse)
+        (energyTime, energyTimePeak) = TimeFrequency.energyTimeCurveAndPeak(impulseResponse)
+        impulsePeak = impulseResponse.map(abs).max() ?? 0
     }
 
     init(info: TraceInfo, frequencyResponse: FrequencyResponse) {
@@ -128,6 +134,8 @@ struct Trace: Identifiable {
         qualityIssues = []
         rawResponse = frequencyResponse
         energyTime = []
+        energyTimePeak = 0
+        impulsePeak = 0
         onset = 0
         responseDelay = 0
     }
@@ -141,6 +149,8 @@ struct Trace: Identifiable {
         qualityIssues = []
         rawResponse = FrequencyResponse(frequencies: [], magnitude: [])
         energyTime = []
+        energyTimePeak = 0
+        impulsePeak = 0
         onset = 0
         responseDelay = 0
     }
