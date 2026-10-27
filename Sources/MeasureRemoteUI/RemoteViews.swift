@@ -416,15 +416,6 @@ struct LiveTab: View {
                         client.send(state.liveRunning ? .stopLive : .startLive)
                     }
                     Button {
-                        client.send(state.livePaused ? .resumeLive : .pauseLive)
-                    } label: {
-                        Label(state.livePaused ? "Resume" : "Pause",
-                              systemImage: state.livePaused ? "play.fill" : "pause.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .disabled(!state.liveRunning)
-                    Button {
                         client.send(.captureLive)
                     } label: {
                         Label("Capture", systemImage: "square.and.arrow.down")
