@@ -696,14 +696,11 @@ struct ResponseChart: View {
                     RuleMark(x: .value("Frequency", touched))
                         .foregroundStyle(Color.secondary)
                         .lineStyle(StrokeStyle(lineWidth: 1))
-                        .annotation(position: .top, alignment: .center, spacing: 0,
-                                    overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
-                            DataTip(frequency: touched, rows: tipRows(at: touched), unit: unit)
-                        }
                 }
             }
             .chartOverlay { proxy in
                 GeometryReader { geo in
+                    ZStack(alignment: .topLeading) {
                     Rectangle().fill(.clear).contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 0)
                             .onChanged { drag in
@@ -714,6 +711,19 @@ struct ResponseChart: View {
                                 }
                             }
                             .onEnded { _ in touched = nil })
+                    if let touched, let anchor = proxy.plotFrame, let x = proxy.position(forX: touched) {
+                        let plot = geo[anchor]
+                        // Inside the plot, beside the finger: to its right on the left half, to its left on the right.
+                        let width: CGFloat = 200
+                        let onLeft = x > plot.width / 2
+                        let left = plot.minX + (onLeft ? x - width - 12 : x + 12)
+                        DataTip(frequency: touched, rows: tipRows(at: touched), unit: unit)
+                            .frame(width: width)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .offset(x: min(max(left, plot.minX), plot.maxX - width), y: plot.minY + 4)
+                            .allowsHitTesting(false)
+                    }
+                    }
                 }
             }
             .chartForegroundStyleScale(domain: curves.indices.map { seriesName($0) } + background.indices.map { backgroundName($0) },
@@ -811,7 +821,7 @@ struct DataTip: View {
             }
         }
         .padding(8)
-        .frame(minWidth: 150, maxWidth: 240)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }
