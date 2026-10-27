@@ -465,17 +465,24 @@ final class AppModel {
         if let s = selection, ids.contains(s) { selection = traces.last?.id }
     }
 
-    /// Clears the list: every measurement's files go to the Trash, and the folders go too.
+    /// The open project is the working folder, not a saved set or a folder chosen with Open.
+    var isWorkingFolder: Bool {
+        projectFolder.standardizedFileURL == ProjectStore.defaultFolder.standardizedFileURL
+    }
+
+    /// Empties the list. Unsaved measurements (the working folder's) are deleted for good. A saved
+    /// set or chosen folder is left as it is on disk: the app goes back to an empty working folder.
     func clearAll() {
-        let count = traces.count
-        for trace in traces { ProjectStore.trash(trace.id, in: projectFolder) }
+        loadTask?.cancel()
+        loading = false
+        if !isWorkingFolder { projectFolder = ProjectStore.defaultFolder }
+        ProjectStore.deleteAll(in: projectFolder)
         traces = []
         visible = []
         selection = nil
         folders = []
-        saveFolders()
         measurementWarning = nil
-        status = "Moved \(count) measurement\(count == 1 ? "" : "s") to the Trash."
+        status = "Cleared the measurement list."
     }
 
     /// Sets the frequency response window of the given traces. Imported frequency responses are skipped.

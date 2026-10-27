@@ -337,15 +337,15 @@ enum ProjectStore {
         }
     }
 
-    /// Moves one trace's files to the Trash, where they can be put back from.
-    static func trash(_ id: UUID, in folder: URL) {
-        for ext in ["json", "wav", "txt"] {
-            let url = folder.appendingPathComponent(id.uuidString).appendingPathExtension(ext)
-            guard FileManager.default.fileExists(atPath: url.path) else { continue }
-            if (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) == nil {
-                try? FileManager.default.removeItem(at: url)
-            }
+    /// Deletes every measurement in the folder (files named by a trace id) and its folder list.
+    static func deleteAll(in folder: URL) {
+        let manager = FileManager.default
+        let files = (try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        for url in files where ["json", "wav", "txt"].contains(url.pathExtension)
+            && UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil {
+            try? manager.removeItem(at: url)
         }
+        try? manager.removeItem(at: folder.appendingPathComponent("folders.json"))
     }
 
     static func delete(_ id: UUID, in folder: URL) {

@@ -461,11 +461,13 @@ struct TraceList: View {
             }
             .buttonStyle(.borderless)
             .disabled(model.traces.isEmpty)
-            .help("Remove every measurement from the list. Their files go to the Trash.")
+            .help("Empty the measurement list. Unsaved measurements are deleted; saved sets stay on disk.")
             .confirmationDialog("Clear all \(model.traces.count) measurements?", isPresented: $confirmingClear) {
-                Button("Move to Trash", role: .destructive) { model.clearAll() }
+                Button("Clear All", role: .destructive) { model.clearAll() }
             } message: {
-                Text("Every measurement and folder is removed from the list. The files go to the Trash: Put Back in the Finder returns them, and they reappear the next time this project is opened.")
+                Text(model.isWorkingFolder
+                     ? "Every measurement and folder is removed and deleted. Save a set first (⇧⌘S) to keep them."
+                     : "The list is emptied and a new, empty working list starts. \(model.projectFolder.lastPathComponent) stays on disk as saved.")
             }
             Spacer(minLength: 0)
             if !model.folders.isEmpty {
