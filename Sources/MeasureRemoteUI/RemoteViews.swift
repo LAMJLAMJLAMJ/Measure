@@ -423,11 +423,22 @@ struct LiveTab: View {
                     .buttonStyle(.bordered)
                     .controlSize(.large)
                     .disabled(!state.liveCanCapture)
+                    Button("Find Delay") { client.send(.findLiveDelay) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .disabled(!state.liveCanFindDelay)
+                    Button("Reset") { client.send(.resetLiveDelay) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
                     Spacer()
-                    ForEach(Array(state.liveCurves.enumerated()), id: \.offset) { _, curve in
+                    ForEach(Array(state.liveCurves.enumerated()), id: \.offset) { i, curve in
                         HStack(spacing: 4) {
                             Circle().fill(Color(remoteHex: curve.color)).frame(width: 8, height: 8)
                             Text(curve.name).font(.caption)
+                            if i < state.liveDelays.count {
+                                Text(String(format: "%.2f ms", state.liveDelays[i]))
+                                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                            }
                         }
                     }
                 }

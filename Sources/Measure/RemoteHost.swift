@@ -169,6 +169,12 @@ final class RemoteHost {
             model.monitor.settings.historyRange = seconds
         case .captureLive:
             model.live.capture(model)
+        case .findLiveDelay:
+            guard model.live.blocks > 0 else { return }
+            model.live.findDelays()
+        case .resetLiveDelay:
+            model.live.clearDelays()
+            model.live.reset()
         case .saveAverage:
             model.average(Array(model.visible), method: .power)
         case .startLevelCheck:
@@ -243,6 +249,8 @@ final class RemoteHost {
                                 frequencies: c.coherence.map(\.x), levels: c.coherence.map(\.y))
         }
         s.liveCanCapture = model.live.isRunning && !model.live.curves.isEmpty
+        s.liveCanFindDelay = model.live.blocks > 0
+        s.liveDelays = model.live.curves.map { Double(model.live.settings.delay($0.mic)) / model.settings.sampleRate * 1000 }
 
         let generator = model.generator
         s.generatorRunning = generator.isRunning
