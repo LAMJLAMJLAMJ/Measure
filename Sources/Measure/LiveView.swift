@@ -90,6 +90,7 @@ final class LiveAnalyzer {
         }
         model.monitor.stop(model)
         model.generator.stop()
+        model.levelCheck.stop()
         sampleRate = s.sampleRate
         // The noise repeats every 65 536 samples, so every FFT size up to that sees whole periods.
         let noise = settings.generator ? PinkNoise.periodic(count: 65_536, sampleRate: s.sampleRate) : nil

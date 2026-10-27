@@ -68,8 +68,8 @@ struct RemoteTabs: View {
             RemoteStatusBar(client: client, state: state)
             Divider()
             TabView {
-                MeasureTab(client: client, state: state)
-                    .tabItem { Label("Measure", systemImage: "waveform.path.ecg") }
+                SweepTab(client: client, state: state)
+                    .tabItem { Label("Sweep", systemImage: "waveform.path.ecg") }
                 LiveTab(client: client, state: state)
                     .tabItem { Label("Live", systemImage: "waveform") }
                 GeneratorTab(client: client, state: state)
@@ -113,9 +113,9 @@ struct RemoteStatusBar: View {
     }
 }
 
-// MARK: - Measure
+// MARK: - Sweep
 
-struct MeasureTab: View {
+struct SweepTab: View {
     let client: RemoteClient
     let state: RemoteState
     @State private var position = ""
@@ -123,56 +123,234 @@ struct MeasureTab: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Position").font(.headline)
-                TextField("Position name", text: $position)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($editing)
-                    .onSubmit { client.send(.setPosition(position)) }
-                Button {
-                    if position != state.position { client.send(.setPosition(position)) }
-                    editing = false
-                    client.send(.measure)
-                } label: {
-                    Label(state.isMeasuring ? "Measuring…" : "Measure", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(state.isMeasuring)
-
-                Text("Measurements").font(.headline).padding(.top, 8)
-                List(Array(state.traces.reversed())) { trace in
+            List {
+                Section("Position") {
+                    TextField("Position name", text: $position)
+                        .focused($editing)
+                        .onSubmit { client.send(.setPosition(position)) }
                     Button {
-                        client.send(.select(trace.id))
+                        if position != state.position { client.send(.setPosition(position)) }
+                        editing = false
+                        client.send(.measure)
                     } label: {
-                        HStack {
-                            Circle().fill(Color(remoteHex: trace.color)).frame(width: 10, height: 10)
-                            VStack(alignment: .leading) {
-                                Text(trace.name)
-                                Text(trace.detail).font(.caption).foregroundStyle(.secondary)
+                        Label(state.isMeasuring ? "Measuring…" : "Measure", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(state.isMeasuring)
+                }
+                SweepSettings(client: client, state: state)
+                LevelCheckSection(client: client, state: state)
+                Section {
+                    ForEach(Array(state.traces.reversed())) { trace in
+                        TraceRow(client: client, trace: trace, selected: trace.id == state.selected)
+                    }
+                } header: {
+                    HStack {
+                        Text("Measurements")
+                        Spacer()
+                        if state.traces.contains(where: \.visible) {
+                            Button("Untick All") {
+                                for trace in state.traces where trace.visible { client.send(.setVisible(trace.id, false)) }
                             }
-                            Spacer()
-                            if trace.id == state.selected {
-                                Image(systemName: "checkmark").foregroundStyle(.tint)
-                            }
+                            .textCase(nil)
                         }
                     }
-                    .foregroundStyle(.primary)
                 }
-                .listStyle(.plain)
             }
-            .frame(width: 300)
-            .padding()
+            .remoteListStyle()
+            .frame(width: 360)
             Divider()
-            ResponseChart(curves: state.selectedCurve.map { [$0] } ?? [],
-                          empty: "No measurement yet")
-                .padding()
+            VStack(alignment: .leading, spacing: 8) {
+                chartControls
+                ResponseChart(curves: state.curves, average: state.averageCurve,
+                              highlighted: state.curves.count > 1 ? selectedName : nil,
+                              empty: "No measurement yet")
+                Text(chartNote).font(.caption).foregroundStyle(.secondary)
+            }
+            .padding()
         }
         .onAppear { position = state.position }
         .onChange(of: state.position) { _, new in
             if !editing { position = new }
         }
+    }
+
+    private var chartControls: some View {
+        HStack(spacing: 16) {
+            Picker("Smoothing", selection: Binding(get: { state.smoothing },
+                                                   set: { client.send(.setSmoothing($0)) })) {
+                ForEach(state.smoothingOptions, id: \.self) { Text($0).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 380)
+            Toggle("Average", isOn: Binding(get: { state.showAverage },
+                                            set: { client.send(.showAverage($0)) }))
+                .fixedSize()
+                .disabled(state.traces.filter(\.visible).count < 2)
+            Spacer()
+        }
+    }
+
+    private var selectedName: String? {
+        state.traces.first { $0.id == state.selected }?.name
+    }
+
+    private var chartNote: String {
+        let ticked = state.traces.filter(\.visible).count
+        if ticked == 0 { return "Showing the selected measurement. Tick measurements to draw them together." }
+        var note = "\(ticked) ticked measurement\(ticked == 1 ? "" : "s")"
+        if state.averageCurve != nil { note += ", with their power average in the thick line" }
+        return note + ". Smoothing \(state.smoothing)."
+    }
+}
+
+/// Sweep level, length and which mic inputs it records.
+struct SweepSettings: View {
+    let client: RemoteClient
+    let state: RemoteState
+    @State private var level: Double = -30
+    @State private var dragging = false
+
+    var body: some View {
+        Section("Sweep") {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Level")
+                    Spacer()
+                    Text(String(format: "%.0f dBFS", level)).monospacedDigit().foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button { nudge(-1) } label: { Image(systemName: "minus") }
+                        .buttonStyle(.borderless)
+                    Slider(value: $level, in: -80...0, step: 1, onEditingChanged: { editing in
+                        dragging = editing
+                        if !editing { client.send(.setSweepLevel(level)) }
+                    })
+                    Button { nudge(1) } label: { Image(systemName: "plus") }
+                        .buttonStyle(.borderless)
+                }
+            }
+            Picker("Length", selection: Binding(get: { state.sweepLength },
+                                                set: { client.send(.setSweepLength($0)) })) {
+                ForEach(state.sweepLengthOptions, id: \.self) { Text("\(Int($0)) s").tag($0) }
+            }
+            ForEach(Array(state.mics.enumerated()), id: \.offset) { i, mic in
+                Toggle(mic.name, isOn: Binding(get: { mic.active },
+                                               set: { client.send(.setMicActive(i, $0)) }))
+                    .disabled(mic.active && state.mics.filter(\.active).count <= 1)
+            }
+        }
+        .onAppear { level = state.sweepLevel }
+        .onChange(of: state.sweepLevel) { _, new in
+            if !dragging { level = new }
+        }
+    }
+
+    private func nudge(_ step: Double) {
+        level = min(max(level + step, -80), 0)
+        client.send(.setSweepLevel(level))
+    }
+}
+
+/// Plays the sweep in a loop and shows each input's peak, to set the gains before measuring.
+struct LevelCheckSection: View {
+    let client: RemoteClient
+    let state: RemoteState
+
+    var body: some View {
+        Section {
+            Button {
+                client.send(state.levelCheckRunning ? .stopLevelCheck : .startLevelCheck)
+            } label: {
+                Label(state.levelCheckRunning ? "Stop Level Check" : "Check Levels",
+                      systemImage: state.levelCheckRunning ? "stop.fill" : "speaker.wave.2")
+            }
+            .disabled(state.isMeasuring)
+            if state.levelCheckRunning {
+                ForEach(Array(state.levelMeters.enumerated()), id: \.offset) { _, meter in
+                    PeakMeterRow(meter: meter)
+                }
+            }
+        } header: {
+            Text("Input levels")
+        } footer: {
+            Text(state.levelCheckRunning
+                 ? "Peaks over the last sweep. Aim for -20 to -6 dBFS; red means the input clipped since the check started."
+                 : "Plays the sweep in a loop at its level and meters each input. Measure stops it.")
+        }
+    }
+}
+
+struct PeakMeterRow: View {
+    let meter: RemoteMeter
+
+    private var color: Color {
+        guard let value = meter.value else { return .gray }
+        if meter.overLimit { return .red }
+        if value < -40 { return .orange }
+        return .green
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(meter.label).lineLimit(1)
+                Spacer()
+                if meter.overLimit { Text("Clipped").font(.caption.bold()).foregroundStyle(.red) }
+                Text(meter.value.map { String(format: "%.1f", $0) } ?? "–").monospacedDigit()
+                Text("dBFS").font(.caption).foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                let fraction = min(max(((meter.value ?? -80) + 60) / 60, 0), 1)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.quaternary)
+                    Capsule().fill(color).frame(width: geo.size.width * CGFloat(fraction))
+                }
+            }
+            .frame(height: 6)
+        }
+    }
+}
+
+/// One measurement in the list: a tick box in its colour, then its name. Tapping the name selects it.
+struct TraceRow: View {
+    let client: RemoteClient
+    let trace: RemoteTrace
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                client.send(.setVisible(trace.id, !trace.visible))
+            } label: {
+                Image(systemName: trace.visible ? "checkmark.square.fill" : "square")
+                    .font(.title3)
+                    .foregroundStyle(Color(remoteHex: trace.color))
+            }
+            .buttonStyle(.borderless)
+            Button {
+                client.send(.select(trace.id))
+            } label: {
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(trace.name).fontWeight(selected ? .semibold : .regular)
+                        Text(trace.detail).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if let warning = trace.warning {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel(warning)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.primary)
+        }
+        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
     }
 }
 
@@ -333,6 +511,10 @@ struct StartStopButton: View {
 /// Frequency response on a log axis from 20 Hz to 20 kHz.
 struct ResponseChart: View {
     let curves: [RemoteCurve]
+    /// Drawn thick, in the text colour, over the curves.
+    var average: RemoteCurve? = nil
+    /// The name of a curve to draw thicker than the others.
+    var highlighted: String? = nil
     let empty: String
 
     private struct Point: Identifiable {
@@ -340,21 +522,35 @@ struct ResponseChart: View {
         let series: String
         let frequency: Double
         let level: Double
+        let width: Double
     }
+
+    /// Series names are numbered, as two measurements can share a name.
+    private func seriesName(_ index: Int) -> String { "\(index)" }
 
     private var points: [Point] {
         var result: [Point] = []
-        for curve in curves {
+        for (n, curve) in curves.enumerated() {
+            let width = curve.name == highlighted ? 2.5 : 1.5
             for i in curve.frequencies.indices where i < curve.levels.count {
-                result.append(Point(id: result.count, series: curve.name,
-                                    frequency: curve.frequencies[i], level: curve.levels[i]))
+                result.append(Point(id: result.count, series: seriesName(n),
+                                    frequency: curve.frequencies[i], level: curve.levels[i], width: width))
             }
         }
         return result
     }
 
+    private var averagePoints: [Point] {
+        guard let average else { return [] }
+        return average.frequencies.indices.compactMap { i in
+            i < average.levels.count
+                ? Point(id: i, series: "average", frequency: average.frequencies[i], level: average.levels[i], width: 3)
+                : nil
+        }
+    }
+
     private var yDomain: ClosedRange<Double> {
-        let levels = curves.flatMap(\.levels)
+        let levels = curves.flatMap(\.levels) + (average?.levels ?? [])
         guard let high = levels.max(), let low = levels.min() else { return 40...100 }
         let top = (high / 10).rounded(.up) * 10 + 5
         let bottom = max((low / 10).rounded(.down) * 10, top - 60)
@@ -365,14 +561,23 @@ struct ResponseChart: View {
         if curves.isEmpty {
             ContentUnavailableView(empty, systemImage: "chart.xyaxis.line")
         } else {
-            Chart(points) { point in
-                LineMark(x: .value("Frequency", point.frequency),
-                         y: .value("Level", point.level),
-                         series: .value("Curve", point.series))
-                    .foregroundStyle(by: .value("Curve", point.series))
-                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+            Chart {
+                ForEach(points) { point in
+                    LineMark(x: .value("Frequency", point.frequency),
+                             y: .value("Level", point.level),
+                             series: .value("Curve", point.series))
+                        .foregroundStyle(by: .value("Curve", point.series))
+                        .lineStyle(StrokeStyle(lineWidth: point.width))
+                }
+                ForEach(averagePoints) { point in
+                    LineMark(x: .value("Frequency", point.frequency),
+                             y: .value("Level", point.level),
+                             series: .value("Curve", point.series))
+                        .foregroundStyle(Color.primary)
+                        .lineStyle(StrokeStyle(lineWidth: point.width))
+                }
             }
-            .chartForegroundStyleScale(domain: curves.map(\.name),
+            .chartForegroundStyleScale(domain: curves.indices.map { seriesName($0) },
                                        range: curves.map { Color(remoteHex: $0.color) })
             .chartLegend(.hidden)
             .chartXScale(domain: 20.0...20_000.0, type: .log)
@@ -390,6 +595,17 @@ struct ResponseChart: View {
             .chartYAxisLabel("dB")
             .chartPlotStyle { $0.clipped() }
         }
+    }
+}
+
+extension View {
+    /// Grouped sections on the iPad; the closest style on the Mac, where this library is also built.
+    @ViewBuilder func remoteListStyle() -> some View {
+        #if os(iOS)
+        listStyle(.insetGrouped)
+        #else
+        listStyle(.inset)
+        #endif
     }
 }
 

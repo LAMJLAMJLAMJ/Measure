@@ -9,7 +9,7 @@ public enum RemoteMessage: Codable, Equatable, Sendable {
 }
 
 /// Bumped when a change to the messages would break an older remote.
-public let remoteProtocolVersion = 1
+public let remoteProtocolVersion = 2
 
 /// The Bonjour service type the Mac advertises. It must also be listed under NSBonjourServices
 /// in both apps' Info.plist.
@@ -28,6 +28,33 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     case stopMonitor
     case resetMonitor
     case select(UUID)
+    /// Ticks or unticks a measurement: ticked ones are drawn together.
+    case setVisible(UUID, Bool)
+    /// One of `RemoteState.smoothingOptions`.
+    case setSmoothing(String)
+    /// Draws the power average of the ticked measurements.
+    case showAverage(Bool)
+    /// Plays the sweep in a loop and meters the inputs.
+    case startLevelCheck
+    case stopLevelCheck
+    /// Sweep level, dBFS peak.
+    case setSweepLevel(Double)
+    /// Sweep length, seconds: one of `RemoteState.sweepLengthOptions`.
+    case setSweepLength(Double)
+    /// Whether sweeps record mic input `index` (an index into `RemoteState.mics`).
+    case setMicActive(Int, Bool)
+}
+
+/// A mic input of the measurement setup.
+public struct RemoteMic: Codable, Equatable, Sendable {
+    public var name: String
+    /// Recorded by sweeps.
+    public var active: Bool
+
+    public init(name: String, active: Bool) {
+        self.name = name
+        self.active = active
+    }
 }
 
 /// A curve thinned for the network: frequencies in Hz and levels in dB.
@@ -90,12 +117,18 @@ public struct RemoteTrace: Codable, Equatable, Sendable, Identifiable {
     public var name: String
     public var detail: String
     public var color: String
+    /// Ticked: drawn on the chart.
+    public var visible: Bool
+    /// Clipping or low signal-to-noise, in a sentence. Nil when the measurement is fine.
+    public var warning: String?
 
-    public init(id: UUID, name: String, detail: String, color: String) {
+    public init(id: UUID, name: String, detail: String, color: String, visible: Bool = false, warning: String? = nil) {
         self.id = id
         self.name = name
         self.detail = detail
         self.color = color
+        self.visible = visible
+        self.warning = warning
     }
 }
 
@@ -107,6 +140,16 @@ public struct RemoteState: Codable, Equatable, Sendable {
 
     public var isMeasuring = false
     public var position = ""
+    /// Sweep level, dBFS peak, and length, seconds.
+    public var sweepLevel: Double = -30
+    public var sweepLength: Double = 3
+    public var sweepLengthOptions: [Double] = []
+    public var mics: [RemoteMic] = []
+
+    public var levelCheckRunning = false
+    /// Peak of each input over the last loop of the sweep, loopback first when there is one.
+    /// `overLimit` means it clipped since the check started.
+    public var levelMeters: [RemoteMeter] = []
 
     public var liveRunning = false
     public var liveCurves: [RemoteCurve] = []
@@ -122,7 +165,13 @@ public struct RemoteState: Codable, Equatable, Sendable {
     /// The most recent measurements, newest last.
     public var traces: [RemoteTrace] = []
     public var selected: UUID?
-    public var selectedCurve: RemoteCurve?
+    /// The ticked measurements' responses, or the selected one's when none is ticked.
+    public var curves: [RemoteCurve] = []
+    /// The power average of the ticked measurements, when asked for and more than one is ticked.
+    public var averageCurve: RemoteCurve?
+    public var showAverage = false
+    public var smoothing = ""
+    public var smoothingOptions: [String] = []
 
     public init() {}
 }

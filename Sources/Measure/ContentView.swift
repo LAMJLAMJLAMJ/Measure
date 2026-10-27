@@ -251,7 +251,7 @@ struct StatusBar: View {
     private var setupSummary: String {
         guard let out = model.outputDevice, let input = model.inputDevice else { return "No audio device chosen" }
         let s = model.settings
-        let mics = s.mics.map { "\($0.channel)" }.joined(separator: ", ")
+        let mics = s.activeMics.map { "\($0.channel)" }.joined(separator: ", ")
         let loop = s.loopbackInput.map { ", loopback in \($0)" } ?? ""
         return "\(out.name) out \(s.outputChannel) → \(input.name) in \(mics)\(loop) · \(Int(s.sampleRate / 1000)) kHz, \(Int(s.sweepLength)) s sweep at \(Int(s.level)) dBFS"
     }

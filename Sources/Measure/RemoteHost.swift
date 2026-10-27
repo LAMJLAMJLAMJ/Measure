@@ -25,8 +25,11 @@ final class RemoteHost {
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var lastState: RemoteState?
     @ObservationIgnored private var names: [ObjectIdentifier: String] = [:]
-    /// The selected trace's curve, kept until the selection or the smoothing changes.
-    @ObservationIgnored private var curveCache: (key: String, curve: RemoteCurve?)?
+    /// Whether the remote draws the average of the ticked measurements.
+    @ObservationIgnored private var showAverage = false
+    /// Each trace's curve, by trace id, kept until its smoothing, name or colour changes.
+    @ObservationIgnored private var curveCache: [UUID: (key: String, curve: RemoteCurve)] = [:]
+    @ObservationIgnored private var averageCache: (key: String, curve: RemoteCurve?)?
 
     init() {
         enabled = UserDefaults.standard.bool(forKey: "remoteEnabled")
@@ -113,9 +116,43 @@ final class RemoteHost {
         case .select(let id):
             guard model.traces.contains(where: { $0.id == id }) else { return }
             model.selection = id
-            model.visible.insert(id)
+        case .setVisible(let id, let visible):
+            guard model.traces.contains(where: { $0.id == id }) else { return }
+            if visible { model.visible.insert(id) } else { model.visible.remove(id) }
+        case .setSmoothing(let name):
+            if let smoothing = Smoothing(rawValue: name) { model.smoothing = smoothing }
+        case .showAverage(let show):
+            showAverage = show
+        case .startLevelCheck:
+            Task { await model.levelCheck.start(model) }
+        case .stopLevelCheck:
+            model.levelCheck.stop()
+            model.status = nil
+        case .setSweepLevel(let level):
+            model.settings.level = min(max(level.rounded(), -80), 0)
+            restartLevelCheck(model)
+        case .setSweepLength(let length):
+            guard Self.sweepLengths.contains(length) else { return }
+            model.settings.sweepLength = length
+            restartLevelCheck(model)
+        case .setMicActive(let index, let active):
+            guard model.settings.mics.indices.contains(index) else { return }
+            // Keep at least one mic in the sweep.
+            if !active && model.settings.activeMics.count <= 1 && model.settings.mics[index].active { return }
+            model.settings.mics[index].active = active
+            restartLevelCheck(model)
         }
         broadcast()
+    }
+
+    /// The sweep lengths offered, as in Measurement Setup.
+    static let sweepLengths: [Double] = [1, 2, 3, 5, 10, 20]
+
+    /// Starts the level check again so it plays the new sweep and meters the new set of mics.
+    private func restartLevelCheck(_ model: AppModel) {
+        guard model.levelCheck.isRunning else { return }
+        model.levelCheck.stop()
+        Task { await model.levelCheck.start(model) }
     }
 
     // MARK: - State
@@ -129,6 +166,19 @@ final class RemoteHost {
         s.error = model.errorMessage ?? model.generator.errorMessage ?? model.measurementWarning?.text
         s.isMeasuring = model.isMeasuring
         s.position = model.settings.position
+        s.sweepLevel = model.settings.level
+        s.sweepLength = model.settings.sweepLength
+        s.sweepLengthOptions = Self.sweepLengths
+        s.mics = model.settings.mics.map { RemoteMic(name: $0.micName ?? "Input \($0.channel)", active: $0.active) }
+        let check = model.levelCheck
+        s.levelCheckRunning = check.isRunning
+        if check.isRunning {
+            let meters = (check.loopback.map { [$0] } ?? []) + check.mics
+            s.levelMeters = meters.map { meter in
+                RemoteMeter(label: meter.name, value: meter.peak > -150 ? meter.peak.roundedTenth : nil,
+                            unit: "dBFS peak", overLimit: meter.clipped)
+            }
+        }
 
         s.liveRunning = model.live.isRunning
         s.liveCurves = model.calibratedLiveCurves.map { curve in
@@ -148,11 +198,26 @@ final class RemoteHost {
 
         let measured = model.traces.filter(\.hasResponse).suffix(30)
         s.traces = measured.map { trace in
-            RemoteTrace(id: trace.id, name: trace.info.name, detail: detail(trace),
-                        color: trace.color.hex ?? "#808080")
+            let warning = trace.qualityIssues.isEmpty ? nil : trace.qualityIssues.map(\.message).joined(separator: " ")
+            return RemoteTrace(id: trace.id, name: trace.info.name, detail: detail(trace),
+                               color: trace.color.hex ?? "#808080",
+                               visible: model.visible.contains(trace.id), warning: warning)
         }
         s.selected = model.selection
-        s.selectedCurve = selectedCurve(model)
+        s.smoothing = model.smoothing.rawValue
+        s.smoothingOptions = Smoothing.allCases.map(\.rawValue)
+        s.showAverage = showAverage
+        let ticked = Array(model.visibleTraces.filter(\.hasResponse).suffix(20))
+        if ticked.isEmpty {
+            let shown = model.selectedTrace.flatMap { $0.hasResponse ? $0 : nil } ?? model.traces.last(where: \.hasResponse)
+            s.curves = shown.map { [curve($0, model)] } ?? []
+        } else {
+            s.curves = ticked.map { curve($0, model) }
+        }
+        s.averageCurve = showAverage && ticked.count > 1 ? average(ticked, model) : nil
+        // Forget traces that are gone.
+        let ids = Set(model.traces.map(\.id))
+        curveCache = curveCache.filter { ids.contains($0.key) }
         return s
     }
 
@@ -191,17 +256,30 @@ final class RemoteHost {
         }
     }
 
-    private func selectedCurve(_ model: AppModel) -> RemoteCurve? {
-        let ticked = model.visibleTraces.filter(\.hasResponse)
-        guard let trace = model.selectedTrace.flatMap({ $0.hasResponse ? $0 : nil })
-                ?? ticked.last ?? model.traces.last(where: \.hasResponse) else { return nil }
-        let key = "\(trace.id) \(model.smoothing) \(trace.info.colorHex ?? "") \(trace.info.colorIndex)"
-        if let cache = curveCache, cache.key == key { return cache.curve }
+    /// A trace's response as drawn on the Mac: calibrated, smoothed and in its colour.
+    private func curve(_ trace: Trace, _ model: AppModel) -> RemoteCurve {
+        let color = trace.color.hex ?? "#808080"
+        let key = "\(model.smoothing) \(trace.info.name) \(color) \(String(describing: trace.info.window))"
+        if let cached = curveCache[trace.id], cached.key == key { return cached.curve }
         let points = trace.displayResponse(smoothing: model.smoothing, calibration: model.calibration(for: trace))
-        let curve = RemoteCurve.thinned(name: trace.info.name, color: trace.color.hex ?? "#808080",
+        let curve = RemoteCurve.thinned(name: trace.info.name, color: color,
                                         frequencies: points.map(\.x), levels: points.map(\.y))
-        curveCache = (key, curve)
+        curveCache[trace.id] = (key, curve)
         return curve
+    }
+
+    /// The power average of the traces' calibrated responses, smoothed like the traces.
+    private func average(_ traces: [Trace], _ model: AppModel) -> RemoteCurve? {
+        let key = "\(model.smoothing) " + traces.map(\.id.uuidString).joined(separator: ",")
+        if let cache = averageCache, cache.key == key { return cache.curve }
+        var result: RemoteCurve?
+        if let response = FrequencyResponse.average(traces.map { model.calibratedResponse($0) }, method: .power) {
+            let points = Trace.displayPoints(response, smoothing: model.smoothing, calibration: nil)
+            result = RemoteCurve.thinned(name: "Average", color: "#000000",
+                                         frequencies: points.map(\.x), levels: points.map(\.y))
+        }
+        averageCache = (key, result)
+        return result
     }
 }
 

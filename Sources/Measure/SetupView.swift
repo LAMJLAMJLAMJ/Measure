@@ -39,6 +39,10 @@ struct SetupView: View {
                 ForEach(model.settings.mics) { row in
                     let slot = micSlot(row)
                     HStack {
+                        Toggle("", isOn: slot.active)
+                            .toggleStyle(.checkbox)
+                            .labelsHidden()
+                            .help("Record this input in sweeps. Unticked inputs stay in live monitoring and the generator's meters.")
                         ChannelPicker(title: "Mic input", channel: slot.channel, count: inChannels)
                         Picker("Mic", selection: slot.micName) {
                             Text("Uncalibrated").tag(String?.none)

@@ -142,6 +142,7 @@ final class MonitorAnalyzer {
         }
         model.live.stop(model)
         model.generator.stop()
+        model.levelCheck.stop()
         let engine = MonitorEngine(sampleRate: s.sampleRate, micCount: s.mics.count)
         // The stream always records a reference channel; the first mic stands in for it.
         let routing = LiveRouting(inputDevice: input, referenceChannel: first.channel - 1,

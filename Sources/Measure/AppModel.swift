@@ -29,6 +29,15 @@ struct MicSlot: Codable, Identifiable, Hashable {
     /// From 1, as printed on the interface.
     var channel: Int
     var micName: String?
+    /// True when the input is left out of sweeps (kept for live monitoring and the generator).
+    /// Optional so settings saved before it existed still load.
+    var off: Bool?
+
+    /// Whether sweeps record this input.
+    var active: Bool {
+        get { off != true }
+        set { off = newValue ? nil : true }
+    }
 }
 
 /// Routing and sweep settings, remembered between launches. Devices are stored by UID so they are
@@ -47,6 +56,9 @@ struct MeasurementSettings: Codable, Equatable {
     var silence: Double = 2
     var level: Double = -30
     var position = ""
+
+    /// The mic inputs that sweeps record.
+    var activeMics: [MicSlot] { mics.filter(\.active) }
 }
 
 /// Speech and noise levels for STI, remembered between launches.
@@ -127,6 +139,8 @@ final class AppModel {
     let monitor: MonitorAnalyzer
     /// The signal generator window's test signal and meters.
     let generator: GeneratorModel
+    /// Plays the sweep in a loop and meters the inputs, to set the gains before measuring.
+    let levelCheck: LevelCheck
     /// The iPad remote's link to this Mac.
     let remote: RemoteHost
 
@@ -153,6 +167,7 @@ final class AppModel {
         live = LiveAnalyzer()
         monitor = MonitorAnalyzer()
         generator = GeneratorModel()
+        levelCheck = LevelCheck()
         remote = RemoteHost()
         refreshDevices()
         openProject(projectFolder)
@@ -186,11 +201,17 @@ final class AppModel {
         live.stop()
         monitor.stop()
         generator.stop()
+        levelCheck.stop()
         guard let out = outputDevice, let input = inputDevice else {
             errorMessage = "Choose an output and an input device in Measurement Setup."
             return
         }
         let s = settings
+        let mics = s.activeMics
+        guard !mics.isEmpty else {
+            errorMessage = "Every mic is switched off for sweeps. Tick at least one in Measurement Setup."
+            return
+        }
         isMeasuring = true
         errorMessage = nil
         measurementWarning = nil
@@ -204,7 +225,7 @@ final class AppModel {
                                                               amplitude: pow(10, s.level / 20)) {
                 throw SetupError(message: problem)
             }
-            if Set(s.mics.map(\.channel)).count != s.mics.count {
+            if Set(mics.map(\.channel)).count != mics.count {
                 throw SetupError(message: "Two mics use the same input channel.")
             }
             let sweep = ExponentialSweep(startFrequency: s.startFrequency, endFrequency: end,
@@ -212,7 +233,7 @@ final class AppModel {
                                          amplitude: pow(10, s.level / 20))
             let played = sweep.samples(silence: s.silence)
             let routing = SweepRouting(outputDevice: out, outputChannel: s.outputChannel - 1,
-                                       inputDevice: input, micChannels: s.mics.map { $0.channel - 1 },
+                                       inputDevice: input, micChannels: mics.map { $0.channel - 1 },
                                        loopbackChannel: s.loopbackInput.map { $0 - 1 },
                                        loopbackOutputChannel: s.loopbackOutput.map { $0 - 1 })
             let recording = try await SweepRecorder().record(played, sampleRate: s.sampleRate, routing: routing)
@@ -233,7 +254,7 @@ final class AppModel {
                                                      sweep: sweep, played: recording.played,
                                                      clockRatio: recording.clockRatio ?? 1)
                 let traces = result.impulseResponses.enumerated().map { i, ir -> Trace in
-                    let slot = s.mics[i]
+                    let slot = mics[i]
                     let label = s.position.isEmpty ? "Mic \(i + 1)" : "\(s.position) · Mic \(i + 1)"
                     var info = TraceInfo(name: label, date: date, source: .sweep, sampleRate: s.sampleRate,
                                          mic: slot.micName, position: s.position,
