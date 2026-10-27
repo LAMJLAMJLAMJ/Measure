@@ -6,7 +6,10 @@ private func remoteParameters() -> NWParameters {
     let tcp = NWProtocolTCP.Options()
     tcp.noDelay = true
     tcp.enableKeepalive = true
-    tcp.keepaliveIdle = 5
+    // Notice a remote that vanished (out of Wi-Fi range, switched off) within about 10 seconds.
+    tcp.keepaliveIdle = 4
+    tcp.keepaliveInterval = 2
+    tcp.keepaliveCount = 3
     let parameters = NWParameters(tls: nil, tcp: tcp)
     parameters.includePeerToPeer = true
     return parameters

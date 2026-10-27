@@ -9,7 +9,7 @@ public enum RemoteMessage: Codable, Equatable, Sendable {
 }
 
 /// Bumped when a change to the messages would break an older remote.
-public let remoteProtocolVersion = 1
+public let remoteProtocolVersion = 6
 
 /// The Bonjour service type the Mac advertises. It must also be listed under NSBonjourServices
 /// in both apps' Info.plist.
@@ -27,7 +27,93 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     case startMonitor
     case stopMonitor
     case resetMonitor
+    /// Holds the meters, RTA and history; `resumeMonitor` carries on. Paused time is left out.
+    case pauseMonitor
+    case resumeMonitor
     case select(UUID)
+    /// Ticks or unticks a measurement: ticked ones are drawn together.
+    case setVisible(UUID, Bool)
+    /// One of `RemoteState.smoothingOptions`.
+    case setSmoothing(String)
+    /// Draws the power average of the ticked measurements.
+    case showAverage(Bool)
+    /// Plays the sweep in a loop and meters the inputs.
+    case startLevelCheck
+    case stopLevelCheck
+    /// Sweep level, dBFS peak.
+    case setSweepLevel(Double)
+    /// Sweep length, seconds: one of `RemoteState.sweepLengthOptions`.
+    case setSweepLength(Double)
+    /// Whether sweeps record mic input `index` (an index into `RemoteState.mics`).
+    case setMicActive(Int, Bool)
+    /// Adds each mic's live response to the measurements, as the Mac's Capture button does.
+    case captureLive
+    /// Delays the reference so it lines up with each mic, as the Mac's Find Delay button does.
+    case findLiveDelay
+    /// Clears the live delays and restarts the averaging, as the Mac's Reset button does.
+    case resetLiveDelay
+    /// Saves the power average of the ticked measurements as a new measurement, as the Mac's Average does.
+    case saveAverage
+    /// One of `RemoteState.generatorSignals`.
+    case setGeneratorSignal(String)
+    case setGeneratorMuted(Bool)
+    /// Sine frequency, Hz.
+    case setGeneratorFrequency(Double)
+    /// Band of the noise and range of the sweep, Hz.
+    case setGeneratorBand(low: Double, high: Double)
+    /// Turns output `channel` (from 1) on or off.
+    case setGeneratorOutput(channel: Int, on: Bool)
+    /// The RTA's mic (an index into `RemoteState.mics`), bands per octave and weighting.
+    case setRTAMic(Int)
+    case setRTAFraction(Int)
+    case setRTAWeighting(String)
+    case resetRTAPeaks
+    /// Seconds of SPL history shown; 0 for everything.
+    case setHistoryRange(Int)
+}
+
+/// The real-time analyser's bands, with the weighting, calibration and offset applied.
+public struct RemoteRTA: Codable, Equatable, Sendable {
+    /// Band centre frequencies, Hz.
+    public var centers: [Double]
+    public var levels: [Double]
+    /// Peak hold.
+    public var peaks: [Double]
+    public var unit: String
+
+    public init(centers: [Double], levels: [Double], peaks: [Double], unit: String) {
+        self.centers = centers
+        self.levels = levels
+        self.peaks = peaks
+        self.unit = unit
+    }
+}
+
+/// One SPL meter's level over time, one value per `secondsPerPoint`, oldest first, ending now.
+public struct RemoteHistory: Codable, Equatable, Sendable {
+    public var label: String
+    public var color: String
+    public var levels: [Double]
+    public var secondsPerPoint: Int
+
+    public init(label: String, color: String, levels: [Double], secondsPerPoint: Int) {
+        self.label = label
+        self.color = color
+        self.levels = levels
+        self.secondsPerPoint = secondsPerPoint
+    }
+}
+
+/// A mic input of the measurement setup.
+public struct RemoteMic: Codable, Equatable, Sendable {
+    public var name: String
+    /// Recorded by sweeps.
+    public var active: Bool
+
+    public init(name: String, active: Bool) {
+        self.name = name
+        self.active = active
+    }
 }
 
 /// A curve thinned for the network: frequencies in Hz and levels in dB.
@@ -90,12 +176,18 @@ public struct RemoteTrace: Codable, Equatable, Sendable, Identifiable {
     public var name: String
     public var detail: String
     public var color: String
+    /// Ticked: drawn on the chart.
+    public var visible: Bool
+    /// Clipping or low signal-to-noise, in a sentence. Nil when the measurement is fine.
+    public var warning: String?
 
-    public init(id: UUID, name: String, detail: String, color: String) {
+    public init(id: UUID, name: String, detail: String, color: String, visible: Bool = false, warning: String? = nil) {
         self.id = id
         self.name = name
         self.detail = detail
         self.color = color
+        self.visible = visible
+        self.warning = warning
     }
 }
 
@@ -107,22 +199,68 @@ public struct RemoteState: Codable, Equatable, Sendable {
 
     public var isMeasuring = false
     public var position = ""
+    /// Sweep level, dBFS peak, and length, seconds.
+    public var sweepLevel: Double = -30
+    public var sweepLength: Double = 3
+    public var sweepLengthOptions: [Double] = []
+    public var mics: [RemoteMic] = []
+
+    public var levelCheckRunning = false
+    /// Peak of each input over the last loop of the sweep, loopback first when there is one.
+    /// `overLimit` means it clipped since the check started.
+    public var levelMeters: [RemoteMeter] = []
 
     public var liveRunning = false
     public var liveCurves: [RemoteCurve] = []
+    /// Each mic's live phase (degrees, -180 to 180) and coherence (0 to 1), in the same order.
+    public var livePhase: [RemoteCurve] = []
+    public var liveCoherence: [RemoteCurve] = []
+    /// True once the analyser has a response to capture.
+    public var liveCanCapture = false
+    /// True once the analyser has averaged enough to find the delay.
+    public var liveCanFindDelay = false
+    /// Delay applied to the reference for each mic, ms, in the same order as `liveCurves`.
+    public var liveDelays: [Double] = []
 
     public var generatorRunning = false
     public var generatorLevel: Double = -20
     public var generatorMaxLevel: Double = 0
     public var generatorSignal = ""
+    public var generatorSignals: [String] = []
+    public var generatorMuted = false
+    public var generatorFrequency: Double = 1000
+    public var generatorLow: Double = 20
+    public var generatorHigh: Double = 20_000
+    /// Outputs that play the signal, from 1, and how many the device has.
+    public var generatorOutputs: [Int] = []
+    public var generatorOutputCount = 0
 
     public var monitorRunning = false
+    public var monitorPaused = false
     public var meters: [RemoteMeter] = []
+    public var rta: RemoteRTA?
+    public var rtaMic = 0
+    public var rtaFraction = 3
+    public var rtaWeighting = ""
+    public var rtaWeightings: [String] = []
+    public var histories: [RemoteHistory] = []
+    public var historyRange = 900
+    /// Limits for A- and C-weighted meters, drawn on the history.
+    public var limitA: Double?
+    public var limitC: Double?
 
     /// The most recent measurements, newest last.
     public var traces: [RemoteTrace] = []
     public var selected: UUID?
-    public var selectedCurve: RemoteCurve?
+    /// The ticked measurements' responses, or the selected one's when none is ticked.
+    public var curves: [RemoteCurve] = []
+    /// The power average of the ticked measurements, when asked for and more than one is ticked.
+    public var averageCurve: RemoteCurve?
+    /// The ticked measurements' phase (degrees), for the live phase chart.
+    public var tracePhases: [RemoteCurve] = []
+    public var showAverage = false
+    public var smoothing = ""
+    public var smoothingOptions: [String] = []
 
     public init() {}
 }

@@ -67,10 +67,17 @@ struct Trace: Identifiable {
 
     // Derived once, when the trace is made.
     let acoustics: RoomAcousticsResult?
+    /// Clipping, low level or too little range above the noise for the reverberation times.
+    let qualityIssues: [MeasurementQuality.Issue]
     /// Frequency response within the window (or as imported).
     private(set) var rawResponse: FrequencyResponse
     /// Energy-time curve in dB, one value per sample.
     let energyTime: [Double]
+    /// The energy-time curve's peak, dB re a full-scale sample: added to `energyTime` to draw it
+    /// unnormalised.
+    let energyTimePeak: Double
+    /// The largest sample of the impulse response, for drawing it unnormalised.
+    let impulsePeak: Double
     /// Sample index of the onset (direct sound).
     let onset: Int
     /// Seconds from the start of the frequency response window to the onset, removed from the phase.
@@ -109,9 +116,13 @@ struct Trace: Identifiable {
         let fs = info.sampleRate
         onset = RoomAcoustics.onsetIndex(impulseResponse)
         acoustics = RoomAcoustics.analyze(impulseResponse: impulseResponse, sampleRate: fs)
+        // Only sweeps measured here: an imported response may have been trimmed before its noise.
+        qualityIssues = info.source == .sweep
+            ? MeasurementQuality.check(micPeak: info.peakLevel, acoustics: acoustics) : []
         (rawResponse, responseDelay) = Trace.windowedResponse(impulseResponse, onset: onset, sampleRate: fs,
                                                               window: info.window ?? .standard)
-        energyTime = TimeFrequency.energyTimeCurve(impulseResponse)
+        (energyTime, energyTimePeak) = TimeFrequency.energyTimeCurveAndPeak(impulseResponse)
+        impulsePeak = impulseResponse.map(abs).max() ?? 0
     }
 
     init(info: TraceInfo, frequencyResponse: FrequencyResponse) {
@@ -120,8 +131,11 @@ struct Trace: Identifiable {
         self.importedResponse = frequencyResponse
         self.recording = nil
         acoustics = nil
+        qualityIssues = []
         rawResponse = frequencyResponse
         energyTime = []
+        energyTimePeak = 0
+        impulsePeak = 0
         onset = 0
         responseDelay = 0
     }
@@ -132,8 +146,11 @@ struct Trace: Identifiable {
         self.importedResponse = nil
         self.recording = recording
         acoustics = nil
+        qualityIssues = []
         rawResponse = FrequencyResponse(frequencies: [], magnitude: [])
         energyTime = []
+        energyTimePeak = 0
+        impulsePeak = 0
         onset = 0
         responseDelay = 0
     }
@@ -318,6 +335,17 @@ enum ProjectStore {
             try? manager.removeItem(at: to)
             try manager.copyItem(at: from, to: to)
         }
+    }
+
+    /// Deletes every measurement in the folder (files named by a trace id) and its folder list.
+    static func deleteAll(in folder: URL) {
+        let manager = FileManager.default
+        let files = (try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        for url in files where ["json", "wav", "txt"].contains(url.pathExtension)
+            && UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil {
+            try? manager.removeItem(at: url)
+        }
+        try? manager.removeItem(at: folder.appendingPathComponent("folders.json"))
     }
 
     static func delete(_ id: UUID, in folder: URL) {

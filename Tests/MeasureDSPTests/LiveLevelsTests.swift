@@ -153,4 +153,20 @@ final class LiveLevelsTests: XCTestCase {
         XCTAssertEqual(row[2], "90.0")
         XCTAssertEqual(row.count, 2 + 9)
     }
+
+    func testPausesShiftTheLogTimes() {
+        let pauses = [LevelLog.Pause(afterSecond: 1, duration: 30), LevelLog.Pause(afterSecond: 3, duration: 5)]
+        XCTAssertEqual(LevelLog.endTime(ofSecond: 0, pauses: pauses), 1)
+        XCTAssertEqual(LevelLog.endTime(ofSecond: 1, pauses: pauses), 32)
+        XCTAssertEqual(LevelLog.endTime(ofSecond: 3, pauses: pauses), 39)
+
+        let series = [[0.01, 0.01], [0.01, 0.01], [0.01, 0.01]]
+        let log = LevelLog(energy: series, fastMax: series, slow: series)
+        let csv = LevelLog.csv([LevelLog.Column(name: "Mic 1", offset: 0, unit: "dBFS", log: log)],
+                               start: Date(timeIntervalSince1970: 0), pauses: [LevelLog.Pause(afterSecond: 1, duration: 60)])
+        let rows = csv.split(separator: "\n").dropFirst().map { $0.split(separator: ",").map(String.init) }
+        // The second row ends a minute later than without the pause, and still counts 2 seconds measured.
+        XCTAssertTrue(rows[1][0].hasSuffix(":01:02"), rows[1][0])
+        XCTAssertEqual(rows[1][1], "2")
+    }
 }

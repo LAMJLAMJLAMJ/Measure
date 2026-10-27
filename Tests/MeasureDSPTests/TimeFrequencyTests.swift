@@ -12,6 +12,14 @@ final class TimeFrequencyTests: XCTestCase {
         XCTAssertEqual(etc[900], -20, accuracy: 0.5)
     }
 
+    func testEnergyTimePeakKeepsTheLevel() {
+        var ir = [Double](repeating: 0, count: 2000)
+        ir[300] = 0.5
+        let (curve, peak) = TimeFrequency.energyTimeCurveAndPeak(ir)
+        XCTAssertEqual(curve[300], 0, accuracy: 1e-6)
+        XCTAssertEqual(peak, 20 * log10(0.5), accuracy: 0.1)
+    }
+
     func testSpectrogramFindsTone() {
         let fs = 48_000.0
         let x = TestSignals.sine(frequency: 1000, sampleRate: fs, count: 24_000)

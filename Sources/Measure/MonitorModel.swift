@@ -102,7 +102,12 @@ struct MonitorSnapshot {
 final class MonitorAnalyzer {
     var settings: MonitorSettings { didSet { save() } }
     var isRunning = false
+    /// Paused: the input is read but left out of the meters, averages, RTA and history until Resume.
+    var isPaused = false
     var startDate: Date?
+    /// The pauses since the start or the last reset, so the history and the log keep clock times.
+    @ObservationIgnored private(set) var pauses: [LevelLog.Pause] = []
+    @ObservationIgnored private var pausedAt: Date?
     var snapshot = MonitorSnapshot()
     /// One value a second per meter on the SPL view, by meter id, dB re full scale.
     var histories: [UUID: [Double]] = [:]
@@ -142,6 +147,7 @@ final class MonitorAnalyzer {
         }
         model.live.stop(model)
         model.generator.stop()
+        model.levelCheck.stop()
         let engine = MonitorEngine(sampleRate: s.sampleRate, micCount: s.mics.count)
         // The stream always records a reference channel; the first mic stands in for it.
         let routing = LiveRouting(inputDevice: input, referenceChannel: first.channel - 1,
@@ -161,6 +167,9 @@ final class MonitorAnalyzer {
         snapshot = MonitorSnapshot()
         histories = [:]
         levelLogs = []
+        pauses = []
+        pausedAt = nil
+        isPaused = false
         startDate = Date()
         isRunning = true
         loop = Task.detached(priority: .userInitiated) { [weak self] in
@@ -168,7 +177,7 @@ final class MonitorAnalyzer {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 guard let settings = await self?.settings else { return }
-                let snap = engine.update(settings)
+                guard let snap = engine.update(settings) else { continue }
                 var histories: [UUID: [Double]]?
                 var logs: [LevelLog]?
                 if snap.seconds != lastSecond {
@@ -195,7 +204,7 @@ final class MonitorAnalyzer {
             LevelLog.Column(name: i < micNames.count ? micNames[i] : "Mic \(i + 1)", offset: offset(model, mic: i) ?? 0,
                             unit: unit(model, mic: i), log: levelLogs[i])
         }
-        return LevelLog.csv(columns, start: startDate)
+        return LevelLog.csv(columns, start: startDate, pauses: pauses)
     }
 
     func stop(_ model: AppModel? = nil) {
@@ -204,8 +213,33 @@ final class MonitorAnalyzer {
         loop = nil
         engine?.stream.stop()
         engine = nil
+        if isPaused { resume() }
         isRunning = false
         model?.status = nil
+    }
+
+    /// Holds the meters, averages, RTA and history; Resume carries on from there. Paused time is
+    /// left out of the Leqs and the statistics, as on a sound level meter.
+    func pause() {
+        guard isRunning, !isPaused else { return }
+        engine?.setPaused(true)
+        isPaused = true
+        pausedAt = Date()
+    }
+
+    func resume() {
+        guard isPaused else { return }
+        engine?.setPaused(false)
+        isPaused = false
+        if let pausedAt {
+            pauses.append(LevelLog.Pause(afterSecond: snapshot.seconds, duration: Date().timeIntervalSince(pausedAt)))
+        }
+        pausedAt = nil
+    }
+
+    /// When recorded second `index` of the history ended, with the pauses counted.
+    func endDate(ofSecond index: Int) -> Date? {
+        startDate?.addingTimeInterval(LevelLog.endTime(ofSecond: index, pauses: pauses))
     }
 
     /// Starts the meters, averages and histories again; keeps listening.
@@ -214,7 +248,9 @@ final class MonitorAnalyzer {
         snapshot = MonitorSnapshot()
         histories = [:]
         levelLogs = []
+        pauses = []
         startDate = Date()
+        if isPaused { pausedAt = startDate }
     }
 
     func resetPeaks() { engine?.resetPeaks() }
@@ -254,6 +290,7 @@ final class MonitorEngine {
     private var rtaPosition = 0
     private var resetRequested = false
     private var peaksResetRequested = false
+    private var paused = false
 
     init(sampleRate: Double, micCount: Int) {
         self.sampleRate = sampleRate
@@ -273,11 +310,17 @@ final class MonitorEngine {
         lock.unlock()
     }
 
-    /// Reads what has arrived since the last call, runs it through the meters and the analyser, and
-    /// returns what the views show.
-    func update(_ settings: MonitorSettings) -> MonitorSnapshot {
+    func setPaused(_ on: Bool) {
         lock.lock()
-        let reset = resetRequested, resetPeaks = peaksResetRequested
+        paused = on
+        lock.unlock()
+    }
+
+    /// Reads what has arrived since the last call, runs it through the meters and the analyser, and
+    /// returns what the views show. While paused it drops what has arrived and returns nil.
+    func update(_ settings: MonitorSettings) -> MonitorSnapshot? {
+        lock.lock()
+        let reset = resetRequested, resetPeaks = peaksResetRequested, paused = paused
         resetRequested = false
         peaksResetRequested = false
         lock.unlock()
@@ -286,6 +329,11 @@ final class MonitorEngine {
             rta?.reset()
         }
         if resetPeaks { rta?.resetPeaks() }
+        if paused {
+            for i in meters.indices { positions[i] = stream.samples(mic: i, from: positions[i]).1 }
+            rtaPosition = stream.capturedFrames
+            return nil
+        }
 
         var snap = MonitorSnapshot()
         for i in meters.indices {

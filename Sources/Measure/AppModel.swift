@@ -29,6 +29,15 @@ struct MicSlot: Codable, Identifiable, Hashable {
     /// From 1, as printed on the interface.
     var channel: Int
     var micName: String?
+    /// True when the input is left out of sweeps (kept for live monitoring and the generator).
+    /// Optional so settings saved before it existed still load.
+    var off: Bool?
+
+    /// Whether sweeps record this input.
+    var active: Bool {
+        get { off != true }
+        set { off = newValue ? nil : true }
+    }
 }
 
 /// Routing and sweep settings, remembered between launches. Devices are stored by UID so they are
@@ -47,6 +56,9 @@ struct MeasurementSettings: Codable, Equatable {
     var silence: Double = 2
     var level: Double = -30
     var position = ""
+
+    /// The mic inputs that sweeps record.
+    var activeMics: [MicSlot] { mics.filter(\.active) }
 }
 
 /// Speech and noise levels for STI, remembered between launches.
@@ -66,6 +78,32 @@ struct STISettings: Codable, Equatable {
             speechLevels: customSpeech ? speechLevels : SpeechTransmission.speechLevels(aWeighted: speechLevelA),
             noiseLevels: includeNoise ? noiseLevels : nil,
             auditoryEffects: auditoryEffects)
+    }
+}
+
+/// What went wrong with a sweep, for the status bar.
+struct MeasurementWarning: Equatable {
+    var text: String
+    /// Clipping, a level too low to use, or too little range even for T20: measure again.
+    var severe: Bool
+
+    /// The problems of the traces of one sweep, or nil when there are none.
+    init?(_ traces: [Trace], loopbackPeak: Double?) {
+        var lines: [String] = []
+        var severe = false
+        if let loop = loopbackPeak, loop > MeasurementQuality.clipLevel {
+            let issue = MeasurementQuality.Issue.loopbackClipped(peak: loop)
+            lines.append(issue.message)
+            severe = true
+        }
+        for (i, trace) in traces.enumerated() where !trace.qualityIssues.isEmpty {
+            let prefix = traces.count > 1 ? "Mic \(i + 1): " : ""
+            lines.append(prefix + trace.qualityIssues.map(\.message).joined(separator: " "))
+            severe = severe || trace.qualityIssues.contains(where: \.isSevere)
+        }
+        guard !lines.isEmpty else { return nil }
+        text = lines.joined(separator: "\n")
+        self.severe = severe
     }
 }
 
@@ -101,12 +139,17 @@ final class AppModel {
     let monitor: MonitorAnalyzer
     /// The signal generator window's test signal and meters.
     let generator: GeneratorModel
+    /// Plays the sweep in a loop and meters the inputs, to set the gains before measuring.
+    let levelCheck: LevelCheck
     /// The iPad remote's link to this Mac.
     let remote: RemoteHost
 
     var isMeasuring = false
     var status: String?
     var errorMessage: String?
+    /// Problems found in the last sweep (clipping, low level, low signal-to-noise), shown in the status
+    /// bar until dismissed or the next measurement.
+    var measurementWarning: MeasurementWarning?
 
     @ObservationIgnored private var calibrations: [String: FrequencyResponse] = [:]
     @ObservationIgnored private var loadTask: Task<Void, Never>?
@@ -124,6 +167,7 @@ final class AppModel {
         live = LiveAnalyzer()
         monitor = MonitorAnalyzer()
         generator = GeneratorModel()
+        levelCheck = LevelCheck()
         remote = RemoteHost()
         refreshDevices()
         openProject(projectFolder)
@@ -157,13 +201,20 @@ final class AppModel {
         live.stop()
         monitor.stop()
         generator.stop()
+        levelCheck.stop()
         guard let out = outputDevice, let input = inputDevice else {
             errorMessage = "Choose an output and an input device in Measurement Setup."
             return
         }
         let s = settings
+        let mics = s.activeMics
+        guard !mics.isEmpty else {
+            errorMessage = "Every mic is switched off for sweeps. Tick at least one in Measurement Setup."
+            return
+        }
         isMeasuring = true
         errorMessage = nil
+        measurementWarning = nil
         status = "Measuring…"
         defer { isMeasuring = false }
 
@@ -174,7 +225,7 @@ final class AppModel {
                                                               amplitude: pow(10, s.level / 20)) {
                 throw SetupError(message: problem)
             }
-            if Set(s.mics.map(\.channel)).count != s.mics.count {
+            if Set(mics.map(\.channel)).count != mics.count {
                 throw SetupError(message: "Two mics use the same input channel.")
             }
             let sweep = ExponentialSweep(startFrequency: s.startFrequency, endFrequency: end,
@@ -182,7 +233,7 @@ final class AppModel {
                                          amplitude: pow(10, s.level / 20))
             let played = sweep.samples(silence: s.silence)
             let routing = SweepRouting(outputDevice: out, outputChannel: s.outputChannel - 1,
-                                       inputDevice: input, micChannels: s.mics.map { $0.channel - 1 },
+                                       inputDevice: input, micChannels: mics.map { $0.channel - 1 },
                                        loopbackChannel: s.loopbackInput.map { $0 - 1 },
                                        loopbackOutputChannel: s.loopbackOutput.map { $0 - 1 })
             let recording = try await SweepRecorder().record(played, sampleRate: s.sampleRate, routing: routing)
@@ -203,7 +254,7 @@ final class AppModel {
                                                      sweep: sweep, played: recording.played,
                                                      clockRatio: recording.clockRatio ?? 1)
                 let traces = result.impulseResponses.enumerated().map { i, ir -> Trace in
-                    let slot = s.mics[i]
+                    let slot = mics[i]
                     let label = s.position.isEmpty ? "Mic \(i + 1)" : "\(s.position) · Mic \(i + 1)"
                     var info = TraceInfo(name: label, date: date, source: .sweep, sampleRate: s.sampleRate,
                                          mic: slot.micName, position: s.position,
@@ -218,21 +269,13 @@ final class AppModel {
 
             for trace in made { add(trace) }
             selection = made.first?.id
-            let peaks = made.compactMap(\.info.peakLevel)
-            if let loop = loopbackPeak, loop > -1 {
-                status = "Done, but the loopback input clipped (peak \(String(format: "%.1f", loop)) dBFS). Lower the level or the loopback gain."
-            } else if let worst = peaks.max(), worst > -1 {
-                status = "Done, but a mic clipped (peak \(String(format: "%.1f", worst)) dBFS). Lower the level."
-            } else if let quiet = peaks.min(), quiet < -50 {
-                status = "Done, but the level was low (peak \(String(format: "%.1f", quiet)) dBFS). Raise the level or gain."
-            } else {
-                var text = "Measured \(made.count) mic\(made.count == 1 ? "" : "s")."
-                if let ppm = recording.driftPPM { text += String(format: " Input and output clocks differ by %.1f ppm (corrected).", ppm) }
-                if recording.separateDevices && recording.loopback == nil {
-                    text += " Separate devices without a loopback: arrival times are approximate."
-                }
-                status = text
+            measurementWarning = MeasurementWarning(made, loopbackPeak: loopbackPeak)
+            var text = "Measured \(made.count) mic\(made.count == 1 ? "" : "s")."
+            if let ppm = recording.driftPPM { text += String(format: " Input and output clocks differ by %.1f ppm (corrected).", ppm) }
+            if recording.separateDevices && recording.loopback == nil {
+                text += " Separate devices without a loopback: arrival times are approximate."
             }
+            status = text
         } catch {
             status = nil
             errorMessage = "\(error)"
@@ -420,6 +463,26 @@ final class AppModel {
         traces.removeAll { ids.contains($0.id) }
         visible.subtract(ids)
         if let s = selection, ids.contains(s) { selection = traces.last?.id }
+    }
+
+    /// The open project is the working folder, not a saved set or a folder chosen with Open.
+    var isWorkingFolder: Bool {
+        projectFolder.standardizedFileURL == ProjectStore.defaultFolder.standardizedFileURL
+    }
+
+    /// Empties the list. Unsaved measurements (the working folder's) are deleted for good. A saved
+    /// set or chosen folder is left as it is on disk: the app goes back to an empty working folder.
+    func clearAll() {
+        loadTask?.cancel()
+        loading = false
+        if !isWorkingFolder { projectFolder = ProjectStore.defaultFolder }
+        ProjectStore.deleteAll(in: projectFolder)
+        traces = []
+        visible = []
+        selection = nil
+        folders = []
+        measurementWarning = nil
+        status = "Cleared the measurement list."
     }
 
     /// Sets the frequency response window of the given traces. Imported frequency responses are skipped.

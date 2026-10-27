@@ -403,10 +403,27 @@ public struct LevelLog: Equatable {
         }
     }
 
-    /// A CSV with a row per second: the time it ended (when `start` is given) and the seconds since
-    /// the start, then for each mic and weighting the Leq over that second, the highest Fast level in
-    /// it and the Slow level at its end, to 0.1 dB.
-    public static func csv(_ mics: [Column], start: Date?) -> String {
+    /// A stretch of time when monitoring was paused: after `afterSecond` recorded seconds, `duration`
+    /// seconds went by unmeasured.
+    public struct Pause: Equatable {
+        public var afterSecond: Int
+        public var duration: Double
+        public init(afterSecond: Int, duration: Double) {
+            self.afterSecond = afterSecond
+            self.duration = duration
+        }
+    }
+
+    /// When recorded second `index` (from 0) ended, in seconds after the start: its count plus every
+    /// pause before it.
+    public static func endTime(ofSecond index: Int, pauses: [Pause]) -> Double {
+        Double(index + 1) + pauses.filter { $0.afterSecond <= index }.reduce(0) { $0 + $1.duration }
+    }
+
+    /// A CSV with a row per second: the time it ended (when `start` is given, with any pauses counted)
+    /// and the seconds measured, then for each mic and weighting the Leq over that second, the highest
+    /// Fast level in it and the Slow level at its end, to 0.1 dB.
+    public static func csv(_ mics: [Column], start: Date?, pauses: [Pause] = []) -> String {
         let weightings = SoundLevel.FrequencyWeighting.allCases
         var header = ["Time", "Elapsed s"]
         for m in mics {
@@ -421,7 +438,7 @@ public struct LevelLog: Equatable {
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         let rows = mics.map(\.log.seconds).max() ?? 0
         for s in 0..<rows {
-            var row = [start.map { formatter.string(from: $0.addingTimeInterval(Double(s + 1))) } ?? "", "\(s + 1)"]
+            var row = [start.map { formatter.string(from: $0.addingTimeInterval(endTime(ofSecond: s, pauses: pauses))) } ?? "", "\(s + 1)"]
             for m in mics {
                 for k in weightings.indices {
                     for series in [m.log.energy, m.log.fastMax, m.log.slow] {

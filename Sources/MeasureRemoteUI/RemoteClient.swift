@@ -56,6 +56,19 @@ public final class RemoteClient {
         state = nil
     }
 
+    /// Leaves the Mac while the app is in the background, so the Mac does not list a remote that
+    /// is not looking.
+    public func pause() {
+        disconnect()
+        browser.stop()
+    }
+
+    /// Looks for the Mac again on returning to the foreground.
+    public func resume() {
+        browser.restart()
+        autoConnect()
+    }
+
     public func forget() {
         chosen = nil
         disconnect()

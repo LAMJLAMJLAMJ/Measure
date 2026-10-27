@@ -25,8 +25,14 @@ final class RemoteHost {
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var lastState: RemoteState?
     @ObservationIgnored private var names: [ObjectIdentifier: String] = [:]
-    /// The selected trace's curve, kept until the selection or the smoothing changes.
-    @ObservationIgnored private var curveCache: (key: String, curve: RemoteCurve?)?
+    /// The status line shown when a remote connected, cleared when it goes.
+    @ObservationIgnored private var connectedNote: String?
+    /// Whether the remote draws the average of the ticked measurements.
+    @ObservationIgnored private var showAverage = false
+    /// Each trace's curve, by trace id, kept until its smoothing, name or colour changes.
+    @ObservationIgnored private var curveCache: [UUID: (key: String, curve: RemoteCurve)] = [:]
+    @ObservationIgnored private var phaseCache: [UUID: (key: String, curve: RemoteCurve?)] = [:]
+    @ObservationIgnored private var averageCache: (key: String, curve: RemoteCurve?)?
 
     init() {
         enabled = UserDefaults.standard.bool(forKey: "remoteEnabled")
@@ -70,6 +76,12 @@ final class RemoteHost {
         names = names.filter { live.contains($0.key) }
         remotes = server.connections.filter { $0.status == .ready }.map { names[ObjectIdentifier($0)] ?? "iPad" }
         if !server.connections.isEmpty { lastState = nil }
+        // The connection note was only news while that remote was there: the corner label keeps the
+        // current list.
+        if let note = connectedNote, model?.status == note, !remotes.contains(where: { note.hasPrefix($0 + " ") }) {
+            model?.status = nil
+            connectedNote = nil
+        }
     }
 
     /// Sends the state to every remote, only when it has changed.
@@ -89,7 +101,9 @@ final class RemoteHost {
         case .hello(let device, _):
             names[ObjectIdentifier(connection)] = device
             serverChanged()
-            model.status = "\(device) connected as a remote."
+            let note = "\(device) connected as a remote."
+            model.status = note
+            connectedNote = note
         case .measure:
             Task { await model.measure() }
         case .setPosition(let position):
@@ -108,14 +122,95 @@ final class RemoteHost {
             Task { await model.monitor.start(model) }
         case .stopMonitor:
             model.monitor.stop(model)
+        case .pauseMonitor:
+            model.monitor.pause()
+        case .resumeMonitor:
+            model.monitor.resume()
         case .resetMonitor:
             model.monitor.reset()
         case .select(let id):
             guard model.traces.contains(where: { $0.id == id }) else { return }
             model.selection = id
-            model.visible.insert(id)
+        case .setVisible(let id, let visible):
+            guard model.traces.contains(where: { $0.id == id }) else { return }
+            if visible { model.visible.insert(id) } else { model.visible.remove(id) }
+        case .setSmoothing(let name):
+            if let smoothing = Smoothing(rawValue: name) { model.smoothing = smoothing }
+        case .showAverage(let show):
+            showAverage = show
+        case .setGeneratorSignal(let name):
+            guard let kind = TestSignal.Kind(rawValue: name) else { return }
+            model.generator.settings.signal.kind = kind
+            model.generator.prepare(sampleRate: model.settings.sampleRate)
+        case .setGeneratorMuted(let muted):
+            model.generator.settings.muted = muted
+        case .setGeneratorFrequency(let f):
+            guard f.isFinite, f > 0 else { return }
+            model.generator.settings.signal.frequency = f
+            model.generator.prepare(sampleRate: model.settings.sampleRate)
+        case .setGeneratorBand(let low, let high):
+            guard low.isFinite, high.isFinite, low > 0, high > low else { return }
+            model.generator.settings.signal.low = low
+            model.generator.settings.signal.high = high
+            model.generator.prepare(sampleRate: model.settings.sampleRate)
+        case .setGeneratorOutput(let channel, let on):
+            var set = Set(model.generator.outputs(model))
+            if on { set.insert(channel) } else { set.remove(channel) }
+            model.generator.settings.outputs = set.sorted()
+        case .setRTAMic(let index):
+            guard model.settings.mics.indices.contains(index) else { return }
+            model.monitor.settings.rtaMic = index
+        case .setRTAFraction(let fraction):
+            guard [1, 3, 6, 12, 24].contains(fraction) else { return }
+            model.monitor.settings.rtaFraction = fraction
+        case .setRTAWeighting(let name):
+            guard let w = SoundLevel.FrequencyWeighting(rawValue: name) else { return }
+            model.monitor.settings.rtaWeighting = w
+        case .resetRTAPeaks:
+            model.monitor.resetPeaks()
+        case .setHistoryRange(let seconds):
+            guard [300, 900, 3600, 14_400, 0].contains(seconds) else { return }
+            model.monitor.settings.historyRange = seconds
+        case .captureLive:
+            model.live.capture(model)
+        case .findLiveDelay:
+            guard model.live.blocks > 0 else { return }
+            model.live.findDelays()
+        case .resetLiveDelay:
+            model.live.clearDelays()
+            model.live.reset()
+        case .saveAverage:
+            model.average(Array(model.visible), method: .power)
+        case .startLevelCheck:
+            Task { await model.levelCheck.start(model) }
+        case .stopLevelCheck:
+            model.levelCheck.stop()
+            model.status = nil
+        case .setSweepLevel(let level):
+            model.settings.level = min(max(level.rounded(), -80), 0)
+            restartLevelCheck(model)
+        case .setSweepLength(let length):
+            guard Self.sweepLengths.contains(length) else { return }
+            model.settings.sweepLength = length
+            restartLevelCheck(model)
+        case .setMicActive(let index, let active):
+            guard model.settings.mics.indices.contains(index) else { return }
+            // Keep at least one mic in the sweep.
+            if !active && model.settings.activeMics.count <= 1 && model.settings.mics[index].active { return }
+            model.settings.mics[index].active = active
+            restartLevelCheck(model)
         }
         broadcast()
+    }
+
+    /// The sweep lengths offered, as in Measurement Setup.
+    static let sweepLengths: [Double] = [1, 2, 3, 5, 10, 20]
+
+    /// Starts the level check again so it plays the new sweep and meters the new set of mics.
+    private func restartLevelCheck(_ model: AppModel) {
+        guard model.levelCheck.isRunning else { return }
+        model.levelCheck.stop()
+        Task { await model.levelCheck.start(model) }
     }
 
     // MARK: - State
@@ -126,9 +221,22 @@ final class RemoteHost {
         var s = RemoteState()
         s.projectName = model.projectFolder.deletingPathExtension().lastPathComponent
         s.status = model.status ?? ""
-        s.error = model.errorMessage ?? model.generator.errorMessage
+        s.error = model.errorMessage ?? model.generator.errorMessage ?? model.measurementWarning?.text
         s.isMeasuring = model.isMeasuring
         s.position = model.settings.position
+        s.sweepLevel = model.settings.level
+        s.sweepLength = model.settings.sweepLength
+        s.sweepLengthOptions = Self.sweepLengths
+        s.mics = model.settings.mics.map { RemoteMic(name: $0.micName ?? "Input \($0.channel)", active: $0.active) }
+        let check = model.levelCheck
+        s.levelCheckRunning = check.isRunning
+        if check.isRunning {
+            let meters = (check.loopback.map { [$0] } ?? []) + check.mics
+            s.levelMeters = meters.map { meter in
+                RemoteMeter(label: meter.name, value: meter.peak > -150 ? meter.peak.roundedTenth : nil,
+                            unit: "dBFS peak", overLimit: meter.clipped)
+            }
+        }
 
         s.liveRunning = model.live.isRunning
         s.liveCurves = model.calibratedLiveCurves.map { curve in
@@ -136,24 +244,113 @@ final class RemoteHost {
                                 color: Self.liveColors[curve.0 % Self.liveColors.count],
                                 frequencies: curve.1.map(\.x), levels: curve.1.map(\.y))
         }
+        s.livePhase = model.live.curves.map { c in
+            RemoteCurve.thinned(name: liveName(model, mic: c.mic), color: Self.liveColors[c.mic % Self.liveColors.count],
+                                frequencies: c.phase.map(\.x), levels: c.phase.map(\.y))
+        }
+        s.liveCoherence = model.live.curves.map { c in
+            RemoteCurve.thinned(name: liveName(model, mic: c.mic), color: Self.liveColors[c.mic % Self.liveColors.count],
+                                frequencies: c.coherence.map(\.x), levels: c.coherence.map(\.y))
+        }
+        s.liveCanCapture = model.live.isRunning && !model.live.curves.isEmpty
+        s.liveCanFindDelay = model.live.blocks > 0
+        s.liveDelays = model.live.curves.map { Double(model.live.settings.delay($0.mic)) / model.settings.sampleRate * 1000 }
 
         let generator = model.generator
         s.generatorRunning = generator.isRunning
         s.generatorLevel = generator.settings.level
         s.generatorMaxLevel = generator.maximumLevel
         s.generatorSignal = generator.settings.signal.kind.rawValue
+        s.generatorSignals = TestSignal.Kind.allCases.map(\.rawValue)
+        s.generatorMuted = generator.settings.muted
+        s.generatorFrequency = generator.settings.signal.sineFrequency(sampleRate: model.settings.sampleRate)
+        s.generatorLow = generator.settings.signal.low
+        s.generatorHigh = generator.settings.signal.high
+        s.generatorOutputs = generator.outputs(model)
+        s.generatorOutputCount = generator.outputDevice(model)?.outputChannels ?? 0
 
         s.monitorRunning = model.monitor.isRunning
+        s.monitorPaused = model.monitor.isPaused
         s.meters = model.monitor.isRunning ? meters(model) : []
+        let monitor = model.monitor
+        s.rtaMic = monitor.settings.rtaMic
+        s.rtaFraction = monitor.settings.rtaFraction
+        s.rtaWeighting = monitor.settings.rtaWeighting.rawValue
+        s.rtaWeightings = SoundLevel.FrequencyWeighting.allCases.map(\.rawValue)
+        s.historyRange = monitor.settings.historyRange
+        s.limitA = monitor.settings.limitA
+        s.limitC = monitor.settings.limitC
+        if monitor.isRunning {
+            s.rta = rta(model)
+            s.histories = histories(model)
+        }
 
         let measured = model.traces.filter(\.hasResponse).suffix(30)
         s.traces = measured.map { trace in
-            RemoteTrace(id: trace.id, name: trace.info.name, detail: detail(trace),
-                        color: trace.color.hex ?? "#808080")
+            let warning = trace.qualityIssues.isEmpty ? nil : trace.qualityIssues.map(\.message).joined(separator: " ")
+            return RemoteTrace(id: trace.id, name: trace.info.name, detail: detail(trace),
+                               color: trace.color.hex ?? "#808080",
+                               visible: model.visible.contains(trace.id), warning: warning)
         }
         s.selected = model.selection
-        s.selectedCurve = selectedCurve(model)
+        s.smoothing = model.smoothing.rawValue
+        s.smoothingOptions = Smoothing.allCases.map(\.rawValue)
+        s.showAverage = showAverage
+        let ticked = Array(model.visibleTraces.filter(\.hasResponse).suffix(20))
+        if ticked.isEmpty {
+            let shown = model.selectedTrace.flatMap { $0.hasResponse ? $0 : nil } ?? model.traces.last(where: \.hasResponse)
+            s.curves = shown.map { [curve($0, model)] } ?? []
+        } else {
+            s.curves = ticked.map { curve($0, model) }
+        }
+        s.averageCurve = showAverage && ticked.count > 1 ? average(ticked, model) : nil
+        s.tracePhases = ticked.compactMap { phase($0) }
+        // Forget traces that are gone.
+        let ids = Set(model.traces.map(\.id))
+        curveCache = curveCache.filter { ids.contains($0.key) }
+        phaseCache = phaseCache.filter { ids.contains($0.key) }
         return s
+    }
+
+    /// The RTA as the Mac draws it: with the weighting, the mic's calibration curve and its offset.
+    private func rta(_ model: AppModel) -> RemoteRTA? {
+        let monitor = model.monitor
+        let snap = monitor.snapshot
+        guard !snap.bands.isEmpty, snap.bands.count == snap.rtaLevels.count,
+              snap.bands.count == snap.rtaPeaks.count else { return nil }
+        let index = monitor.settings.rtaMic
+        let mics = model.settings.mics
+        let cal = index < mics.count ? model.calibration(mic: mics[index].micName) : nil
+        let offset = monitor.offset(model, mic: index) ?? 0
+        let w = monitor.settings.rtaWeighting
+        let shifts = snap.bands.map { SoundLevel.weightingDB(w, at: $0.center) - (cal?.magnitude(at: $0.center) ?? 0) + offset }
+        return RemoteRTA(centers: snap.bands.map(\.center),
+                         levels: zip(snap.rtaLevels, shifts).map { ($0 + $1).roundedTenth },
+                         peaks: zip(snap.rtaPeaks, shifts).map { ($0 + $1).roundedTenth },
+                         unit: monitor.unit(model, mic: index))
+    }
+
+    private static let meterColors = ["#FF9500", "#32ADE6", "#FF2D55", "#FFCC00"]
+
+    /// Each meter's history over the range shown, in its units, at most 300 points (the highest
+    /// value of each stretch, as the Mac draws it).
+    private func histories(_ model: AppModel) -> [RemoteHistory] {
+        let monitor = model.monitor
+        return monitor.settings.meters.enumerated().compactMap { i, meter in
+            guard let history = monitor.histories[meter.id], !history.isEmpty else { return nil }
+            let offset = monitor.offset(model, mic: meter.mic) ?? 0
+            let range = monitor.settings.historyRange
+            let shown = Array(history.suffix(range > 0 ? range : history.count))
+            let step = max(1, Int((Double(shown.count) / 300).rounded(.up)))
+            let levels = stride(from: 0, to: shown.count, by: step).map { j in
+                (shown[j..<min(shown.count, j + step)].max()! + offset).roundedTenth
+            }
+            let names = model.settings.mics.map { $0.micName ?? "Input \($0.channel)" }
+            let name = meter.mic < names.count ? names[meter.mic] : "Mic \(meter.mic + 1)"
+            return RemoteHistory(label: "\(name) · \(meter.average.label(meter.weighting))",
+                                 color: Self.meterColors[i % Self.meterColors.count],
+                                 levels: levels, secondsPerPoint: step)
+        }
     }
 
     private func liveName(_ model: AppModel, mic: Int) -> String {
@@ -191,17 +388,43 @@ final class RemoteHost {
         }
     }
 
-    private func selectedCurve(_ model: AppModel) -> RemoteCurve? {
-        let ticked = model.visibleTraces.filter(\.hasResponse)
-        guard let trace = model.selectedTrace.flatMap({ $0.hasResponse ? $0 : nil })
-                ?? ticked.last ?? model.traces.last(where: \.hasResponse) else { return nil }
-        let key = "\(trace.id) \(model.smoothing) \(trace.info.colorHex ?? "") \(trace.info.colorIndex)"
-        if let cache = curveCache, cache.key == key { return cache.curve }
+    /// A trace's response as drawn on the Mac: calibrated, smoothed and in its colour.
+    private func curve(_ trace: Trace, _ model: AppModel) -> RemoteCurve {
+        let color = trace.color.hex ?? "#808080"
+        let key = "\(model.smoothing) \(trace.info.name) \(color) \(String(describing: trace.info.window))"
+        if let cached = curveCache[trace.id], cached.key == key { return cached.curve }
         let points = trace.displayResponse(smoothing: model.smoothing, calibration: model.calibration(for: trace))
-        let curve = RemoteCurve.thinned(name: trace.info.name, color: trace.color.hex ?? "#808080",
+        let curve = RemoteCurve.thinned(name: trace.info.name, color: color,
                                         frequencies: points.map(\.x), levels: points.map(\.y))
-        curveCache = (key, curve)
+        curveCache[trace.id] = (key, curve)
         return curve
+    }
+
+    /// A trace's phase as the Mac's phase chart draws it, with the delay to the direct sound removed.
+    private func phase(_ trace: Trace) -> RemoteCurve? {
+        let color = trace.color.hex ?? "#808080"
+        let key = "\(trace.info.name) \(color) \(String(describing: trace.info.window))"
+        if let cached = phaseCache[trace.id], cached.key == key { return cached.curve }
+        let curve = trace.displayPhase().map { points in
+            RemoteCurve.thinned(name: trace.info.name, color: color,
+                                frequencies: points.map(\.x), levels: points.map(\.y))
+        }
+        phaseCache[trace.id] = (key, curve)
+        return curve
+    }
+
+    /// The power average of the traces' calibrated responses, smoothed like the traces.
+    private func average(_ traces: [Trace], _ model: AppModel) -> RemoteCurve? {
+        let key = "\(model.smoothing) " + traces.map(\.id.uuidString).joined(separator: ",")
+        if let cache = averageCache, cache.key == key { return cache.curve }
+        var result: RemoteCurve?
+        if let response = FrequencyResponse.average(traces.map { model.calibratedResponse($0) }, method: .power) {
+            let points = Trace.displayPoints(response, smoothing: model.smoothing, calibration: nil)
+            result = RemoteCurve.thinned(name: "Average", color: "#000000",
+                                         frequencies: points.map(\.x), levels: points.map(\.y))
+        }
+        averageCache = (key, result)
+        return result
     }
 }
 

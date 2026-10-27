@@ -263,6 +263,8 @@ struct ImpulseView: View {
     // Remembered between visits and launches, separately for each place the view is used.
     @AppStorage private var mode: Mode
     @AppStorage private var span: Double
+    /// Each trace scaled to its own peak, or all drawn at their own level to compare levels.
+    @AppStorage private var normalised: Bool
     /// Show the frequency response window of the selected trace and let it be dragged.
     let editsWindow: Bool
     @State private var dragging: Edge?
@@ -273,6 +275,7 @@ struct ImpulseView: View {
     init(initialMode: Mode = .etc, initialSpan: Double = 300, editsWindow: Bool = false, storageKey: String = "impulse") {
         _mode = AppStorage(wrappedValue: initialMode, "\(storageKey).mode")
         _span = AppStorage(wrappedValue: initialSpan, "\(storageKey).span")
+        _normalised = AppStorage(wrappedValue: true, "\(storageKey).normalised")
         self.editsWindow = editsWindow
     }
 
@@ -295,8 +298,12 @@ struct ImpulseView: View {
                 .frame(width: 140)
                 .onChange(of: span) { zoom = ChartZoom() }
                 .onChange(of: mode) { zoom = ChartZoom() }
+                Toggle("Normalise", isOn: $normalised)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: normalised) { zoom = ChartZoom() }
+                    .help("On: each trace scaled to its own peak. Off: every trace at its own level (re full scale), to compare levels between measurements.")
                 if let reference {
-                    ZoomControls(zoom: $zoom, xFull: timeRange(reference, window: window), yFull: levelRange)
+                    ZoomControls(zoom: $zoom, xFull: timeRange(reference, window: window), yFull: levelRange(traces))
                 }
                 Spacer()
                 Text("Time from the selected trace's direct sound").font(.caption).foregroundStyle(.secondary)
@@ -309,7 +316,7 @@ struct ImpulseView: View {
                 let xFull = timeRange(reference, window: window)
                 let shown = zoom.xDomain(xFull)
                 let yLabel = mode == .etc ? "Level" : "Amplitude"
-                let yRange = levelRange
+                let yRange = levelRange(traces)
                 Chart {
                     ForEach(traces) { trace in
                         ForEach(points(trace, zero: zero, shown: shown)) { p in
@@ -322,7 +329,7 @@ struct ImpulseView: View {
                     if let window {
                         ForEach(windowCurve(window)) { p in
                             LineMark(x: .value("Time", p.x),
-                                     y: .value(yLabel, mode == .etc ? max(-100, 20 * log10(max(p.y, 1e-10))) : p.y),
+                                     y: .value(yLabel, windowLevel(p.y, reference: reference)),
                                      series: .value("Trace", "window"))
                                 .foregroundStyle(Color.accentColor)
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
@@ -342,7 +349,7 @@ struct ImpulseView: View {
                 .chartYScale(domain: zoom.yDomain(yRange))
                 .chartPlotStyle { $0.clipped() }
                 .chartXAxisLabel("ms")
-                .chartYAxisLabel(mode == .etc ? "dB" : "normalised")
+                .chartYAxisLabel(yAxisLabel)
                 .chartLegend(.hidden)
                 .chartOverlay { proxy in
                     GeometryReader { geo in
@@ -443,7 +450,35 @@ struct ImpulseView: View {
     }
 
     /// The level axis, whole.
-    private var levelRange: ClosedRange<Double> { mode == .etc ? -100...0 : -1...1 }
+    /// The level axis, whole: fixed when normalised, otherwise from the loudest trace shown.
+    private func levelRange(_ traces: [Trace]) -> ClosedRange<Double> {
+        if normalised { return mode == .etc ? -100...0 : -1...1 }
+        if mode == .etc {
+            let loudest = traces.map(\.energyTimePeak).max() ?? 0
+            let top = (loudest / 10).rounded(.up) * 10 + 5
+            return (top - 105)...top
+        }
+        let peak = max(traces.map(\.impulsePeak).max() ?? 1, 1e-9) * 1.05
+        return -peak...peak
+    }
+
+    private var yAxisLabel: String {
+        switch (mode, normalised) {
+        case (.etc, true): return "dB re peak"
+        case (.etc, false): return "dB re full scale"
+        case (.impulse, true): return "normalised"
+        case (.impulse, false): return "re full scale"
+        }
+    }
+
+    /// The window's gain (0...1) on the level axis, drawn against the reference trace's peak.
+    private func windowLevel(_ gain: Double, reference: Trace) -> Double {
+        if mode == .etc {
+            let db = max(-100, 20 * log10(max(gain, 1e-10)))
+            return normalised ? db : db + reference.energyTimePeak
+        }
+        return normalised ? gain : gain * reference.impulsePeak
+    }
 
     /// How far before the direct sound the chart starts: a little, and before the window's left edge.
     private func preRoll(_ window: ResponseWindow?) -> Double { max(0.005, (window?.left ?? 0) + 0.002) }
@@ -503,10 +538,14 @@ struct ImpulseView: View {
         // Another trace can be shorter than the selected one's onset, so never let the range run backwards.
         let end = max(start, min(ir.count, zero + Int((shown.upperBound / 1000 * fs).rounded(.up)) + 1))
         if mode == .etc {
-            return ChartData.points(trace.energyTime, range: start..<end, zero: zero, sampleRate: fs, envelope: true)
+            let points = ChartData.points(trace.energyTime, range: start..<end, zero: zero, sampleRate: fs, envelope: true)
+            if normalised { return points }
+            return points.map { ChartPoint(x: $0.x, y: $0.y + trace.energyTimePeak) }
         }
-        let peak = max(ir.map(abs).max() ?? 1, .leastNonzeroMagnitude)
-        return ChartData.points(ir, range: start..<end, zero: zero, sampleRate: fs).map { ChartPoint(x: $0.x, y: $0.y / peak) }
+        let points = ChartData.points(ir, range: start..<end, zero: zero, sampleRate: fs)
+        if !normalised { return points }
+        let peak = max(trace.impulsePeak, .leastNonzeroMagnitude)
+        return points.map { ChartPoint(x: $0.x, y: $0.y / peak) }
     }
 }
 

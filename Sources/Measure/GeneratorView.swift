@@ -96,6 +96,7 @@ final class GeneratorModel {
         }
         model.live.stop(model)
         model.monitor.stop(model)
+        model.levelCheck.stop()
         let s = model.settings
         let signal = settings.signal.samples(sampleRate: s.sampleRate)
         crestFactor = TestSignal.crestFactor(signal)

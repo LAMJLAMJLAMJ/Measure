@@ -14,6 +14,10 @@ final class RemoteProtocolTests: XCTestCase {
         state.traces = [RemoteTrace(id: id, name: "Seat A1", detail: "10:42", color: "#00AAFF")]
         state.selected = id
         state.error = "Input clipped"
+        state.mics = [RemoteMic(name: "Mic 1", active: true), RemoteMic(name: "Input 2", active: false)]
+        state.averageCurve = RemoteCurve(name: "Average", color: "#000000", frequencies: [100], levels: [70])
+        state.liveDelays = [2.35, 4.1]
+        state.monitorPaused = true
         return state
     }
 
@@ -24,6 +28,14 @@ final class RemoteProtocolTests: XCTestCase {
             .command(.setGeneratorLevel(-12.5)),
             .command(.select(UUID())),
             .command(.measure),
+            .command(.setVisible(UUID(), true)),
+            .command(.setSmoothing("1/6")),
+            .command(.setMicActive(1, false)),
+            .command(.setSweepLength(5)),
+            .command(.findLiveDelay),
+            .command(.resetLiveDelay),
+            .command(.pauseMonitor),
+            .command(.resumeMonitor),
             .state(sampleState()),
         ]
         var stream = Data()

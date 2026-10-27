@@ -1,4 +1,5 @@
 #if os(macOS)
+import MeasureDSP
 import SwiftUI
 
 struct ContentView: View {
@@ -160,6 +161,13 @@ struct ContentView: View {
         }
         .disabled(model.isMeasuring)
         .help("Start or stop listening on the mics from Measurement Setup")
+        Button {
+            if model.monitor.isPaused { model.monitor.resume() } else { model.monitor.pause() }
+        } label: {
+            Label(model.monitor.isPaused ? "Resume" : "Pause", systemImage: model.monitor.isPaused ? "playpause.fill" : "pause.circle")
+        }
+        .disabled(!model.monitor.isRunning)
+        .help("Pause holds the meters, averages and history and leaves the paused time out; Resume carries on. Stop ends the measurement.")
         Button { model.monitor.reset() } label: { Label("Reset", systemImage: "arrow.counterclockwise") }
             .disabled(!model.monitor.isRunning)
             .help("Start the meters, averages, maxima and history again")
@@ -224,6 +232,13 @@ struct StatusBar: View {
                 Text(error).lineLimit(2)
                 Spacer()
                 Button("Dismiss") { model.errorMessage = nil }.buttonStyle(.borderless)
+            } else if let warning = model.measurementWarning, !model.isMeasuring {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(warning.severe ? Color.red : Color.orange)
+                Text(warning.text).lineLimit(4)
+                    .help(warning.text)
+                Spacer()
+                Button("Dismiss") { model.measurementWarning = nil }.buttonStyle(.borderless)
             } else {
                 Text(model.status ?? setupSummary).foregroundStyle(.secondary)
                 Spacer()
@@ -243,7 +258,7 @@ struct StatusBar: View {
     private var setupSummary: String {
         guard let out = model.outputDevice, let input = model.inputDevice else { return "No audio device chosen" }
         let s = model.settings
-        let mics = s.mics.map { "\($0.channel)" }.joined(separator: ", ")
+        let mics = s.activeMics.map { "\($0.channel)" }.joined(separator: ", ")
         let loop = s.loopbackInput.map { ", loopback in \($0)" } ?? ""
         return "\(out.name) out \(s.outputChannel) → \(input.name) in \(mics)\(loop) · \(Int(s.sampleRate / 1000)) kHz, \(Int(s.sweepLength)) s sweep at \(Int(s.level)) dBFS"
     }
@@ -251,6 +266,7 @@ struct StatusBar: View {
 
 struct TraceList: View {
     @Environment(AppModel.self) private var model
+    @State private var confirmingClear = false
     @State private var editing: TraceInfo?
     @State private var renaming: UUID?
     @State private var newName = ""
@@ -293,6 +309,17 @@ struct TraceList: View {
     }
 
     /// One measurement: tick to show it, its colour, name and details. Drag it onto a folder to file it.
+    /// A warning triangle for a measurement that clipped or has too little range above the noise.
+    private func qualityBadge(_ issues: [MeasurementQuality.Issue]) -> some View {
+        let severe = issues.contains(where: \.isSevere)
+        return HStack {
+            Spacer(minLength: 0)
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(severe ? Color.red : Color.orange)
+                .help(issues.map(\.message).joined(separator: "\n"))
+        }
+    }
+
     private func row(_ trace: Trace) -> some View {
         HStack(spacing: 8) {
             Toggle("", isOn: Binding(
@@ -328,6 +355,7 @@ struct TraceList: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(3)
                 }
             }
+            if !trace.qualityIssues.isEmpty { qualityBadge(trace.qualityIssues) }
         }
         .help(trace.info.notes)
         .tag(trace.id)
@@ -433,6 +461,21 @@ struct TraceList: View {
             }
             .buttonStyle(.borderless)
             .help("Add a folder to the list, then drag measurements onto it")
+            Button {
+                confirmingClear = true
+            } label: {
+                Label("Clear All", systemImage: "trash")
+            }
+            .buttonStyle(.borderless)
+            .disabled(model.traces.isEmpty)
+            .help("Empty the measurement list. Unsaved measurements are deleted; saved sets stay on disk.")
+            .confirmationDialog("Clear all \(model.traces.count) measurements?", isPresented: $confirmingClear) {
+                Button("Clear All", role: .destructive) { model.clearAll() }
+            } message: {
+                Text(model.isWorkingFolder
+                     ? "Every measurement and folder is removed and deleted. Save a set first (⇧⌘S) to keep them."
+                     : "The list is emptied and a new, empty working list starts. \(model.projectFolder.lastPathComponent) stays on disk as saved.")
+            }
             Spacer(minLength: 0)
             if !model.folders.isEmpty {
                 Text("Drop here for the top level").font(.caption).foregroundStyle(.secondary).lineLimit(1)

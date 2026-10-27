@@ -4,9 +4,15 @@ import Foundation
 public enum TimeFrequency {
     /// Energy-time curve: the Hilbert envelope of the impulse response in dB, 0 dB at its peak.
     public static func energyTimeCurve(_ ir: [Double]) -> [Double] {
+        energyTimeCurveAndPeak(ir).curve
+    }
+
+    /// The energy-time curve in dB re its peak, and that peak in dB re a full-scale sample, so the
+    /// curve can also be drawn at its own level: `curve[i] + peak`.
+    public static func energyTimeCurveAndPeak(_ ir: [Double]) -> (curve: [Double], peak: Double) {
         let env = envelope(ir)
         let peak = max(env.max() ?? 1, .leastNonzeroMagnitude)
-        return env.map { 10 * log10(max($0 / peak, 1e-30)) }
+        return (env.map { 10 * log10(max($0 / peak, 1e-30)) }, 10 * log10(peak))
     }
 
     /// The squared Hilbert envelope of `x`: its instantaneous power, not normalised.
