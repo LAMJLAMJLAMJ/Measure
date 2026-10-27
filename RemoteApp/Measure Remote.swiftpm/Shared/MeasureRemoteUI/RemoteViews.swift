@@ -6,6 +6,7 @@ import SwiftUI
 /// The whole remote: a search screen until a Mac is found, then tabs for each part of Measure.
 public struct RemoteRootView: View {
     @State private var client = RemoteClient()
+    @Environment(\.scenePhase) private var scenePhase
 
     public init() {}
 
@@ -18,6 +19,10 @@ public struct RemoteRootView: View {
             }
         }
         .task { client.start() }
+        .onChange(of: scenePhase) { old, phase in
+            if phase == .background { client.pause() }
+            if phase == .active && old == .background { client.resume() }
+        }
     }
 }
 

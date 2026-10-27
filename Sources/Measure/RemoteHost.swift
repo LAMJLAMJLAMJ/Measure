@@ -25,6 +25,8 @@ final class RemoteHost {
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var lastState: RemoteState?
     @ObservationIgnored private var names: [ObjectIdentifier: String] = [:]
+    /// The status line shown when a remote connected, cleared when it goes.
+    @ObservationIgnored private var connectedNote: String?
     /// Whether the remote draws the average of the ticked measurements.
     @ObservationIgnored private var showAverage = false
     /// Each trace's curve, by trace id, kept until its smoothing, name or colour changes.
@@ -73,6 +75,12 @@ final class RemoteHost {
         names = names.filter { live.contains($0.key) }
         remotes = server.connections.filter { $0.status == .ready }.map { names[ObjectIdentifier($0)] ?? "iPad" }
         if !server.connections.isEmpty { lastState = nil }
+        // The connection note was only news while that remote was there: the corner label keeps the
+        // current list.
+        if let note = connectedNote, model?.status == note, !remotes.contains(where: { note.hasPrefix($0 + " ") }) {
+            model?.status = nil
+            connectedNote = nil
+        }
     }
 
     /// Sends the state to every remote, only when it has changed.
@@ -92,7 +100,9 @@ final class RemoteHost {
         case .hello(let device, _):
             names[ObjectIdentifier(connection)] = device
             serverChanged()
-            model.status = "\(device) connected as a remote."
+            let note = "\(device) connected as a remote."
+            model.status = note
+            connectedNote = note
         case .measure:
             Task { await model.measure() }
         case .setPosition(let position):
