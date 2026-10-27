@@ -190,10 +190,7 @@ struct SweepTab: View {
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 380)
-            Toggle("Average", isOn: Binding(get: { state.showAverage },
-                                            set: { client.send(.showAverage($0)) }))
-                .fixedSize()
-                .disabled(state.traces.filter(\.visible).count < 2)
+            AverageControls(client: client, state: state)
             Spacer()
         }
     }
@@ -208,6 +205,25 @@ struct SweepTab: View {
         var note = "\(ticked) ticked measurement\(ticked == 1 ? "" : "s")"
         if state.averageCurve != nil { note += ", with their power average in the thick line" }
         return note + ". Smoothing \(state.smoothing)."
+    }
+}
+
+/// Shows the power average of the ticked measurements, and saves it to the Mac's list.
+struct AverageControls: View {
+    let client: RemoteClient
+    let state: RemoteState
+
+    private var enough: Bool { state.traces.filter(\.visible).count >= 2 }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Toggle("Average", isOn: Binding(get: { state.showAverage },
+                                            set: { client.send(.showAverage($0)) }))
+                .fixedSize()
+            Button("Save Average") { client.send(.saveAverage) }
+                .buttonStyle(.bordered)
+        }
+        .disabled(!enough)
     }
 }
 
@@ -365,24 +381,74 @@ struct LiveTab: View {
     let client: RemoteClient
     let state: RemoteState
 
+    /// The ticked measurements, drawn thin under the live curves.
+    private var ticked: [RemoteCurve] { state.traces.contains(where: \.visible) ? state.curves : [] }
+    private var tickedPhase: [RemoteCurve] { state.traces.contains(where: \.visible) ? state.tracePhases : [] }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                StartStopButton(running: state.liveRunning, start: "Start Live", stop: "Stop Live") {
-                    client.send(state.liveRunning ? .stopLive : .startLive)
-                }
-                Spacer()
-                ForEach(state.liveCurves, id: \.name) { curve in
-                    HStack(spacing: 4) {
-                        Circle().fill(Color(remoteHex: curve.color)).frame(width: 8, height: 8)
-                        Text(curve.name).font(.caption)
+        HStack(alignment: .top, spacing: 0) {
+            List {
+                Section {
+                    ForEach(Array(state.traces.reversed())) { trace in
+                        TraceRow(client: client, trace: trace, selected: trace.id == state.selected)
                     }
+                } header: {
+                    HStack {
+                        Text("Measurements")
+                        Spacer()
+                        if state.traces.contains(where: \.visible) {
+                            Button("Untick All") {
+                                for trace in state.traces where trace.visible { client.send(.setVisible(trace.id, false)) }
+                            }
+                            .textCase(nil)
+                        }
+                    }
+                } footer: {
+                    Text("Ticked measurements are drawn thin under the live curves. Capture saves each mic's live response to the list, where it can be ticked and averaged.")
                 }
             }
-            ResponseChart(curves: state.liveCurves,
-                          empty: state.liveRunning ? "Waiting for audio…" : "Live is stopped")
+            .remoteListStyle()
+            .frame(width: 300)
+            Divider()
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    StartStopButton(running: state.liveRunning, start: "Start Live", stop: "Stop Live") {
+                        client.send(state.liveRunning ? .stopLive : .startLive)
+                    }
+                    Button {
+                        client.send(.captureLive)
+                    } label: {
+                        Label("Capture", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(!state.liveCanCapture)
+                    Spacer()
+                    ForEach(Array(state.liveCurves.enumerated()), id: \.offset) { _, curve in
+                        HStack(spacing: 4) {
+                            Circle().fill(Color(remoteHex: curve.color)).frame(width: 8, height: 8)
+                            Text(curve.name).font(.caption)
+                        }
+                    }
+                }
+                HStack {
+                    AverageControls(client: client, state: state)
+                    Spacer()
+                }
+                ResponseChart(curves: state.liveCurves, average: ticked.isEmpty ? nil : state.averageCurve,
+                              background: ticked,
+                              empty: state.liveRunning ? "Waiting for audio…" : "Live is stopped")
+                    .frame(minHeight: 200)
+                Text("Coherence").font(.caption).foregroundStyle(.secondary)
+                ResponseChart(curves: state.liveCoherence, yFixed: 0...1, yLabel: "", unit: "", empty: "")
+                    .frame(height: 80)
+                Text("Phase").font(.caption).foregroundStyle(.secondary)
+                ResponseChart(curves: state.livePhase, background: tickedPhase, yFixed: -180...180,
+                              yLabel: "°", unit: "°", dots: true, empty: "")
+                    .frame(height: 150)
+            }
+            .padding()
         }
-        .padding()
     }
 }
 
@@ -520,6 +586,16 @@ struct ResponseChart: View {
     var average: RemoteCurve? = nil
     /// The name of a curve to draw thicker than the others.
     var highlighted: String? = nil
+    /// Drawn thin under the curves: the ticked measurements under the live curves.
+    var background: [RemoteCurve] = []
+    /// A fixed level axis (phase, coherence); nil fits the levels shown.
+    var yFixed: ClosedRange<Double>? = nil
+    var yLabel = "dB"
+    /// Unit in the data tip.
+    var unit = "dB"
+    /// Draws the curves as dots, as the Mac draws live phase.
+    var dots = false
+    /// Shown when there is nothing to draw; empty shows a blank chart area.
     let empty: String
     /// The frequency under the finger, while it is on the chart.
     @State private var touched: Double?
@@ -535,10 +611,23 @@ struct ResponseChart: View {
     /// Series names are numbered, as two measurements can share a name.
     private func seriesName(_ index: Int) -> String { "\(index)" }
 
+    private func backgroundName(_ index: Int) -> String { "b\(index)" }
+
+    private var backgroundPoints: [Point] {
+        var result: [Point] = []
+        for (n, curve) in background.enumerated() {
+            for i in curve.frequencies.indices where i < curve.levels.count {
+                result.append(Point(id: result.count, series: backgroundName(n),
+                                    frequency: curve.frequencies[i], level: curve.levels[i], width: 1))
+            }
+        }
+        return result
+    }
+
     private var points: [Point] {
         var result: [Point] = []
         for (n, curve) in curves.enumerated() {
-            let width = curve.name == highlighted ? 2.5 : 1.5
+            let width = curve.name == highlighted || !background.isEmpty ? 2.5 : 1.5
             for i in curve.frequencies.indices where i < curve.levels.count {
                 result.append(Point(id: result.count, series: seriesName(n),
                                     frequency: curve.frequencies[i], level: curve.levels[i], width: width))
@@ -557,7 +646,8 @@ struct ResponseChart: View {
     }
 
     private var yDomain: ClosedRange<Double> {
-        let levels = curves.flatMap(\.levels) + (average?.levels ?? [])
+        if let yFixed { return yFixed }
+        let levels = curves.flatMap(\.levels) + background.flatMap(\.levels) + (average?.levels ?? [])
         guard let high = levels.max(), let low = levels.min() else { return 40...100 }
         let top = (high / 10).rounded(.up) * 10 + 5
         let bottom = max((low / 10).rounded(.down) * 10, top - 60)
@@ -565,16 +655,35 @@ struct ResponseChart: View {
     }
 
     var body: some View {
-        if curves.isEmpty {
-            ContentUnavailableView(empty, systemImage: "chart.xyaxis.line")
+        if curves.isEmpty && background.isEmpty && average == nil {
+            if empty.isEmpty {
+                RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.3))
+            } else {
+                ContentUnavailableView(empty, systemImage: "chart.xyaxis.line")
+            }
         } else {
             Chart {
-                ForEach(points) { point in
+                ForEach(backgroundPoints) { point in
                     LineMark(x: .value("Frequency", point.frequency),
                              y: .value("Level", point.level),
                              series: .value("Curve", point.series))
                         .foregroundStyle(by: .value("Curve", point.series))
                         .lineStyle(StrokeStyle(lineWidth: point.width))
+                        .opacity(0.8)
+                }
+                ForEach(points) { point in
+                    if dots {
+                        PointMark(x: .value("Frequency", point.frequency),
+                                  y: .value("Level", point.level))
+                            .foregroundStyle(by: .value("Curve", point.series))
+                            .symbolSize(10)
+                    } else {
+                        LineMark(x: .value("Frequency", point.frequency),
+                                 y: .value("Level", point.level),
+                                 series: .value("Curve", point.series))
+                            .foregroundStyle(by: .value("Curve", point.series))
+                            .lineStyle(StrokeStyle(lineWidth: point.width))
+                    }
                 }
                 ForEach(averagePoints) { point in
                     LineMark(x: .value("Frequency", point.frequency),
@@ -589,7 +698,7 @@ struct ResponseChart: View {
                         .lineStyle(StrokeStyle(lineWidth: 1))
                         .annotation(position: .top, alignment: .center, spacing: 0,
                                     overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
-                            DataTip(frequency: touched, rows: tipRows(at: touched))
+                            DataTip(frequency: touched, rows: tipRows(at: touched), unit: unit)
                         }
                 }
             }
@@ -607,8 +716,8 @@ struct ResponseChart: View {
                             .onEnded { _ in touched = nil })
                 }
             }
-            .chartForegroundStyleScale(domain: curves.indices.map { seriesName($0) },
-                                       range: curves.map { Color(remoteHex: $0.color) })
+            .chartForegroundStyleScale(domain: curves.indices.map { seriesName($0) } + background.indices.map { backgroundName($0) },
+                                       range: (curves + background).map { Color(remoteHex: $0.color) })
             .chartLegend(.hidden)
             .chartXScale(domain: 20.0...20_000.0, type: .log)
             .chartYScale(domain: yDomain)
@@ -622,7 +731,7 @@ struct ResponseChart: View {
                     }
                 }
             }
-            .chartYAxisLabel("dB")
+            .chartYAxisLabel(yLabel)
             .chartPlotStyle { $0.clipped() }
         }
     }
@@ -631,7 +740,7 @@ struct ResponseChart: View {
 extension ResponseChart {
     /// Each curve's level at `frequency`, for the data tip, average last.
     func tipRows(at frequency: Double) -> [DataTip.Row] {
-        var rows = curves.compactMap { curve in
+        var rows = (curves + background).compactMap { curve in
             curve.level(at: frequency).map { DataTip.Row(name: curve.name, color: Color(remoteHex: curve.color), level: $0) }
         }
         if let average, let level = average.level(at: frequency) {
@@ -671,6 +780,15 @@ struct DataTip: View {
 
     let frequency: Double
     let rows: [Row]
+    var unit = "dB"
+
+    private func levelText(_ level: Double) -> String {
+        switch unit {
+        case "": return String(format: "%.2f", level)
+        case "°": return String(format: "%.0f°", level)
+        default: return String(format: "%.1f %@", level, unit)
+        }
+    }
 
     private var frequencyText: String {
         frequency >= 1000 ? String(format: "%.2f kHz", frequency / 1000) : String(format: "%.0f Hz", frequency)
@@ -684,7 +802,7 @@ struct DataTip: View {
                     Circle().fill(row.color).frame(width: 8, height: 8)
                     Text(row.name).lineLimit(1)
                     Spacer(minLength: 8)
-                    Text(String(format: "%.1f dB", row.level)).monospacedDigit()
+                    Text(levelText(row.level)).monospacedDigit()
                 }
                 .font(.caption)
             }

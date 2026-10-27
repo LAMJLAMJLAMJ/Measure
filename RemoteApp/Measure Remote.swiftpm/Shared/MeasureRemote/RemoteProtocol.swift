@@ -43,6 +43,10 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     case setSweepLength(Double)
     /// Whether sweeps record mic input `index` (an index into `RemoteState.mics`).
     case setMicActive(Int, Bool)
+    /// Adds each mic's live response to the measurements, as the Mac's Capture button does.
+    case captureLive
+    /// Saves the power average of the ticked measurements as a new measurement, as the Mac's Average does.
+    case saveAverage
 }
 
 /// A mic input of the measurement setup.
@@ -153,6 +157,11 @@ public struct RemoteState: Codable, Equatable, Sendable {
 
     public var liveRunning = false
     public var liveCurves: [RemoteCurve] = []
+    /// Each mic's live phase (degrees, -180 to 180) and coherence (0 to 1), in the same order.
+    public var livePhase: [RemoteCurve] = []
+    public var liveCoherence: [RemoteCurve] = []
+    /// True once the analyser has a response to capture.
+    public var liveCanCapture = false
 
     public var generatorRunning = false
     public var generatorLevel: Double = -20
@@ -169,6 +178,8 @@ public struct RemoteState: Codable, Equatable, Sendable {
     public var curves: [RemoteCurve] = []
     /// The power average of the ticked measurements, when asked for and more than one is ticked.
     public var averageCurve: RemoteCurve?
+    /// The ticked measurements' phase (degrees), for the live phase chart.
+    public var tracePhases: [RemoteCurve] = []
     public var showAverage = false
     public var smoothing = ""
     public var smoothingOptions: [String] = []

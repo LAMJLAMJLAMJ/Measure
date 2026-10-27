@@ -31,6 +31,7 @@ final class RemoteHost {
     @ObservationIgnored private var showAverage = false
     /// Each trace's curve, by trace id, kept until its smoothing, name or colour changes.
     @ObservationIgnored private var curveCache: [UUID: (key: String, curve: RemoteCurve)] = [:]
+    @ObservationIgnored private var phaseCache: [UUID: (key: String, curve: RemoteCurve?)] = [:]
     @ObservationIgnored private var averageCache: (key: String, curve: RemoteCurve?)?
 
     init() {
@@ -133,6 +134,10 @@ final class RemoteHost {
             if let smoothing = Smoothing(rawValue: name) { model.smoothing = smoothing }
         case .showAverage(let show):
             showAverage = show
+        case .captureLive:
+            model.live.capture(model)
+        case .saveAverage:
+            model.average(Array(model.visible), method: .power)
         case .startLevelCheck:
             Task { await model.levelCheck.start(model) }
         case .stopLevelCheck:
@@ -196,6 +201,15 @@ final class RemoteHost {
                                 color: Self.liveColors[curve.0 % Self.liveColors.count],
                                 frequencies: curve.1.map(\.x), levels: curve.1.map(\.y))
         }
+        s.livePhase = model.live.curves.map { c in
+            RemoteCurve.thinned(name: liveName(model, mic: c.mic), color: Self.liveColors[c.mic % Self.liveColors.count],
+                                frequencies: c.phase.map(\.x), levels: c.phase.map(\.y))
+        }
+        s.liveCoherence = model.live.curves.map { c in
+            RemoteCurve.thinned(name: liveName(model, mic: c.mic), color: Self.liveColors[c.mic % Self.liveColors.count],
+                                frequencies: c.coherence.map(\.x), levels: c.coherence.map(\.y))
+        }
+        s.liveCanCapture = model.live.isRunning && !model.live.curves.isEmpty
 
         let generator = model.generator
         s.generatorRunning = generator.isRunning
@@ -225,9 +239,11 @@ final class RemoteHost {
             s.curves = ticked.map { curve($0, model) }
         }
         s.averageCurve = showAverage && ticked.count > 1 ? average(ticked, model) : nil
+        s.tracePhases = ticked.compactMap { phase($0) }
         // Forget traces that are gone.
         let ids = Set(model.traces.map(\.id))
         curveCache = curveCache.filter { ids.contains($0.key) }
+        phaseCache = phaseCache.filter { ids.contains($0.key) }
         return s
     }
 
@@ -275,6 +291,19 @@ final class RemoteHost {
         let curve = RemoteCurve.thinned(name: trace.info.name, color: color,
                                         frequencies: points.map(\.x), levels: points.map(\.y))
         curveCache[trace.id] = (key, curve)
+        return curve
+    }
+
+    /// A trace's phase as the Mac's phase chart draws it, with the delay to the direct sound removed.
+    private func phase(_ trace: Trace) -> RemoteCurve? {
+        let color = trace.color.hex ?? "#808080"
+        let key = "\(trace.info.name) \(color) \(String(describing: trace.info.window))"
+        if let cached = phaseCache[trace.id], cached.key == key { return cached.curve }
+        let curve = trace.displayPhase().map { points in
+            RemoteCurve.thinned(name: trace.info.name, color: color,
+                                frequencies: points.map(\.x), levels: points.map(\.y))
+        }
+        phaseCache[trace.id] = (key, curve)
         return curve
     }
 
