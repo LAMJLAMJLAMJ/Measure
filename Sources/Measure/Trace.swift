@@ -80,8 +80,10 @@ struct Trace: Identifiable {
     let impulsePeak: Double
     /// Sample index of the onset (direct sound).
     let onset: Int
-    /// Seconds from the start of the frequency response window to the onset, removed from the phase.
+    /// Seconds from the start of the frequency response window to the onset.
     private(set) var responseDelay: Double
+    /// Seconds from the start of the frequency response window to the impulse's peak, removed from the phase.
+    private(set) var phaseDelay: Double
 
     var id: UUID { info.id }
     var color: Color { info.colorHex.flatMap(Color.init(hex:)) ?? TracePalette.color(info.colorIndex) }
@@ -95,17 +97,13 @@ struct Trace: Identifiable {
     mutating func setWindow(_ window: ResponseWindow) {
         guard let ir = impulseResponse else { return }
         info.window = window
-        (rawResponse, responseDelay) = Trace.windowedResponse(ir, onset: onset, sampleRate: info.sampleRate, window: window)
+        setResponse(window.response(of: ir, onset: onset, sampleRate: info.sampleRate))
     }
 
-    /// Frequency response of `ir` within `window`, and the seconds from the window start to the onset.
-    static func windowedResponse(_ ir: [Double], onset: Int, sampleRate fs: Double,
-                                         window: ResponseWindow) -> (FrequencyResponse, Double) {
-        let (samples, start) = window.apply(to: ir, onset: onset, sampleRate: fs)
-        // Zero-pad to at least a second so short windows still draw as smooth curves.
-        let response = FrequencyResponse(impulseResponse: samples, sampleRate: fs,
-                                         fftSize: FFT.size(atLeast: max(samples.count, Int(fs))))
-        return (response, Double(onset - start) / fs)
+    private mutating func setResponse(_ r: ResponseWindow.Response) {
+        rawResponse = r.response
+        responseDelay = r.onsetDelay
+        phaseDelay = r.peakDelay
     }
 
     init(info: TraceInfo, impulseResponse: [Double]) {
@@ -119,8 +117,10 @@ struct Trace: Identifiable {
         // Only sweeps measured here: an imported response may have been trimmed before its noise.
         qualityIssues = info.source == .sweep
             ? MeasurementQuality.check(micPeak: info.peakLevel, acoustics: acoustics) : []
-        (rawResponse, responseDelay) = Trace.windowedResponse(impulseResponse, onset: onset, sampleRate: fs,
-                                                              window: info.window ?? .standard)
+        let r = (info.window ?? .standard).response(of: impulseResponse, onset: onset, sampleRate: fs)
+        rawResponse = r.response
+        responseDelay = r.onsetDelay
+        phaseDelay = r.peakDelay
         (energyTime, energyTimePeak) = TimeFrequency.energyTimeCurveAndPeak(impulseResponse)
         impulsePeak = impulseResponse.map(abs).max() ?? 0
     }
@@ -138,6 +138,7 @@ struct Trace: Identifiable {
         impulsePeak = 0
         onset = 0
         responseDelay = 0
+        phaseDelay = 0
     }
 
     init(info: TraceInfo, recording: [Double]) {
@@ -153,6 +154,7 @@ struct Trace: Identifiable {
         impulsePeak = 0
         onset = 0
         responseDelay = 0
+        phaseDelay = 0
     }
 
     /// True for anything with a frequency response to draw (not a plain recording).
@@ -172,7 +174,7 @@ struct Trace: Identifiable {
         return zip(resampled.frequencies, resampled.magnitude).map { ChartPoint(x: $0, y: $1) }
     }
 
-    /// Phase for the chart in degrees, with the delay to the direct sound removed, at log-spaced points.
+    /// Phase for the chart in degrees, with the delay to the impulse's peak removed, at log-spaced points.
     /// Nil when the trace has no phase (an imported response without a phase column).
     func displayPhase() -> [ChartPoint]? {
         guard let phase = rawResponse.phase else { return nil }
@@ -184,8 +186,7 @@ struct Trace: Identifiable {
         var i = 0
         while freq <= high {
             while i + 1 < f.count && abs(f[i + 1] - freq) <= abs(f[i] - freq) { i += 1 }
-            var p = (phase[i] + 360 * f[i] * responseDelay).truncatingRemainder(dividingBy: 360)
-            if p > 180 { p -= 360 } else if p <= -180 { p += 360 }
+            let p = ResponseWindow.phase(phase[i], frequency: f[i], removingDelay: phaseDelay)
             points.append(ChartPoint(x: f[i], y: p))
             freq *= pow(2, 1.0 / 48)
         }

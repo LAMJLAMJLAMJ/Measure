@@ -606,7 +606,7 @@ struct WindowPreview: View {
         let onset = trace.onset, fs = trace.info.sampleRate, w = window
         let smoothing = model.smoothing, calibration = model.calibration(for: trace)
         let points = await Task.detached(priority: .userInitiated) {
-            Trace.displayPoints(Trace.windowedResponse(ir, onset: onset, sampleRate: fs, window: w).0,
+            Trace.displayPoints(w.response(of: ir, onset: onset, sampleRate: fs).response,
                                 smoothing: smoothing, calibration: calibration)
         }.value
         guard !Task.isCancelled else { return }

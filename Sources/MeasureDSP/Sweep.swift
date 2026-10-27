@@ -158,4 +158,32 @@ public enum Peak {
         let denom = a - 2 * b + c
         return denom == 0 ? Double(best) : Double(best) + 0.5 * (a - c) / denom
     }
+
+    /// Index of the largest |x| to about a hundredth of a sample, for band-limited signals such as
+    /// impulse responses. The 64 samples around the peak are upsampled 32 times (zero-padding their
+    /// spectrum) before the parabola is fitted. A parabola through the raw samples of a band-limited
+    /// pulse is off by up to 0.15 samples, which is 15 degrees of phase at 15 kHz at 48 kHz.
+    public static func interpolatedIndex(of x: [Double]) -> Double {
+        guard !x.isEmpty else { return 0 }
+        let coarse = Int(index(of: x).rounded())
+        let n = 64, factor = 32
+        let first = coarse - n / 2
+        let segment = (0..<n).map { i -> Double in
+            let j = first + i
+            return j >= 0 && j < x.count ? x[j] : 0
+        }
+        let spectrum = FFT(size: n).forward(segment)
+        let fine = FFT(size: n * factor)
+        var padded = SplitComplex(count: n * factor / 2 + 1)
+        for k in 0..<(n / 2) {
+            padded.real[k] = spectrum.real[k] * Double(factor)
+            padded.imag[k] = spectrum.imag[k] * Double(factor)
+        }
+        // The segment's Nyquist bin is shared between the positive and negative frequencies.
+        padded.real[n / 2] = spectrum.real[n / 2] * Double(factor) / 2
+        let upsampled = fine.inverse(padded)
+        // Only the middle of the segment: its ends are spoilt by the circular wrap.
+        let middle = Array(upsampled[(n / 4 * factor)..<(3 * n / 4 * factor)])
+        return Double(first) + (Double(n / 4 * factor) + index(of: middle)) / Double(factor)
+    }
 }
