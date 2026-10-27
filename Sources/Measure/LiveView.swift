@@ -45,11 +45,13 @@ final class LiveAnalyzer {
     var settings: LiveSettings {
         didSet {
             save()
-            if settings.level != oldValue.level { stream.setLevel(settings.level) }
+            if settings.level != oldValue.level && !isPaused { stream.setLevel(settings.level) }
             if settings.fftSize != oldValue.fftSize || settings.delays != oldValue.delays { reset() }
         }
     }
     var isRunning = false
+    /// Paused: the noise is muted and no blocks are added, so the average is held for Resume to carry on.
+    var isPaused = false
     var curves: [Curve] = []
     /// Peak of the reference and of each mic over the last update, dB re full scale.
     var peaks: [Double] = []
@@ -126,12 +128,30 @@ final class LiveAnalyzer {
         loop = nil
         stream.stop()
         isRunning = false
+        isPaused = false
         // The live curve goes with the measurement: what stays on screen are the saved traces.
         curves = []
         peaks = []
         spectra = []
         blocks = 0
         model?.status = nil
+    }
+
+    /// Holds the average and mutes the noise. The stream keeps running, so the latency, and with it
+    /// the found delays, stays the same.
+    func pause() {
+        guard isRunning, !isPaused else { return }
+        isPaused = true
+        if settings.generator { stream.setLevel(-400) }
+    }
+
+    /// Unmutes the noise and carries on averaging. The first new block starts a quarter of a second
+    /// after the noise is back, so no part of it was taken while muted.
+    func resume() {
+        guard isPaused else { return }
+        isPaused = false
+        if settings.generator { stream.setLevel(settings.level) }
+        lastBlockEnd = stream.capturedFrames + settings.fftSize / 2 + Int(sampleRate / 4)
     }
 
     /// Clears the averages.
@@ -144,7 +164,7 @@ final class LiveAnalyzer {
 
     /// Adds the newest block of each mic, half overlapping the last, and redraws.
     private func update() async {
-        guard isRunning else { return }
+        guard isRunning, !isPaused else { return }
         let n = settings.fftSize
         let written = stream.capturedFrames
         guard written - lastBlockEnd >= n / 2 else { return }
@@ -294,10 +314,18 @@ struct LiveView: View {
                 magnitudeChart(live)
                 if !live.curves.isEmpty { coherenceChart(live).frame(height: 70) }
                 phaseChart(live).frame(height: 150)
-                Text((live.isRunning ? "Thick lines: live. Thin lines: ticked traces, in their colors." : "Stopped. Press Start to measure live; ticked traces are shown in their colors.") + eqNote(live))
+                Text(chartNote(live))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The note under the charts: what the lines are, and whether Live is paused.
+    private func chartNote(_ live: LiveAnalyzer) -> String {
+        var note = live.isRunning ? "Thick lines: live. Thin lines: ticked traces, in their colors."
+                                  : "Stopped. Press Start to measure live; ticked traces are shown in their colors."
+        if live.isPaused { note = "Paused: the average is held. Resume carries on; Stop clears it. " + note }
+        return note + eqNote(live)
     }
 
     private func controls(_ live: LiveAnalyzer) -> some View {
@@ -311,6 +339,11 @@ struct LiveView: View {
                 Button(live.isRunning ? "Stop" : "Start") {
                     if live.isRunning { live.stop(model) } else { Task { await live.start(model) } }
                 }
+                Button(live.isPaused ? "Resume" : "Pause") {
+                    if live.isPaused { live.resume() } else { live.pause() }
+                }
+                .disabled(!live.isRunning)
+                .help("Pause holds the average and mutes the noise; Resume carries on averaging. Stop clears it.")
                 Toggle("Pink noise", isOn: $live.settings.generator)
                     .disabled(live.isRunning)
                     .help("Play pink noise on the measurement output. Off: measure with programme or any signal fed to the reference input.")
@@ -353,7 +386,7 @@ struct LiveView: View {
                 }
                 .frame(width: 140)
                 Button("Find Delay") { live.findDelays() }
-                    .disabled(live.blocks == 0)
+                    .disabled(live.blocks == 0 || live.isPaused)
                     .help("Line the reference up with each mic, from the peak of its impulse response")
                 Button("Reset") { live.clearDelays(); live.reset() }
                 }
@@ -382,7 +415,7 @@ struct LiveView: View {
         for (i, p) in live.peaks.dropFirst().enumerated() {
             parts.append(String(format: "Mic %d %.0f dBFS, delay %.2f ms", i + 1, p, Double(live.settings.delay(i)) / fs * 1000))
         }
-        if live.isRunning { parts.append("\(live.blocks) blocks") }
+        if live.isRunning { parts.append("\(live.blocks) blocks" + (live.isPaused ? ", paused" : "")) }
         return parts.joined(separator: " · ")
     }
 

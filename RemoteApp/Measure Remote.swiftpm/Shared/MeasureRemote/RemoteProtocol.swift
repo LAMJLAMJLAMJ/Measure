@@ -9,7 +9,7 @@ public enum RemoteMessage: Codable, Equatable, Sendable {
 }
 
 /// Bumped when a change to the messages would break an older remote.
-public let remoteProtocolVersion = 4
+public let remoteProtocolVersion = 5
 
 /// The Bonjour service type the Mac advertises. It must also be listed under NSBonjourServices
 /// in both apps' Info.plist.
@@ -45,6 +45,9 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     case setMicActive(Int, Bool)
     /// Adds each mic's live response to the measurements, as the Mac's Capture button does.
     case captureLive
+    /// Holds the live average and mutes the noise; `resumeLive` carries on averaging.
+    case pauseLive
+    case resumeLive
     /// Delays the reference so it lines up with each mic, as the Mac's Find Delay button does.
     case findLiveDelay
     /// Clears the live delays and restarts the averaging, as the Mac's Reset button does.
@@ -214,6 +217,7 @@ public struct RemoteState: Codable, Equatable, Sendable {
     public var liveCoherence: [RemoteCurve] = []
     /// True once the analyser has a response to capture.
     public var liveCanCapture = false
+    public var livePaused = false
     /// True once the analyser has averaged enough to find the delay.
     public var liveCanFindDelay = false
     /// Delay applied to the reference for each mic, ms, in the same order as `liveCurves`.

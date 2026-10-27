@@ -17,6 +17,7 @@ final class RemoteProtocolTests: XCTestCase {
         state.mics = [RemoteMic(name: "Mic 1", active: true), RemoteMic(name: "Input 2", active: false)]
         state.averageCurve = RemoteCurve(name: "Average", color: "#000000", frequencies: [100], levels: [70])
         state.liveDelays = [2.35, 4.1]
+        state.livePaused = true
         return state
     }
 
@@ -33,6 +34,8 @@ final class RemoteProtocolTests: XCTestCase {
             .command(.setSweepLength(5)),
             .command(.findLiveDelay),
             .command(.resetLiveDelay),
+            .command(.pauseLive),
+            .command(.resumeLive),
             .state(sampleState()),
         ]
         var stream = Data()
