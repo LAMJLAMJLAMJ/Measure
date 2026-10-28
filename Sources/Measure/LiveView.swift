@@ -330,6 +330,8 @@ struct LiveView: View {
     @State private var americanPicture = AmericanMode.picture()
     /// Delays found by Find Delay, waiting to be accepted, in samples per mic.
     @State private var proposedDelays: [Int]?
+    /// The delays Find Delay calculated, shown beside the editable ones.
+    @State private var foundDelays: [Int] = []
     /// Whether this is the Frequency view, which has the Virtual EQ panel.
     var showsEQ = false
 
@@ -405,7 +407,10 @@ struct LiveView: View {
                 }
                 .frame(width: 140)
                 .onChange(of: range) { zoom.y = nil }
-                Button("Find Delay") { proposedDelays = live.foundDelays() }
+                Button("Find Delay") {
+                    foundDelays = live.foundDelays()
+                    proposedDelays = foundDelays
+                }
                     .disabled(live.blocks == 0)
                     .help("Find the delay that lines the reference up with each mic, from the peak of its impulse response, and check it before using it")
                     .sheet(isPresented: Binding(get: { proposedDelays != nil }, set: { if !$0 { proposedDelays = nil } })) {
@@ -442,34 +447,35 @@ struct LiveView: View {
             }
     }
 
-    /// The found delays in milliseconds and metres, to check against the room before using them.
+    /// The found delays in milliseconds and metres, to check against the room before using them. Each
+    /// can be typed over, in either unit, to use another delay.
     private func delaySheet(_ live: LiveAnalyzer, _ delays: [Int]) -> some View {
         let fs = model.settings.sampleRate
+        let edited = delays != foundDelays
         return VStack(alignment: .leading, spacing: 12) {
             Text("Delay found").font(.headline)
-            Grid(alignment: .trailing, horizontalSpacing: 16, verticalSpacing: 6) {
+            Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 6) {
                 GridRow {
                     Text("")
-                    Text("Delay").foregroundStyle(.secondary)
-                    Text("Distance").foregroundStyle(.secondary)
+                    Text("Found").foregroundStyle(.secondary)
+                    Text("Use (ms)").foregroundStyle(.secondary)
+                    Text("Distance (m)").foregroundStyle(.secondary)
                     Text("Now").foregroundStyle(.secondary)
                 }
                 ForEach(delays.indices, id: \.self) { i in
-                    GridRow {
-                        Text("Mic \(i + 1)").gridColumnAlignment(.leading)
-                        Text(String(format: "%.2f ms", Double(delays[i]) / fs * 1000))
-                        Text(String(format: "%.2f m", Double(delays[i]) / fs * TimeAlignment.speedOfSound))
-                        Text(String(format: "%.2f ms", Double(live.settings.delay(i)) / fs * 1000)).foregroundStyle(.secondary)
-                    }
+                    delayRow(live, i, fs: fs)
                 }
             }
             .monospacedDigit()
             Text(delayNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
+                Button("Back to Found") { proposedDelays = foundDelays }
+                    .disabled(!edited)
+                    .help("Puts the calculated delays back")
                 Spacer()
                 Button("Cancel", role: .cancel) { proposedDelays = nil }
                     .keyboardShortcut(.cancelAction)
-                Button("Use This Delay") {
+                Button(edited ? "Use These Delays" : "Use This Delay") {
                     live.settings.delays = delays
                     proposedDelays = nil
                 }
@@ -477,7 +483,34 @@ struct LiveView: View {
             }
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(width: 500)
+    }
+
+    /// One mic in the delay sheet: the found delay, and the delay to use as milliseconds or metres.
+    private func delayRow(_ live: LiveAnalyzer, _ i: Int, fs: Double) -> some View {
+        let found = i < foundDelays.count ? foundDelays[i] : 0
+        let samples = Binding<Int>(
+            get: { proposedDelays.flatMap { i < $0.count ? $0[i] : nil } ?? 0 },
+            set: { v in if proposedDelays != nil, i < proposedDelays!.count { proposedDelays![i] = max(0, v) } })
+        let ms = Binding<Double>(
+            get: { Double(samples.wrappedValue) / fs * 1000 },
+            set: { samples.wrappedValue = Int(($0 / 1000 * fs).rounded()) })
+        let metres = Binding<Double>(
+            get: { Double(samples.wrappedValue) / fs * TimeAlignment.speedOfSound },
+            set: { samples.wrappedValue = Int(($0 / TimeAlignment.speedOfSound * fs).rounded()) })
+        return GridRow {
+            Text("Mic \(i + 1)").gridColumnAlignment(.leading)
+            Text(String(format: "%.2f ms", Double(found) / fs * 1000)).foregroundStyle(.secondary)
+            TextField("ms", value: ms, format: .number.precision(.fractionLength(2)))
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .frame(width: 80)
+            TextField("m", value: metres, format: .number.precision(.fractionLength(2)))
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .frame(width: 80)
+            Text(String(format: "%.2f ms", Double(live.settings.delay(i)) / fs * 1000)).foregroundStyle(.secondary)
+        }
     }
 
     /// What the distance includes, so it can be checked against the room.
