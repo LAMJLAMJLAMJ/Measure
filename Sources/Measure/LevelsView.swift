@@ -41,6 +41,16 @@ struct LevelOffsetField: View {
 
 // MARK: - Statistical levels
 
+/// The octave bands of the Levels tab's table.
+private let octaveBands: [Double] = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000]
+
+/// A recording's unweighted Leq per octave band, in the order of `octaveBands`; nil above Nyquist.
+private func octaveLeq(_ trace: Trace, offset: Double) -> [Double?] {
+    let levels = SoundLevel.octaveLevels(trace.recording ?? [], sampleRate: trace.info.sampleRate,
+                                         bands: octaveBands, offset: offset)
+    return octaveBands.map { b in levels.first { $0.band == b }?.level }
+}
+
 /// Leq, Lmax, Lmin and the exceeded levels Ln of the shown recordings, with the level over time.
 struct LevelsView: View {
     private struct Key: Hashable {
@@ -54,6 +64,8 @@ struct LevelsView: View {
         let trace: Trace
         let result: SoundLevel.Result
         let calibrated: Bool
+        /// Unweighted Leq per octave band, in the order of `octaveBands`; nil where the band is above Nyquist.
+        let octaves: [Double?]
         var id: UUID { trace.id }
     }
 
@@ -114,6 +126,7 @@ struct LevelsView: View {
                     }
                     historyChart(row)
                 }
+                octaveTable
             }
         }
         .task(id: key) { await compute(traces, key: key) }
@@ -161,12 +174,73 @@ struct LevelsView: View {
                 Row(trace: trace,
                     result: SoundLevel.analyze(trace.recording ?? [], sampleRate: trace.info.sampleRate,
                                                weighting: w, timeWeighting: t, offset: offset ?? 0),
-                    calibrated: offset != nil)
+                    calibrated: offset != nil,
+                    octaves: octaveLeq(trace, offset: offset ?? 0))
             }
         }.value
         guard !Task.isCancelled else { return }
         rows = made
         computedFor = key
+    }
+
+    /// The power (energy) average of the rows' octave-band Leq; nil in a band any row lacks.
+    private var averageOctaves: [Double?] {
+        octaveBands.indices.map { i in
+            let values = rows.compactMap { $0.octaves[i] }
+            guard !rows.isEmpty, values.count == rows.count else { return nil }
+            return 10 * log10(values.map { pow(10, $0 / 10) }.reduce(0, +) / Double(values.count))
+        }
+    }
+
+    /// The average's 125 Hz to 8 kHz levels, which STI takes, or nil when a band is missing.
+    private var averageSTILevels: [Double]? {
+        let average = averageOctaves
+        let levels = SpeechTransmission.bands.compactMap { b in octaveBands.firstIndex(of: b).flatMap { average[$0] } }
+        return levels.count == SpeechTransmission.bands.count ? levels : nil
+    }
+
+    /// Each recording's unweighted octave-band Leq and their power average, which can be copied to STI.
+    private var octaveTable: some View {
+        let calibrated = rows.allSatisfy(\.calibrated)
+        let stiLevels = averageSTILevels
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Octave-band Leq (unweighted)").font(.headline)
+                Spacer()
+                Button("Use Average as STI Speech") { if let stiLevels { model.useSpeechForSTI(stiLevels) } }
+                    .disabled(stiLevels == nil || !calibrated)
+                    .help("Copies the average's 125 Hz to 8 kHz levels to the STI speech levels, in System tuning and Acoustic analysis")
+                Button("Use Average as STI Noise") { if let stiLevels { model.useNoiseForSTI(stiLevels) } }
+                    .disabled(stiLevels == nil || !calibrated)
+                    .help("Copies the average's 125 Hz to 8 kHz levels to the STI background noise, in System tuning and Acoustic analysis")
+            }
+            Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 4) {
+                GridRow {
+                    Text("Hz").foregroundStyle(.secondary).gridColumnAlignment(.leading)
+                    ForEach(octaveBands, id: \.self) { b in
+                        Text(b >= 1000 ? "\(Int(b / 1000))k" : (b == 31.5 ? "31.5" : "\(Int(b))")).foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(rows) { row in
+                    GridRow {
+                        Text(row.trace.info.name).lineLimit(1).frame(maxWidth: 220, alignment: .leading)
+                        ForEach(row.octaves.indices, id: \.self) { i in Text(level(row.octaves[i])) }
+                    }
+                }
+                if rows.count > 1 {
+                    Divider()
+                    GridRow {
+                        Text("Average (power)").fontWeight(.semibold)
+                        ForEach(averageOctaves.indices, id: \.self) { i in Text(level(averageOctaves[i])).fontWeight(.semibold) }
+                    }
+                }
+            }
+            .font(.body.monospacedDigit())
+            Text(calibrated
+                 ? "dB SPL. The average is the power average of the shown recordings' Leq in each band."
+                 : "Some recordings are re full scale (mic not calibrated), so the average cannot be used for STI. Set an offset or calibrate the mic.")
+                .font(.caption).foregroundStyle(calibrated ? Color.secondary : Color.orange)
+        }
     }
 
     private func copyCSV() {

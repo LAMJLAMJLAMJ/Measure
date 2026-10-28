@@ -266,6 +266,9 @@ struct StatusBar: View {
 
 struct TraceList: View {
     @Environment(AppModel.self) private var model
+    /// Summing folders average frequency responses, so they are offered in System tuning only.
+    @AppStorage("mode") private var mode: AppMode = .tuning
+    @AppStorage("tuningSource") private var source: TuningSource = .sweep
     @State private var confirmingClear = false
     @State private var editing: TraceInfo?
     @State private var renaming: UUID?
@@ -279,14 +282,19 @@ struct TraceList: View {
     var body: some View {
         @Bindable var model = model
         let folderIDs = Set(model.folders.map(\.id))
-        let topLevel = model.traces.reversed().filter { trace in
+        // A summing folder's average is drawn by its folder's row, not as a row of its own.
+        let listed = model.traces.reversed().filter { $0.info.sumFolder == nil }
+        let topLevel = listed.filter { trace in
             guard let id = trace.info.folder else { return true }
             return !folderIDs.contains(id)
         }
         List(selection: $model.selection) {
+            if mode == .tuning && source == .crossSpectrum {
+                LiveMicsSection()
+            }
             ForEach(model.folders) { folder in
                 DisclosureGroup(isExpanded: expanded(folder.id)) {
-                    ForEach(model.traces.reversed().filter { trace in trace.info.folder == folder.id }) { trace in
+                    ForEach(listed.filter { trace in trace.info.folder == folder.id }) { trace in
                         row(trace)
                     }
                 } label: {
@@ -367,6 +375,10 @@ struct TraceList: View {
             Button("Show Only This") { model.visible = [trace.id] }
             Button("Export Impulse Response…") { model.exportRequest = ExportRequest(traces: [trace.id]) }
                 .disabled(trace.impulseResponse == nil)
+            if let f = folderID(trace), model.folders.first(where: { $0.id == f })?.isSumming == true {
+                Button("Take Out of Summing Folder") { model.move([trace.id], to: nil) }
+                    .help("Moves it to the top level and ticks it; the folder's average is remade without it")
+            }
             Menu("Move to Folder") {
                 Button("None (Top Level)") { model.move([trace.id], to: nil) }
                     .disabled(folderID(trace) == nil)
@@ -381,6 +393,12 @@ struct TraceList: View {
                     model.move([trace.id], to: id)
                     startRenameFolder(id)
                 }
+                Button("New Summing Folder…") {
+                    let id = model.addSummingFolder()
+                    model.move([trace.id], to: id)
+                    startRenameFolder(id)
+                }
+                .disabled(mode != .tuning)
             }
             Menu("Colour") {
                 ForEach(TracePalette.names.indices, id: \.self) { i in
@@ -413,7 +431,16 @@ struct TraceList: View {
         return true
     }
 
+    @ViewBuilder
     private func folderLabel(_ folder: TraceFolder) -> some View {
+        if folder.isSumming {
+            summingFolderLabel(folder)
+        } else {
+            plainFolderLabel(folder)
+        }
+    }
+
+    private func plainFolderLabel(_ folder: TraceFolder) -> some View {
         let members = model.traces.filter { $0.info.folder == folder.id }.map(\.id)
         let shown = Binding(
             get: { !members.isEmpty && members.allSatisfy { model.visible.contains($0) } },
@@ -425,17 +452,7 @@ struct TraceList: View {
                 .disabled(members.isEmpty)
                 .help("Show or hide every measurement in this folder")
             Image(systemName: "folder").foregroundStyle(.secondary)
-            if renamingFolder == folder.id {
-                TextField("Folder name", text: $folderName)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($folderFocused)
-                    .onSubmit { commitFolderRename(folder.id) }
-                    .onExitCommand { renamingFolder = nil }
-                    .onChange(of: folderFocused) { _, focused in if !focused { commitFolderRename(folder.id) } }
-            } else {
-                Text(folder.name).fontWeight(.medium).lineLimit(1)
-                    .onTapGesture(count: 2) { startRenameFolder(folder.id) }
-            }
+            folderTitle(folder)
             Spacer(minLength: 0)
             Text("\(members.count)").font(.caption).foregroundStyle(.secondary)
         }
@@ -451,41 +468,141 @@ struct TraceList: View {
         }
     }
 
+    /// A summing folder: its tick shows its measurements' average, drawn in the folder's colour.
+    private func summingFolderLabel(_ folder: TraceFolder) -> some View {
+        let members = model.traces.filter { $0.info.folder == folder.id && $0.info.sumFolder == nil }
+        let average = model.average(of: folder)
+        let method = folder.summing ?? .power
+        let selected = average != nil && model.selection == average?.id
+        let shown = Binding(
+            get: { average.map { model.visible.contains($0.id) } ?? false },
+            set: { model.setAverageShown($0, for: folder.id) })
+        return HStack(spacing: 8) {
+            Toggle("", isOn: shown)
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .disabled(average == nil)
+                .help("Show or hide the average of this folder's measurements")
+            Circle().fill(TracePalette.color(folder.averageColor ?? 0)).frame(width: 12, height: 12)
+                .overlay(Circle().strokeBorder(.secondary.opacity(0.5), lineWidth: 0.5))
+            Image(systemName: "sum").foregroundStyle(.secondary)
+            folderTitle(folder)
+            Spacer(minLength: 0)
+            Text("\(method == .power ? "RMS" : "dB") avg of \(members.filter(\.hasResponse).count)")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .padding(.horizontal, 4)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Color.accentColor.opacity(selected ? 0.25 : 0)))
+        .contentShape(Rectangle())
+        // Clicking the folder selects its average, so the Virtual EQ and the other panels work on it.
+        .simultaneousGesture(TapGesture().onEnded { if let average { model.selection = average.id } })
+        .help(average == nil
+              ? "Drop measurements here: they are hidden and their average is shown"
+              : "\(method.rawValue) average of " + members.map(\.info.name).joined(separator: ", "))
+        .dropDestination(for: String.self) { items, _ in drop(items, into: folder.id) }
+        .contextMenu {
+            Button("Rename") { startRenameFolder(folder.id) }
+            Menu("Average") {
+                ForEach(FrequencyResponse.AverageMethod.allCases) { m in
+                    Toggle(m.rawValue, isOn: Binding(get: { method == m }, set: { if $0 { model.setSumming(m, for: folder.id) } }))
+                }
+            }
+            Menu("Colour") {
+                ForEach(TracePalette.names.indices, id: \.self) { i in
+                    Button(TracePalette.names[i]) { model.setAverageColor(i, for: folder.id) }
+                }
+            }
+            Button("Show Only the Average") { if let average { model.visible = [average.id] } }
+                .disabled(average == nil)
+            Button("Select the Average") { if let average { model.selection = average.id } }
+                .disabled(average == nil)
+                .help("Selects the average, for the Virtual EQ and the other panels")
+            Divider()
+            Button("Delete Folder") { model.deleteFolder(folder.id) }
+                .help("Removes the folder and its average; its measurements stay, at the top level")
+        }
+    }
+
+    private func folderTitle(_ folder: TraceFolder) -> some View {
+        Group {
+            if renamingFolder == folder.id {
+                TextField("Folder name", text: $folderName)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($folderFocused)
+                    .onSubmit { commitFolderRename(folder.id) }
+                    .onExitCommand { renamingFolder = nil }
+                    .onChange(of: folderFocused) { _, focused in if !focused { commitFolderRename(folder.id) } }
+            } else {
+                Text(folder.name).fontWeight(.medium).lineLimit(1)
+                    .onTapGesture(count: 2) { startRenameFolder(folder.id) }
+            }
+        }
+    }
+
     /// New Folder, and a place to drop measurements to take them out of their folders.
     private var bottomBar: some View {
+        // With labels when the sidebar is wide enough, icons only when it is not.
+        ViewThatFits(in: .horizontal) {
+            bottomButtons(labels: true)
+            bottomButtons(labels: false)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        .contentShape(Rectangle())
+        .dropDestination(for: String.self) { items, _ in drop(items, into: nil) }
+        .confirmationDialog("Clear all \(model.traces.count) measurements?", isPresented: $confirmingClear) {
+            Button("Clear All", role: .destructive) { model.clearAll() }
+        } message: {
+            Text(model.isWorkingFolder
+                 ? "Every measurement and folder is removed and deleted. Save a set first (⇧⌘S) to keep them."
+                 : "The list is emptied and a new, empty working list starts. \(model.projectFolder.lastPathComponent) stays on disk as saved.")
+        }
+    }
+
+    private func bottomButtons(labels: Bool) -> some View {
         HStack(spacing: 8) {
             Button {
                 startRenameFolder(model.addFolder())
             } label: {
-                Label("New Folder", systemImage: "folder.badge.plus")
+                bottomLabel("New Folder", systemImage: "folder.badge.plus", labels: labels)
             }
             .buttonStyle(.borderless)
             .help("Add a folder to the list, then drag measurements onto it")
             Button {
+                startRenameFolder(model.addSummingFolder())
+            } label: {
+                bottomLabel("Summing Folder", systemImage: "sum", labels: labels)
+            }
+            .buttonStyle(.borderless)
+            .disabled(mode != .tuning)
+            .help(mode == .tuning
+                  ? "Add a summing folder: measurements dragged onto it are hidden and their average is shown"
+                  : "Summing folders average frequency responses: switch to System tuning to add one")
+            Button {
                 confirmingClear = true
             } label: {
-                Label("Clear All", systemImage: "trash")
+                bottomLabel("Clear All", systemImage: "trash", labels: labels)
             }
             .buttonStyle(.borderless)
             .disabled(model.traces.isEmpty)
             .help("Empty the measurement list. Unsaved measurements are deleted; saved sets stay on disk.")
-            .confirmationDialog("Clear all \(model.traces.count) measurements?", isPresented: $confirmingClear) {
-                Button("Clear All", role: .destructive) { model.clearAll() }
-            } message: {
-                Text(model.isWorkingFolder
-                     ? "Every measurement and folder is removed and deleted. Save a set first (⇧⌘S) to keep them."
-                     : "The list is emptied and a new, empty working list starts. \(model.projectFolder.lastPathComponent) stays on disk as saved.")
-            }
-            Spacer(minLength: 0)
-            if !model.folders.isEmpty {
+            if labels && !model.folders.isEmpty {
+                Spacer(minLength: 8)
                 Text("Drop here for the top level").font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.bar)
-        .contentShape(Rectangle())
-        .dropDestination(for: String.self) { items, _ in drop(items, into: nil) }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    @ViewBuilder
+    private func bottomLabel(_ title: String, systemImage: String, labels: Bool) -> some View {
+        if labels {
+            Label(title, systemImage: systemImage)
+        } else {
+            Label(title, systemImage: systemImage).labelStyle(.iconOnly)
+        }
     }
 
     private func startRenameFolder(_ id: UUID) {
@@ -630,6 +747,86 @@ struct PlainRecordingSheet: View {
         if uncalibrated.isEmpty { return "Records every mic input, in dB SPL from each mic's calibration." }
         let inputs = uncalibrated.map { "\($0.channel)" }.joined(separator: ", ")
         return "Input \(inputs) has no SPL calibration, so its levels will be re full scale. Calibrate the mic in Setup for dB SPL. Up to an hour."
+    }
+}
+/// The live mics at the top of the list in Live: which are drawn, which go into the live average (both
+/// can be changed while measuring), and the average itself, which Save keeps as a summing folder of the
+/// mics' measurements.
+struct LiveMicsSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let live = model.live
+        Section("Live") {
+            if live.curves.isEmpty {
+                Text("Press Start to measure live; each mic appears here.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(live.curves) { c in micRow(c.mic) }
+                averageRow(live)
+            }
+        }
+    }
+
+    private func micRow(_ mic: Int) -> some View {
+        let live = model.live
+        let slot = mic < model.settings.mics.count ? model.settings.mics[mic] : nil
+        return HStack(spacing: 8) {
+            Toggle("", isOn: Binding(get: { live.settings.isShown(mic) },
+                                     set: { on in live.settings.hiddenMics = toggled(live.settings.hiddenMics, mic, include: !on) }))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .help("Show this mic's live curve")
+            Circle().fill(LiveView.color(mic)).frame(width: 12, height: 12)
+                .overlay(Circle().strokeBorder(.secondary.opacity(0.5), lineWidth: 0.5))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Mic \(mic + 1)").lineLimit(1)
+                Text(slot.map { "Input \($0.channel)" + ($0.micName.map { " · \($0)" } ?? "") } ?? "")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Toggle("Avg", isOn: Binding(get: { live.settings.isAveraged(mic) },
+                                        set: { on in live.settings.averageExcluded = toggled(live.settings.averageExcluded, mic, include: !on) }))
+                .toggleStyle(.checkbox)
+                .font(.caption)
+                .help("Include this mic in the live average")
+        }
+    }
+
+    private func averageRow(_ live: LiveAnalyzer) -> some View {
+        let count = live.curves.filter { live.settings.isAveraged($0.mic) }.count
+        let method = live.settings.averageMethod ?? .power
+        return HStack(spacing: 8) {
+            Toggle("", isOn: Binding(get: { live.settings.showAverage != false },
+                                     set: { live.settings.showAverage = $0 ? nil : false }))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .disabled(count < 2)
+                .help("Show the average of the mics ticked Avg")
+            Circle().fill(LiveView.averageColor).frame(width: 12, height: 12)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Average of \(count)").lineLimit(1)
+                Menu(method == .power ? "Power (RMS)" : "dB") {
+                    ForEach(FrequencyResponse.AverageMethod.allCases) { m in
+                        Button(m.rawValue) { live.settings.averageMethod = m == .power ? nil : m }
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .font(.caption)
+            }
+            Spacer(minLength: 0)
+            Button("Save") { live.captureAll(model) }
+                .disabled(count < 2 || live.blocks == 0)
+                .help("Same as Capture: each mic becomes a measurement, and the mics in the average go into a new summing folder that shows their average")
+        }
+    }
+
+    /// The set with `mic` added or taken out; nil when it ends up empty.
+    private func toggled(_ set: Set<Int>?, _ mic: Int, include: Bool) -> Set<Int>? {
+        var s = set ?? []
+        if include { s.insert(mic) } else { s.remove(mic) }
+        return s.isEmpty ? nil : s
     }
 }
 #endif

@@ -1,10 +1,12 @@
 #if os(macOS)
+import AppKit
 import Charts
 import Foundation
 import MeasureAudio
 import MeasureDSP
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Live analyser settings, remembered between launches.
 struct LiveSettings: Codable, Equatable {
@@ -22,6 +24,16 @@ struct LiveSettings: Codable, Equatable {
     var delays: [Int] = []
     /// Virtual EQ on the live curves: drawn as a prediction, never sent anywhere.
     var eq: [EQFilter]?
+    /// Mics not drawn, by index (from 0). Optional, like the fields below, so older settings still load.
+    var hiddenMics: Set<Int>?
+    /// Mics left out of the live average, by index.
+    var averageExcluded: Set<Int>?
+    /// False to hide the live average; nil (the default) shows it.
+    var showAverage: Bool?
+    var averageMethod: FrequencyResponse.AverageMethod?
+
+    func isShown(_ mic: Int) -> Bool { !(hiddenMics ?? []).contains(mic) }
+    func isAveraged(_ mic: Int) -> Bool { !(averageExcluded ?? []).contains(mic) }
 
     var activeEQ: [EQFilter] { (eq ?? []).filter(\.enabled) }
 
@@ -202,12 +214,15 @@ final class LiveAnalyzer {
         return out
     }
 
-    /// Sets each mic's delay so its impulse response peak lines up with the reference.
-    func findDelays() {
+    /// Each mic's delay, in samples, that would line its impulse response peak up with the reference.
+    func foundDelays() -> [Int] {
         var delays = (0..<spectra.count).map { settings.delay($0) }
         for i in spectra.indices { if let d = spectra[i].delay { delays[i] += d } }
-        settings.delays = delays
+        return delays
     }
+
+    /// Sets each mic's delay so its impulse response peak lines up with the reference.
+    func findDelays() { settings.delays = foundDelays() }
 
     func clearDelays() { settings.delays = [] }
 
@@ -220,14 +235,16 @@ final class LiveAnalyzer {
     }
 
     /// Adds the current transfer function of each mic to the library as an impulse response.
-    func capture(_ model: AppModel) {
-        guard !spectra.isEmpty, blocks > 0 else { return }
+    @discardableResult
+    func capture(_ model: AppModel, mics: Set<Int>? = nil) -> [UUID] {
+        guard !spectra.isEmpty, blocks > 0 else { return [] }
+        var ids: [UUID] = []
         let s = model.settings
         let date = Date()
         let fs = sampleRate
         // Rotate so the direct sound sits 10 ms in, leaving room for the window's left side.
         let pre = Int(0.01 * fs)
-        for (i, cs) in spectra.enumerated() {
+        for (i, cs) in spectra.enumerated() where mics?.contains(i) ?? true {
             let ir = cs.impulseResponse
             let rotated = ir.indices.map { ir[($0 - pre + ir.count) % ir.count] }
             let slot = i < s.mics.count ? s.mics[i] : MicSlot(channel: i + 1)
@@ -241,9 +258,28 @@ final class LiveAnalyzer {
             var withEQ = info
             withEQ.eq = settings.eq
             model.add(Trace(info: withEQ, impulseResponse: rotated))
-            if i == 0 { model.selection = info.id }
+            if ids.isEmpty { model.selection = info.id }
+            ids.append(info.id)
         }
-        model.status = "Captured the live response of \(spectra.count) mic\(spectra.count == 1 ? "" : "s")."
+        model.status = "Captured the live response of \(ids.count) mic\(ids.count == 1 ? "" : "s")."
+        return ids
+    }
+
+    /// Captures every mic, as Capture and Save do. With two or more mics in the live average, those go
+    /// into a new summing folder, which shows their average (with the same method) and keeps each
+    /// mic's measurement; mics left out of the average stay beside it.
+    func captureAll(_ model: AppModel) {
+        let ids = capture(model)
+        let averaged = spectra.indices.filter { settings.isAveraged($0) && $0 < ids.count }
+        guard averaged.count >= 2 else { return }
+        let position = model.settings.position
+        let time = Date().formatted(date: .omitted, time: .shortened)
+        let name = (position.isEmpty ? "Live average" : "\(position) · Live average") + " \(time)"
+        let folder = model.addSummingFolder(named: name, method: settings.averageMethod ?? .power)
+        model.move(Set(averaged.map { ids[$0] }), to: folder)
+        let others = ids.count - averaged.count
+        model.status = "Captured \(ids.count) mics, with the average of \(averaged.count) in \(name)."
+            + (others > 0 ? " \(others) mic\(others == 1 ? " is" : "s are") outside the average." : "")
     }
 }
 
@@ -258,11 +294,22 @@ extension AppModel {
         }
     }
 
-    /// The power average of the calibrated live curves, which the target is aligned to and Auto EQ fits.
+    /// The average of the calibrated live curves of the mics in the average (all of them when none is),
+    /// with the chosen method: drawn when shown, and what the target is aligned to and Auto EQ fits.
     /// Nil while the live mode is not running.
     var liveAverageResponse: FrequencyResponse? {
-        let responses = calibratedLiveCurves.map { FrequencyResponse(frequencies: $0.1.map(\.x), magnitude: $0.1.map(\.y)) }
-        return responses.isEmpty ? nil : FrequencyResponse.average(responses, method: .power)
+        let all = calibratedLiveCurves
+        let chosen = all.filter { live.settings.isAveraged($0.0) }
+        let responses = (chosen.isEmpty ? all : chosen).map { FrequencyResponse(frequencies: $0.1.map(\.x), magnitude: $0.1.map(\.y)) }
+        return responses.isEmpty ? nil : FrequencyResponse.average(responses, method: live.settings.averageMethod ?? .power)
+    }
+
+    /// The live average for the chart, when it is shown and averages two or more mics.
+    var liveAveragePoints: [ChartPoint]? {
+        guard live.settings.showAverage != false,
+              live.curves.filter({ live.settings.isAveraged($0.mic) }).count >= 2,
+              let avg = liveAverageResponse else { return nil }
+        return zip(avg.frequencies, avg.magnitude).map { ChartPoint(x: $0, y: $1) }
     }
 
     /// What the live view's target sits on and Auto EQ fits: the live curves' average while there
@@ -279,6 +326,15 @@ struct LiveView: View {
     @AppStorage("showVirtualEQ") private var showVirtualEQ = false
     @AppStorage("showTarget") private var showTarget = false
     @State private var range: Double = 50
+    /// Zoom on the frequency and level axes; the coherence and phase charts follow the frequency zoom.
+    @State private var zoom = ChartZoom()
+    /// A joke: a picture of what each part of the spectrum sounds like, behind the live response.
+    @AppStorage("americanMode") private var americanMode = false
+    @State private var americanPicture = AmericanMode.picture()
+    /// Delays found by Find Delay, waiting to be accepted, in samples per mic.
+    @State private var proposedDelays: [Int]?
+    /// The delays Find Delay calculated, shown beside the editable ones.
+    @State private var foundDelays: [Int] = []
     /// Whether this is the Frequency view, which has the Virtual EQ panel.
     var showsEQ = false
 
@@ -325,10 +381,11 @@ struct LiveView: View {
                     Slider(value: $live.settings.level, in: -60...0, step: 1).frame(width: 120)
                     Text("\(Int(live.settings.level)) dBFS peak").monospacedDigit().frame(width: 100, alignment: .leading)
                 }
-                Button("Capture") { live.capture(model) }
+                Button("Capture") { live.captureAll(model) }
                     .disabled(!live.isRunning || live.blocks == 0)
-                    .help("Add each mic's current response to the list as an impulse response")
+                    .help("Add each mic's current response to the list as an impulse response; with two or more mics in the average, those go into a new summing folder")
                 if showsEQ {
+                    americanModeToggle
                     TargetControl()
                     Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
                         .toggleStyle(.button)
@@ -352,9 +409,16 @@ struct LiveView: View {
                     Text("80 dB").tag(80.0)
                 }
                 .frame(width: 140)
-                Button("Find Delay") { live.findDelays() }
+                .onChange(of: range) { zoom.y = nil }
+                Button("Find Delay") {
+                    foundDelays = live.foundDelays()
+                    proposedDelays = foundDelays
+                }
                     .disabled(live.blocks == 0)
-                    .help("Line the reference up with each mic, from the peak of its impulse response")
+                    .help("Find the delay that lines the reference up with each mic, from the peak of its impulse response, and check it before using it")
+                    .sheet(isPresented: Binding(get: { proposedDelays != nil }, set: { if !$0 { proposedDelays = nil } })) {
+                        if let proposedDelays { delaySheet(live, proposedDelays) }
+                    }
                 Button("Reset") { live.clearDelays(); live.reset() }
                 }
             }
@@ -367,12 +431,109 @@ struct LiveView: View {
         }
     }
 
+    /// The first time it is turned on, it asks for the picture.
+    private var americanModeToggle: some View {
+        Toggle("American Mode", isOn: Binding(
+            get: { americanMode && americanPicture != nil },
+            set: { on in
+                if on && americanPicture == nil { americanPicture = AmericanMode.choosePicture() }
+                americanMode = on && americanPicture != nil
+            }))
+            .help("Tubby, muddy, boxy, honky, barky, edgy, sibilant. Right-click to choose another picture.")
+            .contextMenu {
+                Button("Choose Picture…") {
+                    if let picture = AmericanMode.choosePicture() {
+                        americanPicture = picture
+                        americanMode = true
+                    }
+                }
+            }
+    }
+
+    /// The found delays in milliseconds and metres, to check against the room before using them. Each
+    /// can be typed over, in either unit, to use another delay.
+    private func delaySheet(_ live: LiveAnalyzer, _ delays: [Int]) -> some View {
+        let fs = model.settings.sampleRate
+        let edited = delays != foundDelays
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Delay found").font(.headline)
+            Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 6) {
+                GridRow {
+                    Text("")
+                    Text("Found").foregroundStyle(.secondary)
+                    Text("Use (ms)").foregroundStyle(.secondary)
+                    Text("Distance (m)").foregroundStyle(.secondary)
+                    Text("Now").foregroundStyle(.secondary)
+                }
+                ForEach(delays.indices, id: \.self) { i in
+                    delayRow(live, i, fs: fs)
+                }
+            }
+            .monospacedDigit()
+            Text(delayNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Back to Found") { proposedDelays = foundDelays }
+                    .disabled(!edited)
+                    .help("Puts the calculated delays back")
+                Spacer()
+                Button("Cancel", role: .cancel) { proposedDelays = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button(edited ? "Use These Delays" : "Use This Delay") {
+                    live.settings.delays = delays
+                    proposedDelays = nil
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 500)
+    }
+
+    /// One mic in the delay sheet: the found delay, and the delay to use as milliseconds or metres.
+    private func delayRow(_ live: LiveAnalyzer, _ i: Int, fs: Double) -> some View {
+        let found = i < foundDelays.count ? foundDelays[i] : 0
+        let samples = Binding<Int>(
+            get: { proposedDelays.flatMap { i < $0.count ? $0[i] : nil } ?? 0 },
+            set: { v in if proposedDelays != nil, i < proposedDelays!.count { proposedDelays![i] = max(0, v) } })
+        let ms = Binding<Double>(
+            get: { Double(samples.wrappedValue) / fs * 1000 },
+            set: { samples.wrappedValue = Int(($0 / 1000 * fs).rounded()) })
+        let metres = Binding<Double>(
+            get: { Double(samples.wrappedValue) / fs * TimeAlignment.speedOfSound },
+            set: { samples.wrappedValue = Int(($0 / TimeAlignment.speedOfSound * fs).rounded()) })
+        return GridRow {
+            Text("Mic \(i + 1)").gridColumnAlignment(.leading)
+            Text(String(format: "%.2f ms", Double(found) / fs * 1000)).foregroundStyle(.secondary)
+            TextField("ms", value: ms, format: .number.precision(.fractionLength(2)))
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .frame(width: 80)
+            TextField("m", value: metres, format: .number.precision(.fractionLength(2)))
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .frame(width: 80)
+            Text(String(format: "%.2f ms", Double(live.settings.delay(i)) / fs * 1000)).foregroundStyle(.secondary)
+        }
+    }
+
+    /// What the distance includes, so it can be checked against the room.
+    private var delayNote: String {
+        let distance = "Distance at 343 m/s. Check it against the distance from the loudspeaker to the mic."
+        if model.live.settings.internalReference || model.settings.loopbackInput == nil {
+            return distance + " With the internal reference the delay also includes the interface latency, so it reads longer than the acoustic path."
+        }
+        return distance + " With the loopback reference the interface latency cancels, so it is the acoustic path plus any processing delay."
+    }
+
     /// Says what the dashed lines are while the Virtual EQ panel is open.
     private func eqNote(_ live: LiveAnalyzer) -> String {
         guard showsEQ && showVirtualEQ else { return "" }
+        guard live.isRunning || !live.curves.isEmpty else {
+            return " Virtual EQ: the panel edits the selected trace's own EQ, drawn dashed when it is ticked; start live to EQ the live curves."
+        }
         let n = live.settings.activeEQ.count
         if n == 0 { return " Virtual EQ: no filters on yet; add one in the panel." }
-        return " Dashed: live curves with the Virtual EQ (\(n) filter\(n == 1 ? "" : "s") on)" + (live.curves.isEmpty ? ", drawn once live is running." : ".")
+        return " Dashed: live curves with the Virtual EQ (\(n) filter\(n == 1 ? "" : "s") on)."
     }
 
     private func statusText(_ live: LiveAnalyzer) -> String {
@@ -386,17 +547,23 @@ struct LiveView: View {
         return parts.joined(separator: " · ")
     }
 
+    private func color(_ mic: Int) -> Color { LiveView.color(mic) }
+
     /// Live curves get their own high-contrast colors, so they stand apart from the traces' palette.
-    private func color(_ mic: Int) -> Color {
+    static func color(_ mic: Int) -> Color {
         let colors: [Color] = [.primary, .red, .cyan, .yellow]
         return colors[mic % colors.count]
     }
+
+    static let averageColor = Color.orange
 
     private func magnitudeChart(_ live: LiveAnalyzer) -> some View {
         let shown = model.visibleTraces.filter(\.hasResponse).map {
             ($0, $0.displayResponse(smoothing: model.smoothing, calibration: model.calibration(for: $0)))
         }
-        let calibrated = model.calibratedLiveCurves
+        let allLive = model.calibratedLiveCurves
+        let calibrated = allLive.filter { live.settings.isShown($0.0) }
+        let average = model.liveAveragePoints
         // The live curves with the Virtual EQ added, drawn dashed while the panel is open.
         let eq = live.settings.activeEQ
         let fs = model.settings.sampleRate
@@ -406,11 +573,12 @@ struct LiveView: View {
             }
             : []
         // A ticked, selected trace with its own EQ is drawn with it too, as on the sweep view.
-        let tracePrediction: (Trace, [ChartPoint])? = showsEQ && showVirtualEQ
+        let ownPrediction: (Trace, [ChartPoint])? = showsEQ && showVirtualEQ
             ? shown.first { $0.0.id == model.selection && !$0.0.activeEQ.isEmpty }.map { trace, points in
                 (trace, points.map { ChartPoint(x: $0.x, y: $0.y + ParametricEQ.gainDB(trace.activeEQ, at: $0.x, sampleRate: trace.eqSampleRate)) })
             }
             : nil
+        let tracePrediction = ownPrediction
         // The target sits on the live curves' average while measuring, otherwise on the selected trace.
         var targetPoints: [TargetPoint]?
         if showsEQ && showTarget {
@@ -421,6 +589,9 @@ struct LiveView: View {
         // Data tip series, built in steps to keep each expression simple for the type checker.
         var tips: [TipSeries] = calibrated.map { TipSeries(id: "mic\($0.0)", name: "Live · Mic \($0.0 + 1)", color: color($0.0), points: $0.1) }
         tips += predicted.map { TipSeries(id: "eq\($0.0)", name: "Mic \($0.0 + 1) with EQ", color: color($0.0), points: $0.1) }
+        if let average {
+            tips.append(TipSeries(id: "average", name: "Live average", color: LiveView.averageColor, points: average))
+        }
         tips += shown.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
         if let targetPoints {
             tips.append(TipSeries(id: "target", name: "Target", color: .gray, points: targetPoints.map { ChartPoint(x: $0.x, y: $0.y) }))
@@ -429,8 +600,11 @@ struct LiveView: View {
             tips.append(TipSeries(id: "eq-trace", name: "\(tracePrediction.0.info.name) with EQ", color: tracePrediction.0.color, points: tracePrediction.1))
         }
         // Scale to the live curves while measuring, otherwise to the traces.
-        let levels = calibrated.isEmpty ? shown.flatMap { $0.1 } : calibrated.flatMap { $0.1 }
+        let levels = allLive.isEmpty ? shown.flatMap { $0.1 } : allLive.flatMap { $0.1 }
         let top = ((levels.filter { $0.x >= 20 }.map(\.y).max() ?? 0) + 5).rounded(.up)
+        // Zooming out goes past the preset range, down to 150 dB, as on the sweep view.
+        let yFull = (top - 150)...(top + 10)
+        let yShown = zoom.y == nil ? (top - range)...top : zoom.yDomain(yFull)
         let chart = Chart {
             if let targetPoints {
                 TargetMarks(points: targetPoints, tolerance: model.target.tolerance > 0)
@@ -449,6 +623,13 @@ struct LiveView: View {
                         .lineStyle(StrokeStyle(lineWidth: 2.8))
                 }
             }
+            if let average {
+                ForEach(average) { p in
+                    LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Mic", "average"))
+                        .foregroundStyle(LiveView.averageColor)
+                        .lineStyle(StrokeStyle(lineWidth: 3.5))
+                }
+            }
             if let tracePrediction {
                 ForEach(tracePrediction.1) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Trace", "eq-trace"))
@@ -464,28 +645,43 @@ struct LiveView: View {
                 }
             }
         }
-        return chart
-        .chartXScale(domain: 10...20_000, type: .log)
-        .chartYScale(domain: (top - range)...top)
+        let plot = chart
+        .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
+        .chartYScale(domain: yShown)
+        .chartPlotStyle { plot in
+            plot.background {
+                if showsEQ && americanMode, let americanPicture {
+                    Image(nsImage: americanPicture).resizable().opacity(0.4)
+                }
+            }
+            .clipped()
+        }
         .chartXAxis { frequencyAxis }
         .chartYAxisLabel("dB re reference")
         .chartLegend(.hidden)
-        .frequencyDataTip(tips)
+        .frequencyDataTip(tips, zoom: $zoom)
         .clipped()
         .exportablePlot("Live response")
+        .zoomScrollBars($zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true, yShown: yShown)
+        return VStack(alignment: .trailing, spacing: 4) {
+            ZoomControls(zoom: $zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true,
+                         yStart: (top - range)...top)
+            plot
+        }
     }
 
     private func coherenceChart(_ live: LiveAnalyzer) -> some View {
         Chart {
-            ForEach(live.curves) { c in
+            ForEach(live.curves.filter { live.settings.isShown($0.mic) }) { c in
                 ForEach(c.coherence) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value("Coherence", p.y), series: .value("Mic", "mic\(c.mic)"))
                         .foregroundStyle(color(c.mic).opacity(0.7))
                 }
             }
         }
-        .chartXScale(domain: 10...20_000, type: .log)
+        .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
         .chartYScale(domain: 0...1)
+        .chartPlotStyle { $0.clipped() }
         .chartYAxis { AxisMarks(values: [0, 0.5, 1]) }
         .chartXAxis(.hidden)
         .chartYAxisLabel("Coherence")
@@ -502,7 +698,7 @@ struct LiveView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1))
                 }
             }
-            ForEach(live.curves) { c in
+            ForEach(live.curves.filter { live.settings.isShown($0.mic) }) { c in
                 ForEach(c.phase) { p in
                     PointMark(x: .value("Frequency", p.x), y: .value("Phase", p.y))
                         .foregroundStyle(color(c.mic))
@@ -510,8 +706,9 @@ struct LiveView: View {
                 }
             }
         }
-        .chartXScale(domain: 10...20_000, type: .log)
+        .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
         .chartYScale(domain: -180...180)
+        .chartPlotStyle { $0.clipped() }
         .chartYAxis { AxisMarks(values: [-180, -90, 0, 90, 180]) }
         .chartXAxis { frequencyAxis }
         .chartXAxisLabel("Hz")
@@ -522,11 +719,34 @@ struct LiveView: View {
     }
 
     private var frequencyAxis: some AxisContent {
-        AxisMarks(values: frequencyTicks) { value in
+        AxisMarks(values: zoomedFrequencyTicks(in: zoom.xDomain(FrequencyResponseView.fullFrequencies))) { value in
             AxisGridLine()
             AxisTick()
             AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
         }
+    }
+}
+/// American Mode's picture, chosen once and kept in Application Support.
+enum AmericanMode {
+    static var file: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Measure/American Mode.png")
+    }
+
+    static func picture() -> NSImage? { NSImage(contentsOf: file) }
+
+    /// Asks for a picture, keeps a copy and returns it, or nil when cancelled.
+    @MainActor
+    static func choosePicture() -> NSImage? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.message = "Choose the picture for American Mode"
+        guard panel.runModal() == .OK, let url = panel.url, let image = NSImage(contentsOf: url),
+              let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        else { return nil }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? png.write(to: file)
+        return image
     }
 }
 #endif

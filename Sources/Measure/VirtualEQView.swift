@@ -35,8 +35,11 @@ struct VirtualEQPanel: View {
     }
 
     private var target: Target? {
-        if source == .crossSpectrum {
-            let live = model.live
+        let live = model.live
+        // In Live, the live EQ while live runs (or has curves); otherwise the selected trace's own EQ, as
+        // on the sweep view, so each measurement keeps its own.
+        let liveActive = live.isRunning || !live.curves.isEmpty || !(model.selectedTrace?.hasResponse ?? false)
+        if source == .crossSpectrum && liveActive {
             return Target(title: "Live curves", filters: live.settings.eq ?? [], sampleRate: model.settings.sampleRate,
                           color: .primary, response: model.liveFitResponse, set: { live.settings.eq = $0.isEmpty ? nil : $0 }, addPrediction: nil)
         }

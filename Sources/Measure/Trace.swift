@@ -46,6 +46,9 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     var distortion: HarmonicDistortion?
     /// The folder the trace is in, in the list. Nil at the top level.
     var folder: UUID?
+    /// For the average a summing folder shows, that folder. Such a trace is made from the folder's
+    /// measurements whenever they change, and is never saved.
+    var sumFolder: UUID?
 }
 
 /// A folder in the trace list, to group measurements. Only a label: the files stay where they are.
@@ -53,6 +56,19 @@ struct TraceFolder: Codable, Identifiable, Hashable {
     var id = UUID()
     var name: String
     var expanded = true
+    /// For a summing folder, how its measurements are averaged; nil for a plain folder. Measurements put
+    /// in a summing folder are hidden, and the folder shows their average in their place.
+    var summing: FrequencyResponse.AverageMethod?
+    /// The id of the summing folder's average, kept so the average stays shown and selected as it is remade.
+    var averageID: UUID?
+    /// The summing folder's tick: whether its average is shown.
+    var averageHidden: Bool?
+    /// The average's palette colour.
+    var averageColor: Int?
+    /// The Virtual EQ tried on the average, kept here because the average itself is never saved.
+    var averageEQ: [EQFilter]?
+
+    var isSumming: Bool { summing != nil }
 }
 
 /// One measurement in the trace library: an impulse response, an imported frequency response or a plain

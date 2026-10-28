@@ -8,6 +8,13 @@ struct FlowLayout: Layout {
     var lineSpacing: CGFloat = 6
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        // SwiftUI finds the window's minimum size by proposing zero width. Laid out that narrow, every
+        // control would take a line of its own, and the window's minimum height could pass the screen's,
+        // cutting off the bottom of the window. Report one line instead: real widths are laid out properly.
+        if proposal.width == 0 {
+            let rows = arrange(subviews, width: .infinity)
+            return CGSize(width: 0, height: rows.first?.height ?? 0)
+        }
         let width = proposal.width ?? .infinity
         let rows = arrange(subviews, width: width)
         let height = rows.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(rows.count - 1, 0))

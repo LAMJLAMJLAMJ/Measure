@@ -172,7 +172,7 @@ final class RemoteHost {
             guard [300, 900, 3600, 14_400, 0].contains(seconds) else { return }
             model.monitor.settings.historyRange = seconds
         case .captureLive:
-            model.live.capture(model)
+            model.live.captureAll(model)
         case .findLiveDelay:
             guard model.live.blocks > 0 else { return }
             model.live.findDelays()
