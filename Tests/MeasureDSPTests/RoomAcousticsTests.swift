@@ -118,6 +118,24 @@ final class RoomAcousticsTests: XCTestCase {
         }
     }
 
+    func testClaritySplitsBeforeFiltering() {
+        // A direct sound and an equal reflection 60 ms later. Split before filtering (as AARAE does),
+        // each part keeps its own filter ringing, so C50 is 0 dB and D50 0.5 even in the 63 Hz band,
+        // where the ringing lasts longer than the 10 ms between the reflection and the boundary.
+        var ir = TestSignals.exponentialDecay(rt: 0.1, sampleRate: fs, duration: 1, noiseDB: -100, seed: 9).map { $0 * 1e-4 }
+        ir[0] = 1
+        ir[Int(0.06 * fs)] = 1
+        var options = RoomAcoustics.Options()
+        options.lowestBand = 63
+        options.highestBand = 1000
+        let result = RoomAcoustics.analyze(impulseResponse: ir, sampleRate: fs, options: options)
+        for p in result.bands + [result.broadband] {
+            XCTAssertEqual(p.c50, 0, accuracy: 0.05, "C50 in \(p.band?.description ?? "broadband")")
+            XCTAssertEqual(p.d50, 0.5, accuracy: 0.005, "D50 in \(p.band?.description ?? "broadband")")
+            XCTAssertGreaterThan(p.c80, 30)
+        }
+    }
+
     func testDecayFitNeedsEnoughRange() {
         // A curve that only falls 20 dB can give EDT and T20 but not T30.
         let curve = (0..<1000).map { -20 * Double($0) / 999 }

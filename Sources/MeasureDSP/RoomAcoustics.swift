@@ -74,14 +74,18 @@ public enum RoomAcoustics {
 
     public static func analyze(impulseResponse ir: [Double], sampleRate: Double, options: Options = Options()) -> RoomAcousticsResult {
         let onset = onsetIndex(ir, thresholdDB: options.onsetThreshold)
-        let broadband = parameters(Array(ir[onset...]), sampleRate: sampleRate, band: nil, noiseCompensation: options.noiseCompensation)
+        let fromOnset = Array(ir[onset...])
+        let broadband = parameters(fromOnset, sampleRate: sampleRate, band: nil, noiseCompensation: options.noiseCompensation,
+                                   clarity: clarity(fromOnset, sampleRate: sampleRate, filter: nil, reversed: false))
 
         let bank = FilterBank(resolution: options.resolution, sampleRate: sampleRate,
                               from: options.lowestBand, to: options.highestBand)
         let bands = bank.filters.map { filter -> BandParameters in
             let filtered = options.timeReversedFiltering ? filter.applyTimeReversed(ir) : filter.apply(ir)
             return parameters(Array(filtered[onset...]), sampleRate: sampleRate, band: filter.band,
-                              noiseCompensation: options.noiseCompensation)
+                              noiseCompensation: options.noiseCompensation,
+                              clarity: clarity(fromOnset, sampleRate: sampleRate, filter: filter,
+                                               reversed: options.timeReversedFiltering))
         }
         return RoomAcousticsResult(onsetIndex: onset, sampleRate: sampleRate, broadband: broadband, bands: bands)
     }
@@ -93,8 +97,40 @@ public enum RoomAcoustics {
         return ir.firstIndex { $0 * $0 >= limit } ?? 0
     }
 
-    /// Parameters for a response that already starts at its onset.
-    public static func parameters(_ h: [Double], sampleRate fs: Double, band: Band?, noiseCompensation: Bool = true) -> BandParameters {
+    /// C50, C80 and D50 the way AARAE's ReverberationTimeIR2 works them out: the unfiltered response
+    /// (from its onset) is split at 50 or 80 ms first, and each part is padded with a second of silence
+    /// on either side and band-filtered on its own, so the filter's ringing stays with the part it came
+    /// from instead of crossing the boundary. The late part runs to the end of the response, with no
+    /// truncation or noise compensation.
+    public struct Clarity {
+        public let c50: Double
+        public let c80: Double
+        public let d50: Double
+    }
+
+    public static func clarity(_ h: [Double], sampleRate fs: Double, filter: BandPassFilter?, reversed: Bool) -> Clarity {
+        func energy(_ part: ArraySlice<Double>) -> Double {
+            guard let filter else { return part.reduce(0) { $0 + $1 * $1 } }
+            let pad = [Double](repeating: 0, count: Int(fs))
+            let padded = pad + part + pad
+            let y = reversed ? filter.applyTimeReversed(padded) : filter.apply(padded)
+            return y.reduce(0) { $0 + $1 * $1 }
+        }
+        func split(_ t: Double) -> (early: Double, late: Double) {
+            let n = min(h.count, Int(t * fs) + 1)
+            return (energy(h[0..<n]), energy(h[n...]))
+        }
+        let (e50, l50) = split(0.05), (e80, l80) = split(0.08)
+        let tiny = Double.leastNonzeroMagnitude
+        return Clarity(c50: 10 * log10(max(e50, tiny) / max(l50, tiny)),
+                       c80: 10 * log10(max(e80, tiny) / max(l80, tiny)),
+                       d50: e50 / max(e50 + l50, tiny))
+    }
+
+    /// Parameters for a response that already starts at its onset. Without `clarity`, C50, C80 and D50
+    /// come from `h` itself, truncated and compensated like the decay.
+    public static func parameters(_ h: [Double], sampleRate fs: Double, band: Band?, noiseCompensation: Bool = true,
+                                  clarity: Clarity? = nil) -> BandParameters {
         let e = h.map { $0 * $0 }
         let peak = max(e.max() ?? 0, .leastNonzeroMagnitude)
 
@@ -140,9 +176,9 @@ public enum RoomAcoustics {
             band: band,
             edt: edtFit?.reverberationTime, t20: t20Fit?.reverberationTime, t30: t30Fit?.reverberationTime,
             edtFit: edtFit, t20Fit: t20Fit, t30Fit: t30Fit,
-            c50: 10 * log10(e50 / max(total - e50, .leastNonzeroMagnitude)),
-            c80: 10 * log10(e80 / max(total - e80, .leastNonzeroMagnitude)),
-            d50: e50 / total,
+            c50: clarity?.c50 ?? 10 * log10(e50 / max(total - e50, .leastNonzeroMagnitude)),
+            c80: clarity?.c80 ?? 10 * log10(e80 / max(total - e80, .leastNonzeroMagnitude)),
+            d50: clarity?.d50 ?? e50 / total,
             ts: moment / total,
             decayCurve: curveDB,
             noiseFloor: noiseDB,
