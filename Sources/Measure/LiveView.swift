@@ -204,12 +204,15 @@ final class LiveAnalyzer {
         return out
     }
 
-    /// Sets each mic's delay so its impulse response peak lines up with the reference.
-    func findDelays() {
+    /// Each mic's delay, in samples, that would line its impulse response peak up with the reference.
+    func foundDelays() -> [Int] {
         var delays = (0..<spectra.count).map { settings.delay($0) }
         for i in spectra.indices { if let d = spectra[i].delay { delays[i] += d } }
-        settings.delays = delays
+        return delays
     }
+
+    /// Sets each mic's delay so its impulse response peak lines up with the reference.
+    func findDelays() { settings.delays = foundDelays() }
 
     func clearDelays() { settings.delays = [] }
 
@@ -284,6 +287,8 @@ struct LiveView: View {
     /// A joke: a picture of what each part of the spectrum sounds like, behind the live response.
     @AppStorage("americanMode") private var americanMode = false
     @State private var americanPicture = AmericanMode.picture()
+    /// Delays found by Find Delay, waiting to be accepted, in samples per mic.
+    @State private var proposedDelays: [Int]?
     /// Whether this is the Frequency view, which has the Virtual EQ panel.
     var showsEQ = false
 
@@ -358,9 +363,12 @@ struct LiveView: View {
                     Text("80 dB").tag(80.0)
                 }
                 .frame(width: 140)
-                Button("Find Delay") { live.findDelays() }
+                Button("Find Delay") { proposedDelays = live.foundDelays() }
                     .disabled(live.blocks == 0)
-                    .help("Line the reference up with each mic, from the peak of its impulse response")
+                    .help("Find the delay that lines the reference up with each mic, from the peak of its impulse response, and check it before using it")
+                    .sheet(isPresented: Binding(get: { proposedDelays != nil }, set: { if !$0 { proposedDelays = nil } })) {
+                        if let proposedDelays { delaySheet(live, proposedDelays) }
+                    }
                 Button("Reset") { live.clearDelays(); live.reset() }
                 }
             }
@@ -390,6 +398,53 @@ struct LiveView: View {
                     }
                 }
             }
+    }
+
+    /// The found delays in milliseconds and metres, to check against the room before using them.
+    private func delaySheet(_ live: LiveAnalyzer, _ delays: [Int]) -> some View {
+        let fs = model.settings.sampleRate
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Delay found").font(.headline)
+            Grid(alignment: .trailing, horizontalSpacing: 16, verticalSpacing: 6) {
+                GridRow {
+                    Text("")
+                    Text("Delay").foregroundStyle(.secondary)
+                    Text("Distance").foregroundStyle(.secondary)
+                    Text("Now").foregroundStyle(.secondary)
+                }
+                ForEach(delays.indices, id: \.self) { i in
+                    GridRow {
+                        Text("Mic \(i + 1)").gridColumnAlignment(.leading)
+                        Text(String(format: "%.2f ms", Double(delays[i]) / fs * 1000))
+                        Text(String(format: "%.2f m", Double(delays[i]) / fs * TimeAlignment.speedOfSound))
+                        Text(String(format: "%.2f ms", Double(live.settings.delay(i)) / fs * 1000)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .monospacedDigit()
+            Text(delayNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { proposedDelays = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Use This Delay") {
+                    live.settings.delays = delays
+                    proposedDelays = nil
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+
+    /// What the distance includes, so it can be checked against the room.
+    private var delayNote: String {
+        let distance = "Distance at 343 m/s. Check it against the distance from the loudspeaker to the mic."
+        if model.live.settings.internalReference || model.settings.loopbackInput == nil {
+            return distance + " With the internal reference the delay also includes the interface latency, so it reads longer than the acoustic path."
+        }
+        return distance + " With the loopback reference the interface latency cancels, so it is the acoustic path plus any processing delay."
     }
 
     /// Says what the dashed lines are while the Virtual EQ panel is open.
