@@ -121,9 +121,16 @@ struct ZoomControls: View {
     var xLog = false
     /// The level range shown before zooming, when it is less than `yFull`.
     var yStart: ClosedRange<Double>?
+    @State private var settingRange = false
 
     var body: some View {
         HStack(spacing: 6) {
+            Button("Zoom to Range…") { settingRange = true }
+                .help("Type the lowest and highest values to show on each axis")
+                .popover(isPresented: $settingRange, arrowEdge: .bottom) {
+                    ZoomRangeForm(zoom: $zoom, xFull: xFull, yFull: yFull, xLog: xLog,
+                                  yShown: zoom.y == nil ? (yStart ?? yFull) : zoom.yDomain(yFull)) { settingRange = false }
+                }
             axis("X", out: { zoom.scaleX(2, full: xFull, log: xLog) }, in: { zoom.scaleX(0.5, full: xFull, log: xLog) },
                  help: xLog ? "frequency" : "time")
             axis("Y", out: { zoom.scaleY(2, full: yFull, shown: yStart) }, in: { zoom.scaleY(0.5, full: yFull, shown: yStart) },
@@ -267,5 +274,73 @@ extension View {
 
     /// Lets a drag across the chart zoom into it.
     func chartZoomDrag(_ zoom: Binding<ChartZoom>) -> some View { modifier(ZoomDrag(zoom: zoom)) }
+}
+/// Zoom to Range: the lowest and highest value to show on each axis, typed in.
+private struct ZoomRangeForm: View {
+    @Binding var zoom: ChartZoom
+    let xFull: ClosedRange<Double>
+    let yFull: ClosedRange<Double>
+    let xLog: Bool
+    let yShown: ClosedRange<Double>
+    let done: () -> Void
+    @State private var xMin = 0.0
+    @State private var xMax = 0.0
+    @State private var yMin = 0.0
+    @State private var yMax = 0.0
+
+    var body: some View {
+        let valid = xMin < xMax && yMin < yMax && (!xLog || xMin > 0)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Zoom to Range").font(.headline)
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    Text("")
+                    Text("Minimum").foregroundStyle(.secondary)
+                    Text("Maximum").foregroundStyle(.secondary)
+                }
+                GridRow {
+                    Text(xLog ? "X (Hz)" : "X")
+                    field($xMin)
+                    field($xMax)
+                }
+                GridRow {
+                    Text("Y")
+                    field($yMin)
+                    field($yMax)
+                }
+            }
+            Text(String(format: "X can go from %g to %g, Y from %.0f to %.0f.", xFull.lowerBound, xFull.upperBound,
+                        yFull.lowerBound, yFull.upperBound))
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Cancel", action: done).keyboardShortcut(.cancelAction)
+                Button("Zoom") { apply(); done() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!valid)
+            }
+        }
+        .padding(16)
+        .frame(width: 320)
+        .onAppear {
+            let x = zoom.xDomain(xFull)
+            (xMin, xMax, yMin, yMax) = (x.lowerBound, x.upperBound, yShown.lowerBound, yShown.upperBound)
+        }
+    }
+
+    private func field(_ value: Binding<Double>) -> some View {
+        TextField("", value: value, format: .number.precision(.significantDigits(1...6)))
+            .textFieldStyle(.roundedBorder)
+            .multilineTextAlignment(.trailing)
+            .frame(width: 100)
+    }
+
+    /// Sets the zoom, kept within what each axis can show.
+    private func apply() {
+        let x = max(xMin, xFull.lowerBound)...max(min(xMax, xFull.upperBound), max(xMin, xFull.lowerBound) + 1e-9)
+        let y = max(yMin, yFull.lowerBound)...max(min(yMax, yFull.upperBound), max(yMin, yFull.lowerBound) + 1e-9)
+        zoom.x = x == xFull ? nil : x
+        zoom.y = y
+    }
 }
 #endif
