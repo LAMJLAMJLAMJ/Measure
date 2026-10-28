@@ -101,8 +101,9 @@ public enum WAV {
             return Double((raw << 8) >> 8) / 8_388_608
         }
         case (1, 32): decode = { Double(Int32(bitPattern: le32(bytes, $0))) / 2_147_483_648 }
-        case (3, 32): decode = { Double(Float(bitPattern: le32(bytes, $0))) }
-        case (3, 64): decode = { Double(bitPattern: le64(bytes, $0)) }
+        // Float samples that are not numbers (NaN or infinite) are read as silence.
+        case (3, 32): decode = { finite(Double(Float(bitPattern: le32(bytes, $0)))) }
+        case (3, 64): decode = { finite(Double(bitPattern: le64(bytes, $0))) }
         default: throw WAVError.unsupportedFormat(tag: formatTag, bits: bits)
         }
 
@@ -157,6 +158,8 @@ public enum WAV {
     }
 
     // MARK: - Byte helpers
+
+    private static func finite(_ x: Double) -> Double { x.isFinite ? x : 0 }
 
     private static func ascii(_ b: [UInt8], _ at: Int, _ n: Int) -> String {
         String(decoding: b[at..<(at + n)], as: UTF8.self)

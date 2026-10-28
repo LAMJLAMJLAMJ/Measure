@@ -80,7 +80,24 @@ final class FrequencyResponseTests: XCTestCase {
         XCTAssertNil(avg.phase)
     }
 
+    func testLogResamplingAResponseEndingBelowTheRangeGivesNoPoints() {
+        // An imported response that stops at 5 Hz, drawn from 10 Hz up, used to crash the Frequency view.
+        let fr = FrequencyResponse(frequencies: [1, 2, 5], magnitude: [0, 1, 2])
+        XCTAssertTrue(fr.logResampled(pointsPerOctave: 48, low: 10, high: 5).frequencies.isEmpty)
+        XCTAssertEqual(fr.logResampled(pointsPerOctave: 1, low: 1, high: 4).frequencies, [1, 2, 4])
+    }
+
     func testRejectsTextWithoutData() {
         XCTAssertThrowsError(try FrequencyResponseText.parse("just a header\nand more text"))
+        // Numbers a binary file can contain when read as text, and a single point, are not a response.
+        XCTAssertThrowsError(try FrequencyResponseText.parse("inf 3\n1e400 2\n100 nan\n200 inf\n300 1e300"))
+        XCTAssertThrowsError(try FrequencyResponseText.parse("100 3"))
+        // A zip archive: binary, with zero bytes.
+        var zip = Data([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00])
+        zip.append(Data("\n12 34\n56 78\n".utf8))
+        XCTAssertThrowsError(try FrequencyResponseText.parse(data: zip))
+        // UTF-16 text with a byte order mark is read.
+        let utf16 = Data([0xFF, 0xFE]) + "* cal\n20 -1.5\n1000 0\n".data(using: .utf16LittleEndian)!
+        XCTAssertEqual(try FrequencyResponseText.parse(data: utf16).response.frequencies, [20, 1000])
     }
 }

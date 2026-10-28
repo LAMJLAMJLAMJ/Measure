@@ -69,7 +69,7 @@ public struct FrequencyResponse: Equatable {
         return magnitude[lo] + w * (magnitude[hi] - magnitude[lo])
     }
 
-    public enum AverageMethod: String, CaseIterable, Identifiable {
+    public enum AverageMethod: String, CaseIterable, Identifiable, Codable {
         /// Mean of the power (RMS average): what a spatial average of several mic positions usually uses.
         case power = "Power (RMS)"
         /// Mean of the levels in dB.
@@ -117,7 +117,11 @@ public struct FrequencyResponse: Equatable {
     }
 
     /// Resamples onto log-spaced points, `pointsPerOctave` per octave, between `low` and `high`.
+    /// Empty when the range is empty, as it is for a response that ends below `low`.
     public func logResampled(pointsPerOctave: Int = 48, low: Double = 20, high: Double = 20_000) -> FrequencyResponse {
+        guard low > 0, high >= low, high.isFinite else {
+            return FrequencyResponse(frequencies: [], magnitude: [], phase: nil)
+        }
         let octaves = log2(high / low)
         let count = Int((octaves * Double(pointsPerOctave)).rounded()) + 1
         let freqs = (0..<count).map { low * pow(2, Double($0) / Double(pointsPerOctave)) }
@@ -130,7 +134,14 @@ public struct FrequencyResponse: Equatable {
 public enum FrequencyResponseText {
     public enum ParseError: Error, CustomStringConvertible {
         case noData
-        public var description: String { "No frequency/level data found in the file" }
+        /// A binary file (a zip, an image, an audio format other than WAV), not text.
+        case notText
+        public var description: String {
+            switch self {
+            case .noData: return "No frequency/level data found in the file"
+            case .notText: return "The file is not text"
+            }
+        }
     }
 
     /// Parses REW "Export measurement as text" files and mic calibration files
@@ -150,12 +161,13 @@ public enum FrequencyResponseText {
             let fields = line.split(whereSeparator: { " \t,;".contains($0) }).compactMap { Double($0) }
             // A data line starts with a number and has at least frequency and level.
             guard let firstChar = line.first, firstChar.isNumber || firstChar == "." || firstChar == "-" || firstChar == "+",
-                  fields.count >= 2, fields[0] > 0 else { continue }
+                  fields.count >= 2, fields[0] > 0, fields[0] < 1e6, abs(fields[1]) < 1000,
+                  fields.count < 3 || fields[2].isFinite else { continue }
             f.append(fields[0])
             m.append(fields[1])
             if fields.count >= 3 { p.append(fields[2]) } else { hasPhase = false }
         }
-        guard !f.isEmpty else { throw ParseError.noData }
+        guard f.count >= 2 else { throw ParseError.noData }
         // Keep ascending order even if the file was not sorted.
         let order = f.indices.sorted { f[$0] < f[$1] }
         let phase = hasPhase && p.count == f.count ? order.map { p[$0] } : nil
@@ -163,9 +175,19 @@ public enum FrequencyResponseText {
     }
 
     public static func parse(contentsOf url: URL) throws -> (response: FrequencyResponse, sensitivity: Double?) {
-        let data = try Data(contentsOf: url)
-        let text = String(decoding: data, as: UTF8.self)
-        return try parse(text)
+        try parse(data: try Data(contentsOf: url))
+    }
+
+    /// Parses a file's bytes: UTF-8 text, or UTF-16 with a byte order mark (as some Windows tools write).
+    public static func parse(data: Data) throws -> (response: FrequencyResponse, sensitivity: Double?) {
+        let bytes = [UInt8](data.prefix(2))
+        if bytes == [0xFF, 0xFE] || bytes == [0xFE, 0xFF], let text = String(data: data, encoding: .utf16) {
+            return try parse(text)
+        }
+        // UTF-8 text has no zero bytes; zips, images and other binary files do. Read as text, their bytes
+        // can look like numbers and give a nonsense response.
+        guard !data.contains(0) else { throw ParseError.notText }
+        return try parse(String(decoding: data, as: UTF8.self))
     }
 
     private static func firstNumber(in s: String) -> Double? {

@@ -111,6 +111,8 @@ final class MonitorAnalyzer {
     var snapshot = MonitorSnapshot()
     /// One value a second per meter on the SPL view, by meter id, dB re full scale.
     var histories: [UUID: [Double]] = [:]
+    /// L10, L50 and L90 per meter over the history range, by meter id and percent, dB re full scale.
+    var statistics: [UUID: [Int: Double]] = [:]
     var sampleRate = 48_000.0
     /// Names of the mics being monitored, by index, for labels.
     var micNames: [String] = []
@@ -166,6 +168,7 @@ final class MonitorAnalyzer {
         self.engine = engine
         snapshot = MonitorSnapshot()
         histories = [:]
+        statistics = [:]
         levelLogs = []
         pauses = []
         pausedAt = nil
@@ -179,22 +182,26 @@ final class MonitorAnalyzer {
                 guard let settings = await self?.settings else { return }
                 guard let snap = engine.update(settings) else { continue }
                 var histories: [UUID: [Double]]?
+                var statistics: [UUID: [Int: Double]]?
                 var logs: [LevelLog]?
                 if snap.seconds != lastSecond {
                     lastSecond = snap.seconds
                     histories = engine.histories(settings)
+                    statistics = engine.statistics(settings)
                     logs = engine.logs()
                 }
-                await self?.apply(snap, histories: histories, logs: logs)
+                await self?.apply(snap, histories: histories, statistics: statistics, logs: logs)
             }
         }
     }
 
     /// Takes the engine's latest results, unless monitoring has stopped since.
-    private func apply(_ snap: MonitorSnapshot, histories: [UUID: [Double]]?, logs: [LevelLog]?) {
+    private func apply(_ snap: MonitorSnapshot, histories: [UUID: [Double]]?, statistics: [UUID: [Int: Double]]?,
+                       logs: [LevelLog]?) {
         guard isRunning else { return }
         snapshot = snap
         if let histories { self.histories = histories }
+        if let statistics { self.statistics = statistics }
         if let logs { levelLogs = logs }
     }
 
@@ -247,6 +254,7 @@ final class MonitorAnalyzer {
         engine?.reset()
         snapshot = MonitorSnapshot()
         histories = [:]
+        statistics = [:]
         levelLogs = []
         pauses = []
         startDate = Date()
@@ -378,6 +386,20 @@ final class MonitorEngine {
 
     /// Each mic's record second by second.
     func logs() -> [LevelLog] { meters.map { LevelLog($0) } }
+
+    /// Each meter's L10, L50 and L90 over the history range (since the start when it is 0).
+    func statistics(_ settings: MonitorSettings) -> [UUID: [Int: Double]] {
+        var out: [UUID: [Int: Double]] = [:]
+        let seconds = settings.historyRange > 0 ? settings.historyRange : nil
+        for m in settings.meters where m.mic < meters.count {
+            var values: [Int: Double] = [:]
+            for n in [10, 50, 90] {
+                values[n] = meters[m.mic].exceeded(n, m.weighting, m.average, seconds: seconds)
+            }
+            out[m.id] = values
+        }
+        return out
+    }
 
     /// Each meter's history, one value a second.
     func histories(_ settings: MonitorSettings) -> [UUID: [Double]] {
