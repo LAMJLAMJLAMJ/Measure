@@ -455,7 +455,10 @@ struct LiveView: View {
         guard showsEQ && showVirtualEQ else { return "" }
         let n = live.settings.activeEQ.count
         if n == 0 { return " Virtual EQ: no filters on yet; add one in the panel." }
-        return " Dashed: live curves with the Virtual EQ (\(n) filter\(n == 1 ? "" : "s") on)" + (live.curves.isEmpty ? ", drawn once live is running." : ".")
+        let filters = "\(n) filter\(n == 1 ? "" : "s") on"
+        return live.curves.isEmpty
+            ? " Dashed: the selected ticked trace with the Virtual EQ (\(filters)); the live curves get it once live is running."
+            : " Dashed: live curves with the Virtual EQ (\(filters))."
     }
 
     private func statusText(_ live: LiveAnalyzer) -> String {
@@ -489,11 +492,20 @@ struct LiveView: View {
             }
             : []
         // A ticked, selected trace with its own EQ is drawn with it too, as on the sweep view.
-        let tracePrediction: (Trace, [ChartPoint])? = showsEQ && showVirtualEQ
+        let ownPrediction: (Trace, [ChartPoint])? = showsEQ && showVirtualEQ
             ? shown.first { $0.0.id == model.selection && !$0.0.activeEQ.isEmpty }.map { trace, points in
                 (trace, points.map { ChartPoint(x: $0.x, y: $0.y + ParametricEQ.gainDB(trace.activeEQ, at: $0.x, sampleRate: trace.eqSampleRate)) })
             }
             : nil
+        // While there are no live curves, the panel's live EQ is drawn on the trace Auto EQ fits: the
+        // selected ticked trace, or the first ticked one.
+        let fitTrace = shown.first { $0.0.id == model.selection } ?? shown.first
+        let stoppedPrediction: (Trace, [ChartPoint])? = showsEQ && showVirtualEQ && !eq.isEmpty && calibrated.isEmpty
+            ? fitTrace.map { trace, points in
+                (trace, points.map { ChartPoint(x: $0.x, y: $0.y + ParametricEQ.gainDB(eq, at: $0.x, sampleRate: fs)) })
+            }
+            : nil
+        let tracePrediction = stoppedPrediction ?? ownPrediction
         // The target sits on the live curves' average while measuring, otherwise on the selected trace.
         var targetPoints: [TargetPoint]?
         if showsEQ && showTarget {
