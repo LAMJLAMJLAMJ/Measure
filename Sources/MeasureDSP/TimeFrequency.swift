@@ -2,6 +2,14 @@ import Foundation
 
 /// Time-domain and time-frequency views of an impulse response.
 public enum TimeFrequency {
+    /// One band of an impulse response, through the same Butterworth band-pass as the room acoustic
+    /// parameters but with zero phase, so its arrivals line up with the unfiltered response.
+    /// Nil when the band reaches the Nyquist frequency.
+    public static func bandFiltered(_ ir: [Double], sampleRate fs: Double, band: Band) -> [Double]? {
+        guard band.upper < 0.5 * fs else { return nil }
+        return BandPassFilter(band: band, sampleRate: fs).applyZeroPhase(ir)
+    }
+
     /// Energy-time curve: the Hilbert envelope of the impulse response in dB, 0 dB at its peak.
     public static func energyTimeCurve(_ ir: [Double]) -> [Double] {
         energyTimeCurveAndPeak(ir).curve

@@ -152,6 +152,13 @@ public struct BandPassFilter {
         Array(apply(Array(x.reversed())).reversed())
     }
 
+    /// Filters `x` forwards and then backwards in time: zero phase, so peaks and arrivals stay where
+    /// they are, at the cost of a steeper magnitude (each band edge is -6 dB rather than -3 dB) and
+    /// ringing before each arrival as well as after it. For looking at one band of an impulse response.
+    public func applyZeroPhase(_ x: [Double]) -> [Double] {
+        applyTimeReversed(apply(x))
+    }
+
     /// Magnitude response in dB at frequency f.
     public func magnitudeDB(at f: Double) -> Double {
         let w = 2 * Double.pi * f / sampleRate

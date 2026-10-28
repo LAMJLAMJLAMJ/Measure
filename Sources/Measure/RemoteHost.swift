@@ -400,7 +400,7 @@ final class RemoteHost {
         return curve
     }
 
-    /// A trace's phase as the Mac's phase chart draws it, with the delay to the direct sound removed.
+    /// A trace's phase as the Mac's phase chart draws it, with the delay to the impulse's peak removed.
     private func phase(_ trace: Trace) -> RemoteCurve? {
         let color = trace.color.hex ?? "#808080"
         let key = "\(trace.info.name) \(color) \(String(describing: trace.info.window))"

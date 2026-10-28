@@ -80,4 +80,34 @@ public struct ResponseWindow: Codable, Hashable {
         guard start < end else { return ([], start) }
         return ((start..<end).map { ir[$0] * gain(atOffset: $0 - onset, sampleRate: fs) }, start)
     }
+
+    /// The frequency response of `ir` within the window, with the times its phase is drawn against.
+    public struct Response {
+        public let response: FrequencyResponse
+        /// Seconds from the start of the window to the onset.
+        public let onsetDelay: Double
+        /// Seconds from the start of the window to the impulse's peak, to a fraction of a sample: the
+        /// time the phase is drawn relative to, as REW does. The onset (the first sample within 20 dB
+        /// of the peak) is a few samples early, since a band-limited pulse rises before its peak, and a
+        /// whole number of samples: removing that delay instead left the phase of a pure delay
+        /// wrapping at high frequencies (135 degrees out at 10 kHz).
+        public let peakDelay: Double
+    }
+
+    /// The windowed part of `ir` as a frequency response, zero-padded to at least a second so short
+    /// windows still draw as smooth curves.
+    public func response(of ir: [Double], onset: Int, sampleRate fs: Double) -> Response {
+        let (samples, start) = apply(to: ir, onset: onset, sampleRate: fs)
+        let response = FrequencyResponse(impulseResponse: samples, sampleRate: fs,
+                                         fftSize: FFT.size(atLeast: max(samples.count, Int(fs))))
+        let peak = samples.isEmpty ? Double(onset - start) : Peak.interpolatedIndex(of: samples)
+        return Response(response: response, onsetDelay: Double(onset - start) / fs, peakDelay: peak / fs)
+    }
+
+    /// Phase in degrees with `delay` seconds removed, wrapped to (-180, 180].
+    public static func phase(_ degrees: Double, frequency: Double, removingDelay delay: Double) -> Double {
+        var p = (degrees + 360 * frequency * delay).truncatingRemainder(dividingBy: 360)
+        if p > 180 { p -= 360 } else if p <= -180 { p += 360 }
+        return p
+    }
 }
