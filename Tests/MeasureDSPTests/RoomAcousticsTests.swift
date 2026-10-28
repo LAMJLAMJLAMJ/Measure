@@ -85,6 +85,34 @@ final class RoomAcousticsTests: XCTestCase {
         XCTAssertEqual(result.broadband.t30!, 0.8, accuracy: 0.04)
     }
 
+    func testLowBandsIgnoreTheFilterRingingFromTheDirectSound() {
+        // A loud direct sound on a 1.2 s decay. Filtered forwards, the 63 and 125 Hz bands ring from
+        // the direct sound and their EDT comes out a fraction of the decay's; backwards (the default)
+        // the ringing falls before the onset and EDT matches.
+        let rt = 1.2, runs = 8
+        var options = RoomAcoustics.Options()
+        options.lowestBand = 63
+        options.highestBand = 125
+        var forwards = options
+        forwards.timeReversedFiltering = false
+        var edt = [0.0, 0.0], edtForwards = [0.0, 0.0]
+        for seed in 1...runs {
+            var ir = TestSignals.exponentialDecay(rt: rt, sampleRate: fs, duration: 3, noiseDB: -80, delay: 480,
+                                                  seed: UInt64(seed))
+            ir[480] += 300
+            let backwards = RoomAcoustics.analyze(impulseResponse: ir, sampleRate: fs, options: options).bands
+            let ringing = RoomAcoustics.analyze(impulseResponse: ir, sampleRate: fs, options: forwards).bands
+            for i in 0..<2 {
+                edt[i] += backwards[i].edt! / Double(runs)
+                edtForwards[i] += ringing[i].edt! / Double(runs)
+            }
+        }
+        for i in 0..<2 {
+            XCTAssertEqual(edt[i], rt, accuracy: 0.12 * rt, "EDT in band \(i)")
+            XCTAssertLessThan(edtForwards[i], 0.5 * rt, "forward-filtered EDT in band \(i)")
+        }
+    }
+
     func testDecayFitNeedsEnoughRange() {
         // A curve that only falls 20 dB can give EDT and T20 but not T30.
         let curve = (0..<1000).map { -20 * Double($0) / 999 }

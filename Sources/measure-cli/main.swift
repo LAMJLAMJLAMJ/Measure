@@ -8,7 +8,7 @@ let usage = """
 measure-cli: command-line front end for the Measure analysis core
 
 USAGE
-  measure-cli analyze <ir.wav> [--channel N] [--third] [--reverse-filter] [--no-compensation] [--csv out.csv]
+  measure-cli analyze <ir.wav> [--channel N] [--third] [--forward-filter] [--no-compensation] [--csv out.csv]
       ISO 3382-1 parameters (EDT, T20, T30, C50, C80, D50, Ts) per octave or third-octave band.
 
   measure-cli sweep <out.wav> [--fs 48000] [--from 20] [--to 20000] [--length 3] [--silence 2] [--level -6]
@@ -102,7 +102,7 @@ func roomOptions(_ args: Arguments) -> RoomAcoustics.Options {
         options.lowestBand = 50
         options.highestBand = 10_000
     }
-    options.timeReversedFiltering = args.flags.contains("reverse-filter")
+    options.timeReversedFiltering = !args.flags.contains("forward-filter")
     options.noiseCompensation = !args.flags.contains("no-compensation")
     return options
 }
@@ -272,7 +272,7 @@ guard argv.count >= 2 else {
     print(usage)
     exit(1)
 }
-let args = Arguments(argv.dropFirst(2), flags: ["third", "reverse-filter", "no-compensation"])
+let args = Arguments(argv.dropFirst(2), flags: ["third", "forward-filter", "no-compensation"])
 do {
     switch argv[1] {
     case "analyze": try analyze(args)

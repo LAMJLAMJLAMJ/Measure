@@ -265,6 +265,9 @@ struct ImpulseView: View {
     @AppStorage private var span: Double
     /// Each trace scaled to its own peak, or all drawn at their own level to compare levels.
     @AppStorage private var normalised: Bool
+    /// The band shown: "" for broadband, "1:<nominal>" for an octave, "3:<nominal>" for a third octave.
+    @AppStorage private var bandKey: String
+    @State private var bandCache = BandCache()
     /// Show the frequency response window of the selected trace and let it be dragged.
     let editsWindow: Bool
     @State private var dragging: Edge?
@@ -276,6 +279,7 @@ struct ImpulseView: View {
         _mode = AppStorage(wrappedValue: initialMode, "\(storageKey).mode")
         _span = AppStorage(wrappedValue: initialSpan, "\(storageKey).span")
         _normalised = AppStorage(wrappedValue: true, "\(storageKey).normalised")
+        _bandKey = AppStorage(wrappedValue: "", "\(storageKey).band")
         self.editsWindow = editsWindow
     }
 
@@ -298,6 +302,7 @@ struct ImpulseView: View {
                 .frame(width: 140)
                 .onChange(of: span) { zoom = ChartZoom() }
                 .onChange(of: mode) { zoom = ChartZoom() }
+                bandPicker
                 Toggle("Normalise", isOn: $normalised)
                     .toggleStyle(.checkbox)
                     .onChange(of: normalised) { zoom = ChartZoom() }
@@ -306,7 +311,7 @@ struct ImpulseView: View {
                     ZoomControls(zoom: $zoom, xFull: timeRange(reference, window: window), yFull: levelRange(traces))
                 }
                 Spacer()
-                Text("Time from the selected trace's direct sound").font(.caption).foregroundStyle(.secondary)
+                Text(caption).font(.caption).foregroundStyle(.secondary)
             }
             if let reference, let window {
                 windowControls(reference, window, traces: traces)
@@ -371,6 +376,46 @@ struct ImpulseView: View {
                 EmptyState(text: "No impulse responses shown")
             }
         }
+    }
+
+    private var bandPicker: some View {
+        Picker("Band", selection: $bandKey) {
+            Text("Broadband").tag("")
+            Section("Octave") {
+                ForEach(BandResolution.octave.standardBands, id: \.nominal) { b in
+                    Text("\(b.description) Hz").tag("1:\(b.nominal)")
+                }
+            }
+            Section("Third octave") {
+                ForEach(BandResolution.thirdOctave.standardBands, id: \.nominal) { b in
+                    Text("\(b.description) Hz").tag("3:\(b.nominal)")
+                }
+            }
+        }
+        .frame(width: 170)
+        .onChange(of: bandKey) { zoom = ChartZoom() }
+        .help("Show one octave or third-octave band, through the Reverb tab's band filters run with zero phase so arrivals stay in place")
+    }
+
+    /// The band chosen, or nil for broadband.
+    private var band: Band? {
+        let parts = bandKey.split(separator: ":")
+        guard parts.count == 2, let nominal = Double(parts[1]) else { return nil }
+        return (parts[0] == "3" ? BandResolution.thirdOctave : .octave).band(nominal: nominal)
+    }
+
+    private var caption: String {
+        guard let band else { return "Time from the selected trace's direct sound" }
+        let kind = bandKey.hasPrefix("3:") ? "third octave" : "octave"
+        return "\(band.description) Hz \(kind), zero phase. Time from the selected trace's direct sound"
+    }
+
+    /// The trace's impulse response and energy-time curve in the chosen band, or broadband when no band
+    /// is chosen or the band is above the trace's Nyquist frequency.
+    private func shown(_ trace: Trace) -> BandCache.Entry {
+        if let band, let entry = bandCache.entry(trace, band: band) { return entry }
+        return BandCache.Entry(ir: trace.impulseResponse ?? [], peak: trace.impulsePeak,
+                               etc: trace.energyTime, etcPeak: trace.energyTimePeak)
     }
 
     @ViewBuilder
@@ -454,11 +499,11 @@ struct ImpulseView: View {
     private func levelRange(_ traces: [Trace]) -> ClosedRange<Double> {
         if normalised { return mode == .etc ? -100...0 : -1...1 }
         if mode == .etc {
-            let loudest = traces.map(\.energyTimePeak).max() ?? 0
+            let loudest = traces.map { shown($0).etcPeak }.max() ?? 0
             let top = (loudest / 10).rounded(.up) * 10 + 5
             return (top - 105)...top
         }
-        let peak = max(traces.map(\.impulsePeak).max() ?? 1, 1e-9) * 1.05
+        let peak = max(traces.map { shown($0).peak }.max() ?? 1, 1e-9) * 1.05
         return -peak...peak
     }
 
@@ -475,9 +520,9 @@ struct ImpulseView: View {
     private func windowLevel(_ gain: Double, reference: Trace) -> Double {
         if mode == .etc {
             let db = max(-100, 20 * log10(max(gain, 1e-10)))
-            return normalised ? db : db + reference.energyTimePeak
+            return normalised ? db : db + shown(reference).etcPeak
         }
-        return normalised ? gain : gain * reference.impulsePeak
+        return normalised ? gain : gain * shown(reference).peak
     }
 
     /// How far before the direct sound the chart starts: a little, and before the window's left edge.
@@ -532,20 +577,50 @@ struct ImpulseView: View {
 
     /// The trace's points across `shown`, ms from sample `zero`, so a zoomed chart keeps its detail.
     private func points(_ trace: Trace, zero: Int, shown: ClosedRange<Double>) -> [ChartPoint] {
-        guard let ir = trace.impulseResponse else { return [] }
+        guard trace.impulseResponse != nil else { return [] }
+        let data = self.shown(trace)
+        let ir = data.ir
         let fs = trace.info.sampleRate
         let start = min(max(0, zero + Int((shown.lowerBound / 1000 * fs).rounded(.down))), ir.count)
         // Another trace can be shorter than the selected one's onset, so never let the range run backwards.
         let end = max(start, min(ir.count, zero + Int((shown.upperBound / 1000 * fs).rounded(.up)) + 1))
         if mode == .etc {
-            let points = ChartData.points(trace.energyTime, range: start..<end, zero: zero, sampleRate: fs, envelope: true)
+            let points = ChartData.points(data.etc, range: start..<end, zero: zero, sampleRate: fs, envelope: true)
             if normalised { return points }
-            return points.map { ChartPoint(x: $0.x, y: $0.y + trace.energyTimePeak) }
+            return points.map { ChartPoint(x: $0.x, y: $0.y + data.etcPeak) }
         }
         let points = ChartData.points(ir, range: start..<end, zero: zero, sampleRate: fs)
         if !normalised { return points }
-        let peak = max(trace.impulsePeak, .leastNonzeroMagnitude)
+        let peak = max(data.peak, .leastNonzeroMagnitude)
         return points.map { ChartPoint(x: $0.x, y: $0.y / peak) }
+    }
+}
+
+/// One band of each trace's impulse response for the Impulse and ETC views, filtered once per trace and
+/// band and kept while the view is open.
+final class BandCache {
+    struct Entry {
+        let ir: [Double]
+        /// Largest sample of `ir`.
+        let peak: Double
+        /// Energy-time curve in dB re its peak, and that peak in dB re a full-scale sample.
+        let etc: [Double]
+        let etcPeak: Double
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    func entry(_ trace: Trace, band: Band) -> Entry? {
+        let key = "\(trace.id)|\(band.center)"
+        if let entry = entries[key] { return entry }
+        guard let ir = trace.impulseResponse,
+              let filtered = TimeFrequency.bandFiltered(ir, sampleRate: trace.info.sampleRate, band: band) else { return nil }
+        let (etc, etcPeak) = TimeFrequency.energyTimeCurveAndPeak(filtered)
+        let entry = Entry(ir: filtered, peak: filtered.map(abs).max() ?? 0, etc: etc, etcPeak: etcPeak)
+        // Each entry holds two copies of a response; keep the cache from growing without limit.
+        if entries.count >= 40 { entries.removeAll() }
+        entries[key] = entry
+        return entry
     }
 }
 

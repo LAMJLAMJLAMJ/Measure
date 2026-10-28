@@ -63,8 +63,11 @@ public enum RoomAcoustics {
         public var onsetThreshold: Double = 20
         /// Truncate at the Lundeby crosspoint and add the estimated energy of the lost tail.
         public var noiseCompensation: Bool = true
-        /// Run band filters backwards in time so the filter's own ringing does not lengthen short decays.
-        public var timeReversedFiltering: Bool = false
+        /// Run band filters backwards in time, so their ringing falls before the onset (where it is cut
+        /// off) rather than after it. Forwards, a low band rings from the loud broadband direct sound,
+        /// which makes EDT far too short and C50/C80 too high at 63 and 125 Hz. Backwards is what
+        /// AARAE does by default (maximum-phase filters), and what ISO 3382-1 suggests for short decays.
+        public var timeReversedFiltering: Bool = true
 
         public init() {}
     }

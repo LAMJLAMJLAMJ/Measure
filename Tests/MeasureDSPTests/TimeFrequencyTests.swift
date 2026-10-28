@@ -41,4 +41,18 @@ final class TimeFrequencyTests: XCTestCase {
         let meanLast = g.levels[9].reduce(0, +) / Double(g.levels[9].count)
         XCTAssertEqual(meanFirst - meanLast, 54, accuracy: 6)
     }
+
+    func testBandFilteredImpulseKeepsItsArrival() {
+        let fs = 48_000.0
+        var ir = [Double](repeating: 0, count: 48_000)
+        ir[12_000] = 1
+        for nominal in [63.0, 1000, 8000] {
+            let band = BandResolution.octave.band(nominal: nominal)
+            let filtered = TimeFrequency.bandFiltered(ir, sampleRate: fs, band: band)!
+            let envelope = TimeFrequency.envelope(filtered)
+            let peak = envelope.indices.max { envelope[$0] < envelope[$1] }!
+            XCTAssertEqual(Double(peak), 12_000, accuracy: 1, "\(nominal) Hz")
+        }
+        XCTAssertNil(TimeFrequency.bandFiltered(ir, sampleRate: 16_000, band: BandResolution.octave.band(nominal: 8000)))
+    }
 }
