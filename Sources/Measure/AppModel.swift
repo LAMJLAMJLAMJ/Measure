@@ -393,7 +393,7 @@ final class AppModel {
     func useSpeechForSTI(_ levels: [Double]) {
         sti.speechLevels = levels
         sti.customSpeech = true
-        status = "STI now uses this recording's octave levels as the speech level."
+        status = "STI now uses these octave levels as the speech level."
     }
 
     // MARK: - Averaging
