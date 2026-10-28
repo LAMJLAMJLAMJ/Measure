@@ -265,18 +265,21 @@ final class LiveAnalyzer {
         return ids
     }
 
-    /// Captures the mics in the live average into a new summing folder, which shows their average
-    /// (with the same method) and keeps each mic's measurement too.
-    func captureAverage(_ model: AppModel) {
-        let mics = Set(spectra.indices.filter { settings.isAveraged($0) })
-        let ids = capture(model, mics: mics)
-        guard !ids.isEmpty else { return }
+    /// Captures every mic, as Capture and Save do. With two or more mics in the live average, those go
+    /// into a new summing folder, which shows their average (with the same method) and keeps each
+    /// mic's measurement; mics left out of the average stay beside it.
+    func captureAll(_ model: AppModel) {
+        let ids = capture(model)
+        let averaged = spectra.indices.filter { settings.isAveraged($0) && $0 < ids.count }
+        guard averaged.count >= 2 else { return }
         let position = model.settings.position
         let time = Date().formatted(date: .omitted, time: .shortened)
         let name = (position.isEmpty ? "Live average" : "\(position) · Live average") + " \(time)"
         let folder = model.addSummingFolder(named: name, method: settings.averageMethod ?? .power)
-        model.move(Set(ids), to: folder)
-        model.status = "Saved the average of \(ids.count) mic\(ids.count == 1 ? "" : "s") as \(name)."
+        model.move(Set(averaged.map { ids[$0] }), to: folder)
+        let others = ids.count - averaged.count
+        model.status = "Captured \(ids.count) mics, with the average of \(averaged.count) in \(name)."
+            + (others > 0 ? " \(others) mic\(others == 1 ? " is" : "s are") outside the average." : "")
     }
 }
 
@@ -378,9 +381,9 @@ struct LiveView: View {
                     Slider(value: $live.settings.level, in: -60...0, step: 1).frame(width: 120)
                     Text("\(Int(live.settings.level)) dBFS peak").monospacedDigit().frame(width: 100, alignment: .leading)
                 }
-                Button("Capture") { live.capture(model) }
+                Button("Capture") { live.captureAll(model) }
                     .disabled(!live.isRunning || live.blocks == 0)
-                    .help("Add each mic's current response to the list as an impulse response")
+                    .help("Add each mic's current response to the list as an impulse response; with two or more mics in the average, those go into a new summing folder")
                 if showsEQ {
                     americanModeToggle
                     TargetControl()

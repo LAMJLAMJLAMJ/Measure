@@ -816,9 +816,9 @@ struct LiveMicsSection: View {
                 .font(.caption)
             }
             Spacer(minLength: 0)
-            Button("Save") { live.captureAverage(model) }
-                .disabled(count == 0 || live.blocks == 0)
-                .help("Capture the mics in the average as measurements, in a new summing folder that shows their average")
+            Button("Save") { live.captureAll(model) }
+                .disabled(count < 2 || live.blocks == 0)
+                .help("Same as Capture: each mic becomes a measurement, and the mics in the average go into a new summing folder that shows their average")
         }
     }
 
