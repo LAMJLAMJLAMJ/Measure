@@ -108,6 +108,8 @@ public final class SoundLevelMeter {
     private var secondFastMax: [Double]
     private var secondCount = 0
     private let samplesPerSecond: Int
+    private var tenthCount = 0
+    private let samplesPerTenth: Int
     private let kFast: Double
     private let kSlow: Double
 
@@ -116,6 +118,10 @@ public final class SoundLevelMeter {
     public private(set) var secondEnergy: [[Double]]
     public private(set) var secondFast: [[Double]]
     public private(set) var secondSlow: [[Double]]
+    /// The Fast and Slow levels every tenth of a second, dB re full scale, per weighting: the samples
+    /// the statistical levels (L10, L50, L90) of those meters are taken from.
+    public private(set) var tenthFast: [[Float]]
+    public private(set) var tenthSlow: [[Float]]
 
     public init(sampleRate fs: Double) {
         sampleRate = fs
@@ -131,11 +137,14 @@ public final class SoundLevelMeter {
         secondSum = zeros
         secondFastMax = zeros
         samplesPerSecond = max(1, Int(fs.rounded()))
+        samplesPerTenth = max(1, Int((fs / 10).rounded()))
         kFast = 1 - exp(-1 / (SoundLevel.TimeWeighting.fast.tau * fs))
         kSlow = 1 - exp(-1 / (SoundLevel.TimeWeighting.slow.tau * fs))
         secondEnergy = weightings.map { _ in [] }
         secondFast = secondEnergy
         secondSlow = secondEnergy
+        tenthFast = weightings.map { _ in [] }
+        tenthSlow = tenthFast
     }
 
     /// Seconds of input so far.
@@ -160,6 +169,14 @@ public final class SoundLevelMeter {
                 secondFastMax[w] = max(secondFastMax[w], fast[w])
             }
             count += 1
+            tenthCount += 1
+            if tenthCount == samplesPerTenth {
+                for w in ys.indices {
+                    tenthFast[w].append(Float(SoundLevelMeter.db(fast[w])))
+                    tenthSlow[w].append(Float(SoundLevelMeter.db(slow[w])))
+                }
+                tenthCount = 0
+            }
             secondCount += 1
             if secondCount == samplesPerSecond {
                 for w in ys.indices {
@@ -212,6 +229,32 @@ public final class SoundLevelMeter {
     /// Peak sample level since the start (LApeak, LCpeak, LZpeak), dB re full scale.
     public func peakLevel(_ w: SoundLevel.FrequencyWeighting) -> Double {
         20 * log10(max(peak[index(w)], 1e-15))
+    }
+
+    /// The level exceeded `percent` % of the time (L10, L50, L90 and so on) over the last `seconds`
+    /// seconds, or since the start when nil. Fast and Slow meters use their level every tenth of a
+    /// second, as sound level meters do; the Leqs use their value each second.
+    public func exceeded(_ percent: Int, _ w: SoundLevel.FrequencyWeighting, _ average: LevelAverage,
+                         seconds: Int? = nil) -> Double? {
+        let k = index(w)
+        let values: [Double]
+        switch average {
+        case .fast, .slow:
+            let tenths = average == .fast ? tenthFast[k] : tenthSlow[k]
+            values = tenths.suffix(seconds.map { $0 * 10 } ?? tenths.count).map(Double.init)
+        default:
+            let h = history(w, average)
+            values = Array(h.suffix(seconds ?? h.count))
+        }
+        return SoundLevelMeter.exceeded(percent, of: values)
+    }
+
+    /// The value exceeded by `percent` % of `values`: their (100 − percent)th percentile.
+    public static func exceeded(_ percent: Int, of values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let i = Int((Double(100 - percent) / 100 * Double(sorted.count - 1)).rounded())
+        return sorted[min(sorted.count - 1, max(0, i))]
     }
 
     /// One value per whole second: the highest Fast level in that second, the Slow level at its end,

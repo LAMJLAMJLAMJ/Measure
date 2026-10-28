@@ -169,4 +169,27 @@ final class LiveLevelsTests: XCTestCase {
         XCTAssertTrue(rows[1][0].hasSuffix(":01:02"), rows[1][0])
         XCTAssertEqual(rows[1][1], "2")
     }
+
+    func testStatisticsUseTheFastLevelEveryTenthOfASecond() {
+        // A 1 kHz tone, loud (0 dB) for 0.8 s and 20 dB down for 3.2 s, every 4 s for 20 s. The quiet
+        // part is the level most of the time, so L50 must be near −23 dB re full scale; each second's
+        // highest Fast level (the history) is loud or still decaying in half the seconds, about −10 dB.
+        let fs = 48_000.0
+        let x = (0..<Int(20 * fs)).map { i -> Double in
+            let t = Double(i) / fs
+            let loud = t.truncatingRemainder(dividingBy: 4) < 0.8
+            return (loud ? 1 : 0.1) * sin(2 * Double.pi * 1000 * t)
+        }
+        let meter = SoundLevelMeter(sampleRate: fs)
+        for start in stride(from: 0, to: x.count, by: 4800) { meter.process(Array(x[start..<min(x.count, start + 4800)])) }
+        XCTAssertEqual(meter.tenthFast[0].count, 200)
+        let l50 = meter.exceeded(50, .z, .fast)!, l90 = meter.exceeded(90, .z, .fast)!, l10 = meter.exceeded(10, .z, .fast)!
+        XCTAssertEqual(l50, -23, accuracy: 1)
+        XCTAssertEqual(l90, -23, accuracy: 1)
+        XCTAssertEqual(l10, -3.2, accuracy: 1)
+        XCTAssertGreaterThan(SoundLevelMeter.exceeded(50, of: meter.history(.z, .fast))!, -15)
+        // Over the last 5 s only.
+        XCTAssertEqual(meter.exceeded(50, .z, .fast, seconds: 5)!, -23, accuracy: 1)
+        XCTAssertEqual(SoundLevelMeter.exceeded(10, of: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])!, 10)
+    }
 }

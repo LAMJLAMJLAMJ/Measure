@@ -346,6 +346,7 @@ struct StatisticsRow: View {
         let meters = monitor.settings.meters
         let index = min(meterIndex, max(0, meters.count - 1))
         let values = meters.isEmpty ? [] : self.values(meters[index])
+        let stats = meters.isEmpty ? [:] : self.statistics(meters[index])
         HStack(spacing: 16) {
             Picker("Statistics of", selection: $meterIndex) {
                 ForEach(Array(meters.enumerated()), id: \.offset) { i, m in
@@ -354,9 +355,9 @@ struct StatisticsRow: View {
             }
             .fixedSize()
             stat("Max", values.max())
-            stat("L10", percentile(values, exceeded: 10))
-            stat("L50", percentile(values, exceeded: 50))
-            stat("L90", percentile(values, exceeded: 90))
+            stat("L10", stats[10])
+            stat("L50", stats[50])
+            stat("L90", stats[90])
             Spacer()
             Text(monitor.settings.historyRange > 0 ? "over the time shown" : "since the start")
                 .font(.caption).foregroundStyle(.secondary)
@@ -379,12 +380,13 @@ struct StatisticsRow: View {
         return history.suffix(range > 0 ? range : history.count).map { $0 + offset }
     }
 
-    /// The level exceeded `n` % of the time.
-    private func percentile(_ values: [Double], exceeded n: Int) -> Double? {
-        guard !values.isEmpty else { return nil }
-        let sorted = values.sorted()
-        let i = Int((Double(100 - n) / 100 * Double(sorted.count - 1)).rounded())
-        return sorted[min(sorted.count - 1, max(0, i))]
+    /// L10, L50 and L90 with the mic's offset: from the level every tenth of a second for Fast and
+    /// Slow meters (the history holds each second's highest Fast level, which would read high).
+    private func statistics(_ meter: MeterSettings) -> [Int: Double] {
+        let monitor = model.monitor
+        guard let stats = monitor.statistics[meter.id] else { return [:] }
+        let offset = monitor.offset(model, mic: meter.mic) ?? 0
+        return stats.mapValues { $0 + offset }
     }
 }
 
