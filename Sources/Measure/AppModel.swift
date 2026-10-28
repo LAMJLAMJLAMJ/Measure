@@ -756,6 +756,8 @@ final class AppModel {
                 add(trace)
                 selection = trace.id
                 next += 1
+            } else if url.pathExtension.lowercased() == "zip" {
+                errorMessage = "\(url.lastPathComponent) is a zip archive. Unzip it in the Finder, then import the WAV or text files inside."
             } else {
                 errorMessage = "Could not read \(url.lastPathComponent). Import WAV impulse responses or REW text exports."
             }
