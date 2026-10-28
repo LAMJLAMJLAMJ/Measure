@@ -284,6 +284,8 @@ struct LiveView: View {
     @AppStorage("showVirtualEQ") private var showVirtualEQ = false
     @AppStorage("showTarget") private var showTarget = false
     @State private var range: Double = 50
+    /// Zoom on the frequency and level axes; the coherence and phase charts follow the frequency zoom.
+    @State private var zoom = ChartZoom()
     /// A joke: a picture of what each part of the spectrum sounds like, behind the live response.
     @AppStorage("americanMode") private var americanMode = false
     @State private var americanPicture = AmericanMode.picture()
@@ -363,6 +365,7 @@ struct LiveView: View {
                     Text("80 dB").tag(80.0)
                 }
                 .frame(width: 140)
+                .onChange(of: range) { zoom.y = nil }
                 Button("Find Delay") { proposedDelays = live.foundDelays() }
                     .disabled(live.blocks == 0)
                     .help("Find the delay that lines the reference up with each mic, from the peak of its impulse response, and check it before using it")
@@ -511,6 +514,9 @@ struct LiveView: View {
         // Scale to the live curves while measuring, otherwise to the traces.
         let levels = calibrated.isEmpty ? shown.flatMap { $0.1 } : calibrated.flatMap { $0.1 }
         let top = ((levels.filter { $0.x >= 20 }.map(\.y).max() ?? 0) + 5).rounded(.up)
+        // Zooming out goes past the preset range, down to 150 dB, as on the sweep view.
+        let yFull = (top - 150)...(top + 10)
+        let yShown = zoom.y == nil ? (top - range)...top : zoom.yDomain(yFull)
         let chart = Chart {
             if let targetPoints {
                 TargetMarks(points: targetPoints, tolerance: model.target.tolerance > 0)
@@ -544,22 +550,29 @@ struct LiveView: View {
                 }
             }
         }
-        return chart
-        .chartXScale(domain: 10...20_000, type: .log)
-        .chartYScale(domain: (top - range)...top)
+        let plot = chart
+        .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
+        .chartYScale(domain: yShown)
         .chartPlotStyle { plot in
             plot.background {
                 if showsEQ && americanMode, let americanPicture {
                     Image(nsImage: americanPicture).resizable().opacity(0.4)
                 }
             }
+            .clipped()
         }
         .chartXAxis { frequencyAxis }
         .chartYAxisLabel("dB re reference")
         .chartLegend(.hidden)
-        .frequencyDataTip(tips)
+        .frequencyDataTip(tips, zoom: $zoom)
         .clipped()
         .exportablePlot("Live response")
+        .zoomScrollBars($zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true, yShown: yShown)
+        return VStack(alignment: .trailing, spacing: 4) {
+            ZoomControls(zoom: $zoom, xFull: FrequencyResponseView.fullFrequencies, yFull: yFull, xLog: true,
+                         yStart: (top - range)...top)
+            plot
+        }
     }
 
     private func coherenceChart(_ live: LiveAnalyzer) -> some View {
@@ -571,8 +584,9 @@ struct LiveView: View {
                 }
             }
         }
-        .chartXScale(domain: 10...20_000, type: .log)
+        .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
         .chartYScale(domain: 0...1)
+        .chartPlotStyle { $0.clipped() }
         .chartYAxis { AxisMarks(values: [0, 0.5, 1]) }
         .chartXAxis(.hidden)
         .chartYAxisLabel("Coherence")
@@ -597,8 +611,9 @@ struct LiveView: View {
                 }
             }
         }
-        .chartXScale(domain: 10...20_000, type: .log)
+        .chartXScale(domain: zoom.xDomain(FrequencyResponseView.fullFrequencies), type: .log)
         .chartYScale(domain: -180...180)
+        .chartPlotStyle { $0.clipped() }
         .chartYAxis { AxisMarks(values: [-180, -90, 0, 90, 180]) }
         .chartXAxis { frequencyAxis }
         .chartXAxisLabel("Hz")
@@ -609,7 +624,7 @@ struct LiveView: View {
     }
 
     private var frequencyAxis: some AxisContent {
-        AxisMarks(values: frequencyTicks) { value in
+        AxisMarks(values: zoomedFrequencyTicks(in: zoom.xDomain(FrequencyResponseView.fullFrequencies))) { value in
             AxisGridLine()
             AxisTick()
             AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
