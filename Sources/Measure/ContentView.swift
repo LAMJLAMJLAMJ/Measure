@@ -371,6 +371,10 @@ struct TraceList: View {
             Button("Show Only This") { model.visible = [trace.id] }
             Button("Export Impulse Response…") { model.exportRequest = ExportRequest(traces: [trace.id]) }
                 .disabled(trace.impulseResponse == nil)
+            if let f = folderID(trace), model.folders.first(where: { $0.id == f })?.isSumming == true {
+                Button("Take Out of Summing Folder") { model.move([trace.id], to: nil) }
+                    .help("Moves it to the top level and ticks it; the folder's average is remade without it")
+            }
             Menu("Move to Folder") {
                 Button("None (Top Level)") { model.move([trace.id], to: nil) }
                     .disabled(folderID(trace) == nil)

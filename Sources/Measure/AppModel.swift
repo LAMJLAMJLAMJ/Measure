@@ -627,6 +627,9 @@ final class AppModel {
     func move(_ ids: Set<UUID>, to folder: UUID?) {
         let ids = ids.filter { id in traces.first { $0.id == id }?.info.sumFolder == nil }
         var changed = summingFolders(of: ids)
+        // Measurements taken out of a summing folder are ticked again, as they were before it hid them.
+        let leaving = Set(traces.filter { ids.contains($0.id) && changed.contains($0.info.folder ?? UUID()) }.map(\.id))
+        if !changed.contains(folder ?? UUID()) { visible.formUnion(leaving) }
         for i in traces.indices where ids.contains(traces[i].id) && traces[i].info.folder != folder {
             traces[i].info.folder = folder
             try? ProjectStore.saveInfo(traces[i].info, in: projectFolder)
