@@ -268,6 +268,7 @@ struct TraceList: View {
     @Environment(AppModel.self) private var model
     /// Summing folders average frequency responses, so they are offered in System tuning only.
     @AppStorage("mode") private var mode: AppMode = .tuning
+    @AppStorage("tuningSource") private var source: TuningSource = .sweep
     @State private var confirmingClear = false
     @State private var editing: TraceInfo?
     @State private var renaming: UUID?
@@ -288,6 +289,9 @@ struct TraceList: View {
             return !folderIDs.contains(id)
         }
         List(selection: $model.selection) {
+            if mode == .tuning && source == .crossSpectrum {
+                LiveMicsSection()
+            }
             ForEach(model.folders) { folder in
                 DisclosureGroup(isExpanded: expanded(folder.id)) {
                     ForEach(listed.filter { trace in trace.info.folder == folder.id }) { trace in
@@ -735,6 +739,86 @@ struct PlainRecordingSheet: View {
         if uncalibrated.isEmpty { return "Records every mic input, in dB SPL from each mic's calibration." }
         let inputs = uncalibrated.map { "\($0.channel)" }.joined(separator: ", ")
         return "Input \(inputs) has no SPL calibration, so its levels will be re full scale. Calibrate the mic in Setup for dB SPL. Up to an hour."
+    }
+}
+/// The live mics at the top of the list in Live: which are drawn, which go into the live average (both
+/// can be changed while measuring), and the average itself, which Save keeps as a summing folder of the
+/// mics' measurements.
+struct LiveMicsSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let live = model.live
+        Section("Live") {
+            if live.curves.isEmpty {
+                Text("Press Start to measure live; each mic appears here.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(live.curves) { c in micRow(c.mic) }
+                averageRow(live)
+            }
+        }
+    }
+
+    private func micRow(_ mic: Int) -> some View {
+        let live = model.live
+        let slot = mic < model.settings.mics.count ? model.settings.mics[mic] : nil
+        return HStack(spacing: 8) {
+            Toggle("", isOn: Binding(get: { live.settings.isShown(mic) },
+                                     set: { on in live.settings.hiddenMics = toggled(live.settings.hiddenMics, mic, include: !on) }))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .help("Show this mic's live curve")
+            Circle().fill(LiveView.color(mic)).frame(width: 12, height: 12)
+                .overlay(Circle().strokeBorder(.secondary.opacity(0.5), lineWidth: 0.5))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Mic \(mic + 1)").lineLimit(1)
+                Text(slot.map { "Input \($0.channel)" + ($0.micName.map { " · \($0)" } ?? "") } ?? "")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Toggle("Avg", isOn: Binding(get: { live.settings.isAveraged(mic) },
+                                        set: { on in live.settings.averageExcluded = toggled(live.settings.averageExcluded, mic, include: !on) }))
+                .toggleStyle(.checkbox)
+                .font(.caption)
+                .help("Include this mic in the live average")
+        }
+    }
+
+    private func averageRow(_ live: LiveAnalyzer) -> some View {
+        let count = live.curves.filter { live.settings.isAveraged($0.mic) }.count
+        let method = live.settings.averageMethod ?? .power
+        return HStack(spacing: 8) {
+            Toggle("", isOn: Binding(get: { live.settings.showAverage != false },
+                                     set: { live.settings.showAverage = $0 ? nil : false }))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .disabled(count < 2)
+                .help("Show the average of the mics ticked Avg")
+            Circle().fill(LiveView.averageColor).frame(width: 12, height: 12)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Average of \(count)").lineLimit(1)
+                Menu(method == .power ? "Power (RMS)" : "dB") {
+                    ForEach(FrequencyResponse.AverageMethod.allCases) { m in
+                        Button(m.rawValue) { live.settings.averageMethod = m == .power ? nil : m }
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .font(.caption)
+            }
+            Spacer(minLength: 0)
+            Button("Save") { live.captureAverage(model) }
+                .disabled(count == 0 || live.blocks == 0)
+                .help("Capture the mics in the average as measurements, in a new summing folder that shows their average")
+        }
+    }
+
+    /// The set with `mic` added or taken out; nil when it ends up empty.
+    private func toggled(_ set: Set<Int>?, _ mic: Int, include: Bool) -> Set<Int>? {
+        var s = set ?? []
+        if include { s.insert(mic) } else { s.remove(mic) }
+        return s.isEmpty ? nil : s
     }
 }
 #endif

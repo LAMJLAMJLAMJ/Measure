@@ -24,6 +24,16 @@ struct LiveSettings: Codable, Equatable {
     var delays: [Int] = []
     /// Virtual EQ on the live curves: drawn as a prediction, never sent anywhere.
     var eq: [EQFilter]?
+    /// Mics not drawn, by index (from 0). Optional, like the fields below, so older settings still load.
+    var hiddenMics: Set<Int>?
+    /// Mics left out of the live average, by index.
+    var averageExcluded: Set<Int>?
+    /// False to hide the live average; nil (the default) shows it.
+    var showAverage: Bool?
+    var averageMethod: FrequencyResponse.AverageMethod?
+
+    func isShown(_ mic: Int) -> Bool { !(hiddenMics ?? []).contains(mic) }
+    func isAveraged(_ mic: Int) -> Bool { !(averageExcluded ?? []).contains(mic) }
 
     var activeEQ: [EQFilter] { (eq ?? []).filter(\.enabled) }
 
@@ -225,14 +235,16 @@ final class LiveAnalyzer {
     }
 
     /// Adds the current transfer function of each mic to the library as an impulse response.
-    func capture(_ model: AppModel) {
-        guard !spectra.isEmpty, blocks > 0 else { return }
+    @discardableResult
+    func capture(_ model: AppModel, mics: Set<Int>? = nil) -> [UUID] {
+        guard !spectra.isEmpty, blocks > 0 else { return [] }
+        var ids: [UUID] = []
         let s = model.settings
         let date = Date()
         let fs = sampleRate
         // Rotate so the direct sound sits 10 ms in, leaving room for the window's left side.
         let pre = Int(0.01 * fs)
-        for (i, cs) in spectra.enumerated() {
+        for (i, cs) in spectra.enumerated() where mics?.contains(i) ?? true {
             let ir = cs.impulseResponse
             let rotated = ir.indices.map { ir[($0 - pre + ir.count) % ir.count] }
             let slot = i < s.mics.count ? s.mics[i] : MicSlot(channel: i + 1)
@@ -246,9 +258,25 @@ final class LiveAnalyzer {
             var withEQ = info
             withEQ.eq = settings.eq
             model.add(Trace(info: withEQ, impulseResponse: rotated))
-            if i == 0 { model.selection = info.id }
+            if ids.isEmpty { model.selection = info.id }
+            ids.append(info.id)
         }
-        model.status = "Captured the live response of \(spectra.count) mic\(spectra.count == 1 ? "" : "s")."
+        model.status = "Captured the live response of \(ids.count) mic\(ids.count == 1 ? "" : "s")."
+        return ids
+    }
+
+    /// Captures the mics in the live average into a new summing folder, which shows their average
+    /// (with the same method) and keeps each mic's measurement too.
+    func captureAverage(_ model: AppModel) {
+        let mics = Set(spectra.indices.filter { settings.isAveraged($0) })
+        let ids = capture(model, mics: mics)
+        guard !ids.isEmpty else { return }
+        let position = model.settings.position
+        let time = Date().formatted(date: .omitted, time: .shortened)
+        let name = (position.isEmpty ? "Live average" : "\(position) · Live average") + " \(time)"
+        let folder = model.addSummingFolder(named: name, method: settings.averageMethod ?? .power)
+        model.move(Set(ids), to: folder)
+        model.status = "Saved the average of \(ids.count) mic\(ids.count == 1 ? "" : "s") as \(name)."
     }
 }
 
@@ -263,11 +291,22 @@ extension AppModel {
         }
     }
 
-    /// The power average of the calibrated live curves, which the target is aligned to and Auto EQ fits.
+    /// The average of the calibrated live curves of the mics in the average (all of them when none is),
+    /// with the chosen method: drawn when shown, and what the target is aligned to and Auto EQ fits.
     /// Nil while the live mode is not running.
     var liveAverageResponse: FrequencyResponse? {
-        let responses = calibratedLiveCurves.map { FrequencyResponse(frequencies: $0.1.map(\.x), magnitude: $0.1.map(\.y)) }
-        return responses.isEmpty ? nil : FrequencyResponse.average(responses, method: .power)
+        let all = calibratedLiveCurves
+        let chosen = all.filter { live.settings.isAveraged($0.0) }
+        let responses = (chosen.isEmpty ? all : chosen).map { FrequencyResponse(frequencies: $0.1.map(\.x), magnitude: $0.1.map(\.y)) }
+        return responses.isEmpty ? nil : FrequencyResponse.average(responses, method: live.settings.averageMethod ?? .power)
+    }
+
+    /// The live average for the chart, when it is shown and averages two or more mics.
+    var liveAveragePoints: [ChartPoint]? {
+        guard live.settings.showAverage != false,
+              live.curves.filter({ live.settings.isAveraged($0.mic) }).count >= 2,
+              let avg = liveAverageResponse else { return nil }
+        return zip(avg.frequencies, avg.magnitude).map { ChartPoint(x: $0, y: $1) }
     }
 
     /// What the live view's target sits on and Auto EQ fits: the live curves' average while there
@@ -472,17 +511,23 @@ struct LiveView: View {
         return parts.joined(separator: " · ")
     }
 
+    private func color(_ mic: Int) -> Color { LiveView.color(mic) }
+
     /// Live curves get their own high-contrast colors, so they stand apart from the traces' palette.
-    private func color(_ mic: Int) -> Color {
+    static func color(_ mic: Int) -> Color {
         let colors: [Color] = [.primary, .red, .cyan, .yellow]
         return colors[mic % colors.count]
     }
+
+    static let averageColor = Color.orange
 
     private func magnitudeChart(_ live: LiveAnalyzer) -> some View {
         let shown = model.visibleTraces.filter(\.hasResponse).map {
             ($0, $0.displayResponse(smoothing: model.smoothing, calibration: model.calibration(for: $0)))
         }
-        let calibrated = model.calibratedLiveCurves
+        let allLive = model.calibratedLiveCurves
+        let calibrated = allLive.filter { live.settings.isShown($0.0) }
+        let average = model.liveAveragePoints
         // The live curves with the Virtual EQ added, drawn dashed while the panel is open.
         let eq = live.settings.activeEQ
         let fs = model.settings.sampleRate
@@ -508,6 +553,9 @@ struct LiveView: View {
         // Data tip series, built in steps to keep each expression simple for the type checker.
         var tips: [TipSeries] = calibrated.map { TipSeries(id: "mic\($0.0)", name: "Live · Mic \($0.0 + 1)", color: color($0.0), points: $0.1) }
         tips += predicted.map { TipSeries(id: "eq\($0.0)", name: "Mic \($0.0 + 1) with EQ", color: color($0.0), points: $0.1) }
+        if let average {
+            tips.append(TipSeries(id: "average", name: "Live average", color: LiveView.averageColor, points: average))
+        }
         tips += shown.map { TipSeries(id: $0.0.id.uuidString, name: $0.0.info.name, color: $0.0.color, points: $0.1) }
         if let targetPoints {
             tips.append(TipSeries(id: "target", name: "Target", color: .gray, points: targetPoints.map { ChartPoint(x: $0.x, y: $0.y) }))
@@ -516,7 +564,7 @@ struct LiveView: View {
             tips.append(TipSeries(id: "eq-trace", name: "\(tracePrediction.0.info.name) with EQ", color: tracePrediction.0.color, points: tracePrediction.1))
         }
         // Scale to the live curves while measuring, otherwise to the traces.
-        let levels = calibrated.isEmpty ? shown.flatMap { $0.1 } : calibrated.flatMap { $0.1 }
+        let levels = allLive.isEmpty ? shown.flatMap { $0.1 } : allLive.flatMap { $0.1 }
         let top = ((levels.filter { $0.x >= 20 }.map(\.y).max() ?? 0) + 5).rounded(.up)
         // Zooming out goes past the preset range, down to 150 dB, as on the sweep view.
         let yFull = (top - 150)...(top + 10)
@@ -537,6 +585,13 @@ struct LiveView: View {
                     LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Mic", "mic\(mic)"))
                         .foregroundStyle(color(mic))
                         .lineStyle(StrokeStyle(lineWidth: 2.8))
+                }
+            }
+            if let average {
+                ForEach(average) { p in
+                    LineMark(x: .value("Frequency", p.x), y: .value("Level", p.y), series: .value("Mic", "average"))
+                        .foregroundStyle(LiveView.averageColor)
+                        .lineStyle(StrokeStyle(lineWidth: 3.5))
                 }
             }
             if let tracePrediction {
@@ -581,7 +636,7 @@ struct LiveView: View {
 
     private func coherenceChart(_ live: LiveAnalyzer) -> some View {
         Chart {
-            ForEach(live.curves) { c in
+            ForEach(live.curves.filter { live.settings.isShown($0.mic) }) { c in
                 ForEach(c.coherence) { p in
                     LineMark(x: .value("Frequency", p.x), y: .value("Coherence", p.y), series: .value("Mic", "mic\(c.mic)"))
                         .foregroundStyle(color(c.mic).opacity(0.7))
@@ -607,7 +662,7 @@ struct LiveView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1))
                 }
             }
-            ForEach(live.curves) { c in
+            ForEach(live.curves.filter { live.settings.isShown($0.mic) }) { c in
                 ForEach(c.phase) { p in
                     PointMark(x: .value("Frequency", p.x), y: .value("Phase", p.y))
                         .foregroundStyle(color(c.mic))
