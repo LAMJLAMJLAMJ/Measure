@@ -88,27 +88,32 @@ final class RoomAcousticsTests: XCTestCase {
     func testLowBandsIgnoreTheFilterRingingFromTheDirectSound() {
         // A loud direct sound on a 1.2 s decay. Filtered forwards, the 63 and 125 Hz bands ring from
         // the direct sound and their EDT comes out a fraction of the decay's; backwards (the default)
-        // the ringing falls before the onset and EDT matches.
+        // the ringing falls before the onset and EDT is what it is without the direct sound. (EDT
+        // itself varies a lot between noise realisations in low bands, so compare like with like.)
         let rt = 1.2, runs = 8
         var options = RoomAcoustics.Options()
         options.lowestBand = 63
         options.highestBand = 125
         var forwards = options
         forwards.timeReversedFiltering = false
-        var edt = [0.0, 0.0], edtForwards = [0.0, 0.0]
+        var edt = [0.0, 0.0], edtWithoutDirect = [0.0, 0.0], edtForwards = [0.0, 0.0]
         for seed in 1...runs {
-            var ir = TestSignals.exponentialDecay(rt: rt, sampleRate: fs, duration: 3, noiseDB: -80, delay: 480,
-                                                  seed: UInt64(seed))
+            let decay = TestSignals.exponentialDecay(rt: rt, sampleRate: fs, duration: 3, noiseDB: -80, delay: 480,
+                                                     seed: UInt64(seed))
+            var ir = decay
             ir[480] += 300
             let backwards = RoomAcoustics.analyze(impulseResponse: ir, sampleRate: fs, options: options).bands
+            let plain = RoomAcoustics.analyze(impulseResponse: decay, sampleRate: fs, options: options).bands
             let ringing = RoomAcoustics.analyze(impulseResponse: ir, sampleRate: fs, options: forwards).bands
             for i in 0..<2 {
                 edt[i] += backwards[i].edt! / Double(runs)
+                edtWithoutDirect[i] += plain[i].edt! / Double(runs)
                 edtForwards[i] += ringing[i].edt! / Double(runs)
             }
         }
         for i in 0..<2 {
-            XCTAssertEqual(edt[i], rt, accuracy: 0.12 * rt, "EDT in band \(i)")
+            XCTAssertEqual(edt[i], edtWithoutDirect[i], accuracy: 0.03 * rt, "EDT in band \(i)")
+            XCTAssertEqual(edtWithoutDirect[i], rt, accuracy: 0.25 * rt, "EDT without the direct sound in band \(i)")
             XCTAssertLessThan(edtForwards[i], 0.5 * rt, "forward-filtered EDT in band \(i)")
         }
     }
