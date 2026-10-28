@@ -125,7 +125,7 @@ final class AppModel {
 
     var devices: [AudioDevice] = []
     var settings: MeasurementSettings { didSet { save(settings, key: "settings") } }
-    var micProfiles: [MicProfile] { didSet { save(micProfiles, key: "mics"); calibrations = [:] } }
+    var micProfiles: [MicProfile] { didSet { save(micProfiles, key: "mics"); calibrations = [:]; refreshSums() } }
     var smoothing: Smoothing = .sixth
     var sti: STISettings { didSet { save(sti, key: "sti") } }
     /// The target curve drawn on the frequency views and used by Auto EQ.
@@ -406,8 +406,7 @@ final class AppModel {
             errorMessage = "Tick two or more traces with a frequency response to average them."
             return
         }
-        let responses = sources.map { t in calibration(for: t).map { t.rawResponse.applyingCalibration($0) } ?? t.rawResponse }
-        guard let avg = FrequencyResponse.average(responses, method: method) else {
+        guard let avg = FrequencyResponse.average(sources.map(calibratedRawResponse), method: method) else {
             errorMessage = "These traces have no frequency range in common."
             return
         }
@@ -424,6 +423,95 @@ final class AppModel {
         add(trace)
         selection = trace.id
         status = "Averaged \(sources.count) traces."
+    }
+
+    /// A trace's response within its window with its mic's calibration applied, unsmoothed.
+    private func calibratedRawResponse(_ t: Trace) -> FrequencyResponse {
+        calibration(for: t).map { t.rawResponse.applyingCalibration($0) } ?? t.rawResponse
+    }
+
+    // MARK: - Summing folders
+
+    /// Adds a summing folder at the top of the list and returns its id. Measurements put in it are
+    /// hidden, and the folder shows their average, remade whenever they change.
+    @discardableResult
+    func addSummingFolder(named name: String = "Summing Folder", method: FrequencyResponse.AverageMethod = .power) -> UUID {
+        let f = TraceFolder(name: name, summing: method, averageID: UUID(), averageColor: traces.count)
+        folders.insert(f, at: 0)
+        saveFolders()
+        return f.id
+    }
+
+    func setSumming(_ method: FrequencyResponse.AverageMethod, for id: UUID) {
+        guard let i = folders.firstIndex(where: { $0.id == id }), folders[i].summing != method else { return }
+        folders[i].summing = method
+        saveFolders()
+        refreshSums([id])
+    }
+
+    /// Shows or hides a summing folder's average (its tick).
+    func setAverageShown(_ shown: Bool, for id: UUID) {
+        guard let i = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[i].averageHidden = shown ? nil : true
+        saveFolders()
+        if let average = folders[i].averageID {
+            if shown && traces.contains(where: { $0.id == average }) { visible.insert(average) } else { visible.remove(average) }
+        }
+    }
+
+    func setAverageColor(_ index: Int, for id: UUID) {
+        guard let i = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[i].averageColor = index
+        saveFolders()
+        refreshSums([id])
+    }
+
+    /// The average a summing folder shows, if it has measurements to average.
+    func average(of folder: TraceFolder) -> Trace? {
+        guard let id = folder.averageID else { return nil }
+        return traces.first { $0.id == id }
+    }
+
+    /// Remakes the averages of the given summing folders, or of all of them.
+    func refreshSums(_ ids: Set<UUID>? = nil) {
+        for folder in folders where folder.isSumming && (ids?.contains(folder.id) ?? true) {
+            refreshSum(folder)
+        }
+    }
+
+    private func refreshSum(_ folder: TraceFolder) {
+        guard let method = folder.summing, let id = folder.averageID else { return }
+        let sources = traces.filter { $0.info.folder == folder.id && $0.info.sumFolder == nil && $0.hasResponse }
+        let existing = traces.firstIndex { $0.id == id }
+        guard let avg = FrequencyResponse.average(sources.map(calibratedRawResponse), method: method) else {
+            // Nothing to average (or no frequency range in common): the folder shows nothing.
+            if let existing { traces.remove(at: existing) }
+            visible.remove(id)
+            return
+        }
+        let names = sources.map(\.info.name)
+        let kind = method == .power ? "power" : "dB"
+        var info = TraceInfo(name: "\(folder.name) (\(kind) average)", source: .average,
+                             sampleRate: sources.first?.info.sampleRate ?? 0, position: sources.first?.info.position ?? "",
+                             notes: "\(method.rawValue) average of " + names.joined(separator: ", "),
+                             colorIndex: folder.averageColor ?? 0)
+        info.id = id
+        info.averagedFrom = names
+        info.sumFolder = folder.id
+        if let existing { info.date = traces[existing].info.date }
+        let trace = Trace(info: info, frequencyResponse: avg)
+        if let existing {
+            traces[existing] = trace
+        } else {
+            traces.append(trace)
+            if folder.averageHidden != true { visible.insert(id) }
+        }
+    }
+
+    /// The summing folders that hold any of these traces.
+    private func summingFolders(of ids: Set<UUID>) -> Set<UUID> {
+        let summing = Set(folders.filter(\.isSumming).map(\.id))
+        return Set(traces.filter { ids.contains($0.id) }.compactMap(\.info.folder)).intersection(summing)
     }
 
     // MARK: - Virtual EQ
@@ -459,9 +547,13 @@ final class AppModel {
     }
 
     func delete(_ ids: Set<UUID>) {
+        // A summing folder's average is not a measurement: only its folder removes it.
+        let ids = ids.filter { id in traces.first { $0.id == id }?.info.sumFolder == nil }
+        let sums = summingFolders(of: ids)
         for id in ids { ProjectStore.delete(id, in: projectFolder) }
         traces.removeAll { ids.contains($0.id) }
         visible.subtract(ids)
+        refreshSums(sums)
         if let s = selection, ids.contains(s) { selection = traces.last?.id }
     }
 
@@ -491,6 +583,7 @@ final class AppModel {
             traces[i].setWindow(window)
             try? ProjectStore.saveInfo(traces[i].info, in: projectFolder)
         }
+        refreshSums(summingFolders(of: ids))
     }
 
     // MARK: - Folders
@@ -508,6 +601,7 @@ final class AppModel {
         guard let i = folders.firstIndex(where: { $0.id == id }) else { return }
         folders[i].name = name
         saveFolders()
+        refreshSums([id])
     }
 
     func setExpanded(_ id: UUID, _ expanded: Bool) {
@@ -516,19 +610,32 @@ final class AppModel {
         saveFolders()
     }
 
-    /// Removes a folder. Its measurements stay, at the top level.
+    /// Removes a folder. Its measurements stay, at the top level; a summing folder's average goes.
     func deleteFolder(_ id: UUID) {
-        move(Set(traces.filter { $0.info.folder == id }.map(\.id)), to: nil)
+        let average = folders.first { $0.id == id }?.averageID
+        move(Set(traces.filter { $0.info.folder == id && $0.info.sumFolder == nil }.map(\.id)), to: nil)
+        if let average {
+            traces.removeAll { $0.id == average }
+            visible.remove(average)
+        }
         folders.removeAll { $0.id == id }
         saveFolders()
     }
 
-    /// Puts traces in a folder, or at the top level for nil.
+    /// Puts traces in a folder, or at the top level for nil. Traces put in a summing folder are hidden:
+    /// the folder shows their average instead.
     func move(_ ids: Set<UUID>, to folder: UUID?) {
+        let ids = ids.filter { id in traces.first { $0.id == id }?.info.sumFolder == nil }
+        var changed = summingFolders(of: ids)
         for i in traces.indices where ids.contains(traces[i].id) && traces[i].info.folder != folder {
             traces[i].info.folder = folder
             try? ProjectStore.saveInfo(traces[i].info, in: projectFolder)
         }
+        if let folder, folders.first(where: { $0.id == folder })?.isSumming == true {
+            visible.subtract(ids)
+            changed.insert(folder)
+        }
+        refreshSums(changed)
         if let folder { setExpanded(folder, true) }
     }
 
@@ -538,8 +645,12 @@ final class AppModel {
 
     func update(_ info: TraceInfo) {
         guard let i = traces.firstIndex(where: { $0.id == info.id }) else { return }
+        let renamed = traces[i].info.name != info.name
         traces[i].info = info
+        guard info.sumFolder == nil else { return }
         try? ProjectStore.saveInfo(info, in: projectFolder)
+        // A summing folder's average lists its measurements by name.
+        if renamed { refreshSums(summingFolders(of: [info.id])) }
     }
 
     /// Opens a project folder. Loading analyses every trace, so it runs off the main thread.
@@ -560,7 +671,9 @@ final class AppModel {
             // Keep anything measured while the project was loading.
             let loadedIDs = Set(loaded.map(\.id))
             traces = loaded + traces.filter { !loadedIDs.contains($0.id) }
-            visible.formUnion(loaded.suffix(4).map(\.id))
+            let summing = Set(folders.filter(\.isSumming).map(\.id))
+            visible.formUnion(loaded.suffix(4).filter { !($0.info.folder.map(summing.contains) ?? false) }.map(\.id))
+            refreshSums()
             selection = selection ?? traces.last?.id
             status = nil
         }
@@ -706,9 +819,10 @@ final class AppModel {
                     continue
                 }
                 traces.append(trace)
-                visible.insert(trace.id)
+                if folders.first(where: { $0.id == trace.info.folder })?.isSumming != true { visible.insert(trace.id) }
             }
             saveFolders()
+            refreshSums()
         }
     }
 

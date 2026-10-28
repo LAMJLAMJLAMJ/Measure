@@ -266,6 +266,8 @@ struct StatusBar: View {
 
 struct TraceList: View {
     @Environment(AppModel.self) private var model
+    /// Summing folders average frequency responses, so they are offered in System tuning only.
+    @AppStorage("mode") private var mode: AppMode = .tuning
     @State private var confirmingClear = false
     @State private var editing: TraceInfo?
     @State private var renaming: UUID?
@@ -279,14 +281,16 @@ struct TraceList: View {
     var body: some View {
         @Bindable var model = model
         let folderIDs = Set(model.folders.map(\.id))
-        let topLevel = model.traces.reversed().filter { trace in
+        // A summing folder's average is drawn by its folder's row, not as a row of its own.
+        let listed = model.traces.reversed().filter { $0.info.sumFolder == nil }
+        let topLevel = listed.filter { trace in
             guard let id = trace.info.folder else { return true }
             return !folderIDs.contains(id)
         }
         List(selection: $model.selection) {
             ForEach(model.folders) { folder in
                 DisclosureGroup(isExpanded: expanded(folder.id)) {
-                    ForEach(model.traces.reversed().filter { trace in trace.info.folder == folder.id }) { trace in
+                    ForEach(listed.filter { trace in trace.info.folder == folder.id }) { trace in
                         row(trace)
                     }
                 } label: {
@@ -381,6 +385,12 @@ struct TraceList: View {
                     model.move([trace.id], to: id)
                     startRenameFolder(id)
                 }
+                Button("New Summing Folder…") {
+                    let id = model.addSummingFolder()
+                    model.move([trace.id], to: id)
+                    startRenameFolder(id)
+                }
+                .disabled(mode != .tuning)
             }
             Menu("Colour") {
                 ForEach(TracePalette.names.indices, id: \.self) { i in
@@ -413,7 +423,16 @@ struct TraceList: View {
         return true
     }
 
+    @ViewBuilder
     private func folderLabel(_ folder: TraceFolder) -> some View {
+        if folder.isSumming {
+            summingFolderLabel(folder)
+        } else {
+            plainFolderLabel(folder)
+        }
+    }
+
+    private func plainFolderLabel(_ folder: TraceFolder) -> some View {
         let members = model.traces.filter { $0.info.folder == folder.id }.map(\.id)
         let shown = Binding(
             get: { !members.isEmpty && members.allSatisfy { model.visible.contains($0) } },
@@ -425,17 +444,7 @@ struct TraceList: View {
                 .disabled(members.isEmpty)
                 .help("Show or hide every measurement in this folder")
             Image(systemName: "folder").foregroundStyle(.secondary)
-            if renamingFolder == folder.id {
-                TextField("Folder name", text: $folderName)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($folderFocused)
-                    .onSubmit { commitFolderRename(folder.id) }
-                    .onExitCommand { renamingFolder = nil }
-                    .onChange(of: folderFocused) { _, focused in if !focused { commitFolderRename(folder.id) } }
-            } else {
-                Text(folder.name).fontWeight(.medium).lineLimit(1)
-                    .onTapGesture(count: 2) { startRenameFolder(folder.id) }
-            }
+            folderTitle(folder)
             Spacer(minLength: 0)
             Text("\(members.count)").font(.caption).foregroundStyle(.secondary)
         }
@@ -451,6 +460,69 @@ struct TraceList: View {
         }
     }
 
+    /// A summing folder: its tick shows its measurements' average, drawn in the folder's colour.
+    private func summingFolderLabel(_ folder: TraceFolder) -> some View {
+        let members = model.traces.filter { $0.info.folder == folder.id && $0.info.sumFolder == nil }
+        let average = model.average(of: folder)
+        let method = folder.summing ?? .power
+        let shown = Binding(
+            get: { average.map { model.visible.contains($0.id) } ?? false },
+            set: { model.setAverageShown($0, for: folder.id) })
+        return HStack(spacing: 8) {
+            Toggle("", isOn: shown)
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .disabled(average == nil)
+                .help("Show or hide the average of this folder's measurements")
+            Circle().fill(TracePalette.color(folder.averageColor ?? 0)).frame(width: 12, height: 12)
+                .overlay(Circle().strokeBorder(.secondary.opacity(0.5), lineWidth: 0.5))
+            Image(systemName: "sum").foregroundStyle(.secondary)
+            folderTitle(folder)
+            Spacer(minLength: 0)
+            Text("\(method == .power ? "RMS" : "dB") avg of \(members.filter(\.hasResponse).count)")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .contentShape(Rectangle())
+        .help(average == nil
+              ? "Drop measurements here: they are hidden and their average is shown"
+              : "\(method.rawValue) average of " + members.map(\.info.name).joined(separator: ", "))
+        .dropDestination(for: String.self) { items, _ in drop(items, into: folder.id) }
+        .contextMenu {
+            Button("Rename") { startRenameFolder(folder.id) }
+            Menu("Average") {
+                ForEach(FrequencyResponse.AverageMethod.allCases) { m in
+                    Toggle(m.rawValue, isOn: Binding(get: { method == m }, set: { if $0 { model.setSumming(m, for: folder.id) } }))
+                }
+            }
+            Menu("Colour") {
+                ForEach(TracePalette.names.indices, id: \.self) { i in
+                    Button(TracePalette.names[i]) { model.setAverageColor(i, for: folder.id) }
+                }
+            }
+            Button("Show Only the Average") { if let average { model.visible = [average.id] } }
+                .disabled(average == nil)
+            Divider()
+            Button("Delete Folder") { model.deleteFolder(folder.id) }
+                .help("Removes the folder and its average; its measurements stay, at the top level")
+        }
+    }
+
+    private func folderTitle(_ folder: TraceFolder) -> some View {
+        Group {
+            if renamingFolder == folder.id {
+                TextField("Folder name", text: $folderName)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($folderFocused)
+                    .onSubmit { commitFolderRename(folder.id) }
+                    .onExitCommand { renamingFolder = nil }
+                    .onChange(of: folderFocused) { _, focused in if !focused { commitFolderRename(folder.id) } }
+            } else {
+                Text(folder.name).fontWeight(.medium).lineLimit(1)
+                    .onTapGesture(count: 2) { startRenameFolder(folder.id) }
+            }
+        }
+    }
+
     /// New Folder, and a place to drop measurements to take them out of their folders.
     private var bottomBar: some View {
         HStack(spacing: 8) {
@@ -461,6 +533,16 @@ struct TraceList: View {
             }
             .buttonStyle(.borderless)
             .help("Add a folder to the list, then drag measurements onto it")
+            Button {
+                startRenameFolder(model.addSummingFolder())
+            } label: {
+                Label("Summing Folder", systemImage: "sum")
+            }
+            .buttonStyle(.borderless)
+            .disabled(mode != .tuning)
+            .help(mode == .tuning
+                  ? "Add a summing folder: measurements dragged onto it are hidden and their average is shown"
+                  : "Summing folders average frequency responses: switch to System tuning to add one")
             Button {
                 confirmingClear = true
             } label: {
