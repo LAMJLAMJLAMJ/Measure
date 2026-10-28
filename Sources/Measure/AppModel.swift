@@ -498,6 +498,7 @@ final class AppModel {
         info.id = id
         info.averagedFrom = names
         info.sumFolder = folder.id
+        info.eq = folder.averageEQ
         if let existing { info.date = traces[existing].info.date }
         let trace = Trace(info: info, frequencyResponse: avg)
         if let existing {
@@ -650,7 +651,14 @@ final class AppModel {
         guard let i = traces.firstIndex(where: { $0.id == info.id }) else { return }
         let renamed = traces[i].info.name != info.name
         traces[i].info = info
-        guard info.sumFolder == nil else { return }
+        if let folder = info.sumFolder {
+            // A summing folder's average is never saved, so its folder keeps its Virtual EQ.
+            if let f = folders.firstIndex(where: { $0.id == folder }), folders[f].averageEQ != info.eq {
+                folders[f].averageEQ = info.eq
+                saveFolders()
+            }
+            return
+        }
         try? ProjectStore.saveInfo(info, in: projectFolder)
         // A summing folder's average lists its measurements by name.
         if renamed { refreshSums(summingFolders(of: [info.id])) }

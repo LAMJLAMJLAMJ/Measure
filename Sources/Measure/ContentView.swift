@@ -473,6 +473,7 @@ struct TraceList: View {
         let members = model.traces.filter { $0.info.folder == folder.id && $0.info.sumFolder == nil }
         let average = model.average(of: folder)
         let method = folder.summing ?? .power
+        let selected = average != nil && model.selection == average?.id
         let shown = Binding(
             get: { average.map { model.visible.contains($0.id) } ?? false },
             set: { model.setAverageShown($0, for: folder.id) })
@@ -490,7 +491,11 @@ struct TraceList: View {
             Text("\(method == .power ? "RMS" : "dB") avg of \(members.filter(\.hasResponse).count)")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
+        .padding(.horizontal, 4)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Color.accentColor.opacity(selected ? 0.25 : 0)))
         .contentShape(Rectangle())
+        // Clicking the folder selects its average, so the Virtual EQ and the other panels work on it.
+        .simultaneousGesture(TapGesture().onEnded { if let average { model.selection = average.id } })
         .help(average == nil
               ? "Drop measurements here: they are hidden and their average is shown"
               : "\(method.rawValue) average of " + members.map(\.info.name).joined(separator: ", "))
@@ -509,6 +514,9 @@ struct TraceList: View {
             }
             Button("Show Only the Average") { if let average { model.visible = [average.id] } }
                 .disabled(average == nil)
+            Button("Select the Average") { if let average { model.selection = average.id } }
+                .disabled(average == nil)
+                .help("Selects the average, for the Virtual EQ and the other panels")
             Divider()
             Button("Delete Folder") { model.deleteFolder(folder.id) }
                 .help("Removes the folder and its average; its measurements stay, at the top level")

@@ -65,6 +65,8 @@ struct TraceFolder: Codable, Identifiable, Hashable {
     var averageHidden: Bool?
     /// The average's palette colour.
     var averageColor: Int?
+    /// The Virtual EQ tried on the average, kept here because the average itself is never saved.
+    var averageEQ: [EQFilter]?
 
     var isSumming: Bool { summing != nil }
 }
