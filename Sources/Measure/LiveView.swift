@@ -1,10 +1,12 @@
 #if os(macOS)
+import AppKit
 import Charts
 import Foundation
 import MeasureAudio
 import MeasureDSP
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Live analyser settings, remembered between launches.
 struct LiveSettings: Codable, Equatable {
@@ -279,6 +281,9 @@ struct LiveView: View {
     @AppStorage("showVirtualEQ") private var showVirtualEQ = false
     @AppStorage("showTarget") private var showTarget = false
     @State private var range: Double = 50
+    /// A joke: a picture of what each part of the spectrum sounds like, behind the live response.
+    @AppStorage("americanMode") private var americanMode = false
+    @State private var americanPicture = AmericanMode.picture()
     /// Whether this is the Frequency view, which has the Virtual EQ panel.
     var showsEQ = false
 
@@ -329,6 +334,7 @@ struct LiveView: View {
                     .disabled(!live.isRunning || live.blocks == 0)
                     .help("Add each mic's current response to the list as an impulse response")
                 if showsEQ {
+                    americanModeToggle
                     TargetControl()
                     Toggle(isOn: $showVirtualEQ) { Label("Virtual EQ", systemImage: "slider.vertical.3") }
                         .toggleStyle(.button)
@@ -365,6 +371,25 @@ struct LiveView: View {
                     .layoutPriority(-1)
             }
         }
+    }
+
+    /// The first time it is turned on, it asks for the picture.
+    private var americanModeToggle: some View {
+        Toggle("American Mode", isOn: Binding(
+            get: { americanMode && americanPicture != nil },
+            set: { on in
+                if on && americanPicture == nil { americanPicture = AmericanMode.choosePicture() }
+                americanMode = on && americanPicture != nil
+            }))
+            .help("Tubby, muddy, boxy, honky, barky, edgy, sibilant. Right-click to choose another picture.")
+            .contextMenu {
+                Button("Choose Picture…") {
+                    if let picture = AmericanMode.choosePicture() {
+                        americanPicture = picture
+                        americanMode = true
+                    }
+                }
+            }
     }
 
     /// Says what the dashed lines are while the Virtual EQ panel is open.
@@ -467,6 +492,13 @@ struct LiveView: View {
         return chart
         .chartXScale(domain: 10...20_000, type: .log)
         .chartYScale(domain: (top - range)...top)
+        .chartPlotStyle { plot in
+            plot.background {
+                if showsEQ && americanMode, let americanPicture {
+                    Image(nsImage: americanPicture).resizable().opacity(0.4)
+                }
+            }
+        }
         .chartXAxis { frequencyAxis }
         .chartYAxisLabel("dB re reference")
         .chartLegend(.hidden)
@@ -527,6 +559,29 @@ struct LiveView: View {
             AxisTick()
             AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
         }
+    }
+}
+/// American Mode's picture, chosen once and kept in Application Support.
+enum AmericanMode {
+    static var file: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Measure/American Mode.png")
+    }
+
+    static func picture() -> NSImage? { NSImage(contentsOf: file) }
+
+    /// Asks for a picture, keeps a copy and returns it, or nil when cancelled.
+    @MainActor
+    static func choosePicture() -> NSImage? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.message = "Choose the picture for American Mode"
+        guard panel.runModal() == .OK, let url = panel.url, let image = NSImage(contentsOf: url),
+              let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        else { return nil }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? png.write(to: file)
+        return image
     }
 }
 #endif
