@@ -529,18 +529,39 @@ struct TraceList: View {
 
     /// New Folder, and a place to drop measurements to take them out of their folders.
     private var bottomBar: some View {
+        // With labels when the sidebar is wide enough, icons only when it is not.
+        ViewThatFits(in: .horizontal) {
+            bottomButtons(labels: true)
+            bottomButtons(labels: false)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        .contentShape(Rectangle())
+        .dropDestination(for: String.self) { items, _ in drop(items, into: nil) }
+        .confirmationDialog("Clear all \(model.traces.count) measurements?", isPresented: $confirmingClear) {
+            Button("Clear All", role: .destructive) { model.clearAll() }
+        } message: {
+            Text(model.isWorkingFolder
+                 ? "Every measurement and folder is removed and deleted. Save a set first (⇧⌘S) to keep them."
+                 : "The list is emptied and a new, empty working list starts. \(model.projectFolder.lastPathComponent) stays on disk as saved.")
+        }
+    }
+
+    private func bottomButtons(labels: Bool) -> some View {
         HStack(spacing: 8) {
             Button {
                 startRenameFolder(model.addFolder())
             } label: {
-                Label("New Folder", systemImage: "folder.badge.plus")
+                bottomLabel("New Folder", systemImage: "folder.badge.plus", labels: labels)
             }
             .buttonStyle(.borderless)
             .help("Add a folder to the list, then drag measurements onto it")
             Button {
                 startRenameFolder(model.addSummingFolder())
             } label: {
-                Label("Summing Folder", systemImage: "sum")
+                bottomLabel("Summing Folder", systemImage: "sum", labels: labels)
             }
             .buttonStyle(.borderless)
             .disabled(mode != .tuning)
@@ -550,28 +571,26 @@ struct TraceList: View {
             Button {
                 confirmingClear = true
             } label: {
-                Label("Clear All", systemImage: "trash")
+                bottomLabel("Clear All", systemImage: "trash", labels: labels)
             }
             .buttonStyle(.borderless)
             .disabled(model.traces.isEmpty)
             .help("Empty the measurement list. Unsaved measurements are deleted; saved sets stay on disk.")
-            .confirmationDialog("Clear all \(model.traces.count) measurements?", isPresented: $confirmingClear) {
-                Button("Clear All", role: .destructive) { model.clearAll() }
-            } message: {
-                Text(model.isWorkingFolder
-                     ? "Every measurement and folder is removed and deleted. Save a set first (⇧⌘S) to keep them."
-                     : "The list is emptied and a new, empty working list starts. \(model.projectFolder.lastPathComponent) stays on disk as saved.")
-            }
-            Spacer(minLength: 0)
-            if !model.folders.isEmpty {
+            if labels && !model.folders.isEmpty {
+                Spacer(minLength: 8)
                 Text("Drop here for the top level").font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.bar)
-        .contentShape(Rectangle())
-        .dropDestination(for: String.self) { items, _ in drop(items, into: nil) }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    @ViewBuilder
+    private func bottomLabel(_ title: String, systemImage: String, labels: Bool) -> some View {
+        if labels {
+            Label(title, systemImage: systemImage)
+        } else {
+            Label(title, systemImage: systemImage).labelStyle(.iconOnly)
+        }
     }
 
     private func startRenameFolder(_ id: UUID) {
