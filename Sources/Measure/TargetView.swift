@@ -46,8 +46,8 @@ extension AppModel {
         let range = "\(frequencyText(t.low)) to \(frequencyText(t.high))"
         let summary = n == 0
             ? String(format: "No filter would help: the deviation from the target is %.1f dB RMS from %@.", result.rmsBefore, range)
-            : String(format: "%d filter%@ added. Deviation from the target, %@: %.1f dB RMS before, %.1f dB after.",
-                     n, n == 1 ? "" : "s", range, result.rmsBefore, result.rmsAfter)
+            : String(format: "%d filter%@ added. Deviation from the target, %@: %.1f dB RMS before, %.1f dB after; highest peak above it %.1f dB before, %.1f dB after.",
+                     n, n == 1 ? "" : "s", range, result.rmsBefore, result.rmsAfter, result.peakBefore, result.peakAfter)
         return (kept + added, summary)
     }
 
@@ -261,8 +261,11 @@ struct AutoEQSection: View {
         return Form {
             Stepper("Up to \(model.autoEQSettings.maxFilters) filters", value: $model.autoEQSettings.maxFilters, in: 1...20)
             LabeledContent("Largest boost") { field($model.autoEQSettings.maxBoost, unit: "dB") }
+            LabeledContent("Largest total boost") { field($model.autoEQSettings.maxTotalBoost, unit: "dB") }
             LabeledContent("Largest cut") { field($model.autoEQSettings.maxCut, unit: "dB") }
             LabeledContent("Narrowest Q") { field($model.autoEQSettings.maxQ, unit: "") }
+            LabeledContent("Peaks allowed above target") { field($model.autoEQSettings.peakAllowance, unit: "dB") }
+                .disabled(model.target.hasTolerance)
             Toggle("Shelves at the ends", isOn: $model.autoEQSettings.shelves)
             Picker("Fit to the response at", selection: $model.autoEQSettings.smoothing) {
                 Text("1/3 octave").tag(3.0)
@@ -270,11 +273,11 @@ struct AutoEQSection: View {
                 Text("1/12 octave").tag(12.0)
                 Text("1/24 octave").tag(24.0)
             }
-            Text("Boosts are kept small because a dip is often a cancellation that boosting cannot fill. The fit is a starting point: check it by ear and measure again.")
+            Text("Peaks come first: anything above the target's tolerance band (or the allowance, when the target has no band) counts ten times over, so the fit keeps the response under it and accepts deeper dips. Boosts are kept small and broad because a dip is often a cancellation that boosting cannot fill. The fit is a starting point: check it by ear and measure again.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
-        .frame(width: 320, height: 330)
+        .frame(width: 320, height: 420)
     }
 
     private func field(_ value: Binding<Double>, unit: String) -> some View {

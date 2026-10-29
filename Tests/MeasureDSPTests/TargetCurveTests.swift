@@ -134,4 +134,43 @@ final class TargetCurveTests: XCTestCase {
         XCTAssertLessThanOrEqual(two.filters.count, 2)
         XCTAssertLessThan(two.rmsAfter, two.rmsBefore)
     }
+
+    func testAutoEQRemovesAPeakBeforeFillingADip() {
+        // A broad 6 dB dip at 300 Hz and a 3.5 dB peak at 2 kHz, with one filter to spend: cutting the
+        // peak, not boosting into the dip.
+        let measured = response(level: 0, filters: [EQFilter(kind: .peak, frequency: 300, gain: -6, q: 1),
+                                                    EQFilter(kind: .peak, frequency: 2000, gain: 3.5, q: 2)])
+        let target = TargetCurve.Preset.flat.curve
+        let result = AutoEQ.fit(response: measured, target: target, alignment: target.alignment(to: measured),
+                                settings: AutoEQ.Settings(maxFilters: 1), sampleRate: fs)
+        XCTAssertEqual(result.filters.count, 1)
+        let cut = result.filters[0]
+        XCTAssertLessThan(cut.gain, -2.5, ParametricEQ.description(result.filters))
+        XCTAssertLessThan(abs(log2(cut.frequency / 2000)), 0.25, ParametricEQ.description(result.filters))
+        XCTAssertGreaterThan(result.peakBefore, 3)
+        XCTAssertLessThan(result.peakAfter, 1)
+    }
+
+    func testAutoEQLimitsTheTotalBoostAndKeepsBoostsBroad() {
+        // Two narrow dips side by side: no stack of boosts, and no narrow boost, fills them.
+        let measured = response(level: 0, filters: [EQFilter(kind: .peak, frequency: 400, gain: -6, q: 4),
+                                                    EQFilter(kind: .peak, frequency: 500, gain: -6, q: 4)])
+        let target = TargetCurve.Preset.flat.curve
+        let settings = AutoEQ.Settings(maxBoost: 3, maxTotalBoost: 2)
+        let result = AutoEQ.fit(response: measured, target: target, alignment: target.alignment(to: measured),
+                                settings: settings, sampleRate: fs)
+        let f = (0..<360).map { 20 * pow(2, Double($0) / 36) }
+        XCTAssertLessThanOrEqual(f.map { ParametricEQ.gainDB(result.filters, at: $0, sampleRate: fs) }.max() ?? 0, 2.06)
+        XCTAssertTrue(result.filters.allSatisfy { $0.gain <= 0 || $0.q <= AutoEQ.boostMaxQ + 1e-9 })
+    }
+
+    func testAutoEQSettingsSavedBeforeTheTotalBoostStillLoad() throws {
+        let old = #"{"maxFilters":5,"maxBoost":2,"maxCut":10,"maxQ":8,"shelves":false,"smoothing":3}"#
+        let settings = try JSONDecoder().decode(AutoEQ.Settings.self, from: Data(old.utf8))
+        XCTAssertEqual(settings.maxFilters, 5)
+        XCTAssertEqual(settings.maxCut, 10)
+        XCTAssertFalse(settings.shelves)
+        XCTAssertEqual(settings.maxTotalBoost, 2)
+        XCTAssertEqual(settings.peakAllowance, 1)
+    }
 }
