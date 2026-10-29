@@ -356,6 +356,34 @@ struct LiveView: View {
         }
     }
 
+    /// The reference: Internal (the generated noise, so only with Pink noise on) or any input, which
+    /// becomes the loopback input of Measurement Setup. Tag 0 is Internal, n is input n, -1 is none yet.
+    private func referencePicker(_ live: LiveAnalyzer) -> some View {
+        let inputs = model.inputDevice?.inputChannels ?? 0
+        let selection = Binding<Int>(
+            get: { live.settings.internalReference && live.settings.generator ? 0 : (model.settings.loopbackInput ?? -1) },
+            set: { v in
+                if v == 0 {
+                    live.settings.internalReference = true
+                } else if v > 0 {
+                    live.settings.internalReference = false
+                    model.settings.loopbackInput = v
+                }
+            })
+        return Picker("Reference", selection: selection) {
+            if live.settings.generator { Text("Internal").tag(0) }
+            if model.settings.loopbackInput == nil && !(live.settings.internalReference && live.settings.generator) {
+                Text("Choose an input").tag(-1)
+            }
+            ForEach(Array(stride(from: 1, through: max(inputs, model.settings.loopbackInput ?? 0), by: 1)), id: \.self) { n in
+                Text("Input \(n)").tag(n)
+            }
+        }
+        .frame(width: 190)
+        .disabled(live.isRunning)
+        .help("Internal: the generated noise is the reference, no cable needed (Pink noise only). An input: the signal fed to the system, which also works with programme; it is the loopback input of Measurement Setup.")
+    }
+
     private func controls(_ live: LiveAnalyzer) -> some View {
         @Bindable var live = live
         // The controls wrap onto further lines when the window (or the Virtual EQ panel beside it)
@@ -370,13 +398,7 @@ struct LiveView: View {
                 Toggle("Pink noise", isOn: $live.settings.generator)
                     .disabled(live.isRunning)
                     .help("Play pink noise on the measurement output. Off: measure with programme or any signal fed to the reference input.")
-                Picker("Reference", selection: $live.settings.internalReference) {
-                    Text("Internal").tag(true)
-                    Text(model.settings.loopbackInput.map { "Input \($0)" } ?? "Loopback input").tag(false)
-                }
-                .frame(width: 190)
-                .disabled(live.isRunning || !live.settings.generator)
-                .help("Internal: the generated noise is the reference, no cable needed. Input: the loopback input carries it, which also works with programme.")
+                referencePicker(live)
                 if live.settings.generator {
                     Slider(value: $live.settings.level, in: -60...0, step: 1).frame(width: 120)
                     Text("\(Int(live.settings.level)) dBFS peak").monospacedDigit().frame(width: 100, alignment: .leading)
