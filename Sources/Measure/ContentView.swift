@@ -174,23 +174,29 @@ struct ContentView: View {
             .help("Start the meters, averages, maxima and history again")
     }
 
+    /// The same buttons, icons and order as System tuning's Sweep: Import, Check Levels, Measure. Import
+    /// and Measure also open a menu, for recordings, which levels and noise need.
     @ViewBuilder private var acousticsActions: some View {
-        CheckLevelsButton()
         Menu {
-            Button("Sweep (impulse response)") { Task { await model.measure() } }
-            Button("Plain recording…") { showPlainRecording = true }
-        } label: {
-            Label(model.isMeasuring ? "Recording" : "Record", systemImage: model.isMeasuring ? "waveform" : "record.circle")
-        }
-        .disabled(model.isMeasuring)
-        .help("Record a sweep for an impulse response (⌘M), or a plain recording for levels and noise")
-        Menu {
-            Button("Impulse responses or frequency responses…") { importFiles(model) }
+            Button("Impulse Responses or Frequency Responses…") { importFiles(model) }
             Button("Recordings…") { importRecordings(model) }
         } label: {
-            Label("Load", systemImage: "square.and.arrow.down")
+            Label("Import", systemImage: "square.and.arrow.down")
+        } primaryAction: {
+            importFiles(model)
         }
-        .help("Load WAV impulse responses or REW text exports (⌘I), or WAV recordings for levels and noise")
+        .help("Import WAV impulse responses or REW text exports (⌘I). Click and hold for WAV recordings, for levels and noise.")
+        CheckLevelsButton()
+        Menu {
+            Button("Sweep (Impulse Response)") { Task { await model.measure() } }
+            Button("Plain Recording…") { showPlainRecording = true }
+        } label: {
+            Label(model.isMeasuring ? "Measuring" : "Measure", systemImage: model.isMeasuring ? "waveform" : "record.circle")
+        } primaryAction: {
+            Task { await model.measure() }
+        }
+        .disabled(model.isMeasuring)
+        .help("Play the sweep and record (⌘M). Click and hold for a plain recording, for levels and noise.")
     }
 
     /// ⌘1 to ⌘7 pick a view in the current mode; ⌥⌘1 to ⌥⌘3 switch mode.
