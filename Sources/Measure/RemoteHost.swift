@@ -171,6 +171,16 @@ final class RemoteHost {
         case .setHistoryRange(let seconds):
             guard [300, 900, 3600, 14_400, 0].contains(seconds) else { return }
             model.monitor.settings.historyRange = seconds
+        case .setMeterMic(let index, let mic):
+            guard model.monitor.settings.meters.indices.contains(index), model.settings.mics.indices.contains(mic) else { return }
+            model.monitor.settings.meters[index].mic = mic
+        case .setMeterWeighting(let index, let name):
+            guard model.monitor.settings.meters.indices.contains(index),
+                  let w = SoundLevel.FrequencyWeighting(rawValue: name) else { return }
+            model.monitor.settings.meters[index].weighting = w
+        case .setMeterAverage(let index, let name):
+            guard model.monitor.settings.meters.indices.contains(index), let a = LevelAverage(rawValue: name) else { return }
+            model.monitor.settings.meters[index].average = a
         case .captureLive:
             model.live.captureAll(model)
         case .findLiveDelay:
@@ -285,6 +295,7 @@ final class RemoteHost {
         s.rtaFraction = monitor.settings.rtaFraction
         s.rtaWeighting = monitor.settings.rtaWeighting.rawValue
         s.rtaWeightings = SoundLevel.FrequencyWeighting.allCases.map(\.rawValue)
+        s.meterAverages = LevelAverage.allCases.map(\.rawValue)
         s.historyRange = monitor.settings.historyRange
         s.limitA = monitor.settings.limitA
         s.limitC = monitor.settings.limitC
@@ -390,9 +401,12 @@ final class RemoteHost {
             let limit = monitor.settings.limit(meter.weighting)
             let over = limit.map { (level ?? -200) > $0 } ?? false
             let name = meter.mic < micNames.count ? micNames[meter.mic] : "Mic \(meter.mic + 1)"
+            let unit = monitor.unit(model, mic: meter.mic)
             return RemoteMeter(label: "\(name) · \(meter.average.label(meter.weighting))",
-                               value: level, unit: monitor.unit(model, mic: meter.mic),
-                               maximum: maximum, overLimit: over)
+                               value: level, unit: unit,
+                               maximum: maximum, overLimit: over,
+                               name: name, detail: "\(unit) \(meter.weighting.rawValue) \(meter.average.rawValue)",
+                               limit: limit, clipping: (mic?.recentPeak ?? -200) > -1)
         }
     }
 

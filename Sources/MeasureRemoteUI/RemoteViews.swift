@@ -629,7 +629,7 @@ struct MonitorTab: View {
     let client: RemoteClient
     let state: RemoteState
 
-    private let columns = [GridItem(.adaptive(minimum: 200), spacing: 12)]
+    private let columns = [GridItem(.adaptive(minimum: 240), spacing: 12)]
 
     var body: some View {
         ScrollView {
@@ -659,8 +659,8 @@ struct MonitorTab: View {
                                            description: Text("Start monitoring to see the levels, the RTA and the history."))
                 } else {
                     LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(Array(state.meters.enumerated()), id: \.offset) { _, meter in
-                            MeterTile(meter: meter)
+                        ForEach(Array(state.meters.enumerated()), id: \.offset) { i, meter in
+                            MeterTile(client: client, state: state, meter: meter, index: i)
                         }
                     }
                     RTASection(client: client, state: state)
@@ -834,26 +834,137 @@ struct HistorySection: View {
     }
 }
 
+/// One SPL meter, laid out as the Mac's card and Smaart's: a vertical tube on the left, the mic's name
+/// over a big number, the maximum with a status light, and "dB SPL A Slow". The name and that line are
+/// menus that change the meter on the Mac. A Mac without the card's fields gets the plain tile.
 struct MeterTile: View {
+    let client: RemoteClient
+    let state: RemoteState
     let meter: RemoteMeter
+    let index: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(meter.label).font(.headline).foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
+        HStack(spacing: 14) {
+            RemoteTubeMeter(level: meter.value, maximum: meter.maximum, limit: meter.limit, spl: meter.unit == "dB SPL")
+                .frame(width: 22)
+            VStack(spacing: 4) {
+                micMenu
                 Text(meter.value.map { String(format: "%.1f", $0) } ?? "–")
-                    .font(.system(size: 44, weight: .semibold, design: .rounded))
+                    .font(.system(size: 48, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                Text(meter.unit).foregroundStyle(.secondary)
+                    .foregroundStyle(meter.overLimit ? Color.red : Color.green)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                HStack(spacing: 8) {
+                    Text("Max: " + (meter.maximum.map { String(format: "%.1f", $0) } ?? "–")).monospacedDigit()
+                    Circle().fill(statusColor).frame(width: 12, height: 12)
+                }
+                .font(.callout)
+                if meter.clipping == true {
+                    Text("Overload").font(.caption.bold()).foregroundStyle(.red)
+                }
+                unitMenu
             }
-            .foregroundStyle(meter.overLimit ? Color.red : Color.primary)
-            if let maximum = meter.maximum {
-                Text(String(format: "Max %.1f", maximum)).font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+        }
+        .frame(height: 170)
+        .padding(12)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(meter.overLimit ? Color.red : Color.clear, lineWidth: 2))
+    }
+
+    /// Green while the level is fine, yellow within 6 dB of the limit, red over it or while clipping.
+    private var statusColor: Color {
+        guard let value = meter.value else { return .gray }
+        if meter.clipping == true || meter.overLimit { return .red }
+        if let limit = meter.limit, value > limit - 6 { return .yellow }
+        return .green
+    }
+
+    @ViewBuilder private var micMenu: some View {
+        let name = meter.name ?? meter.label
+        if meter.name != nil && state.mics.count > 1 {
+            Menu {
+                ForEach(Array(state.mics.enumerated()), id: \.offset) { i, mic in
+                    Button(mic.name) { client.send(.setMeterMic(index: index, mic: i)) }
+                }
+            } label: {
+                Text(name).font(.headline).lineLimit(1)
+            }
+        } else {
+            Text(name).font(.headline).lineLimit(1)
+        }
+    }
+
+    @ViewBuilder private var unitMenu: some View {
+        if let detail = meter.detail {
+            Menu {
+                Section("Weighting") {
+                    ForEach(state.rtaWeightings, id: \.self) { w in
+                        Button("\(w) weighting") { client.send(.setMeterWeighting(index: index, weighting: w)) }
+                    }
+                }
+                Section("Average") {
+                    ForEach(state.meterAverages, id: \.self) { a in
+                        Button(a) { client.send(.setMeterAverage(index: index, average: a)) }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(detail).lineLimit(1)
+                    Image(systemName: "chevron.down").font(.caption)
+                }
+                .foregroundStyle(.secondary)
+            }
+        } else {
+            Text(meter.unit).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// A vertical meter tube: the level from the bottom in 10 dB segments, green, yellow within 6 dB of the
+/// limit and red above it, with a white line at the maximum. 30 to 130 dB SPL, or -100 to 0 dB.
+struct RemoteTubeMeter: View {
+    let level: Double?
+    let maximum: Double?
+    let limit: Double?
+    let spl: Bool
+
+    private var range: ClosedRange<Double> { spl ? 30...130 : -100...0 }
+
+    private func fraction(_ v: Double?) -> CGFloat {
+        let span = range.upperBound - range.lowerBound
+        return CGFloat(v.map { min(1, max(0, ($0 - range.lowerBound) / span)) } ?? 0)
+    }
+
+    private var color: Color {
+        guard let level, let limit else { return .green }
+        return level > limit ? .red : level > limit - 6 ? .yellow : .green
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let inner = geo.size.height - 6
+            ZStack(alignment: .bottom) {
+                Capsule().fill(Color.black.opacity(0.75))
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Rectangle().fill(color.gradient).frame(height: inner * fraction(level))
+                }
+                .padding(3)
+                .clipShape(Capsule().inset(by: 3))
+                ForEach(1..<10, id: \.self) { k in
+                    Rectangle().fill(Color.black.opacity(0.6)).frame(height: 1)
+                        .offset(y: -3 - inner * CGFloat(k) / 10)
+                }
+                if let maximum, maximum > range.lowerBound {
+                    Rectangle().fill(Color.white.opacity(0.9)).frame(height: 1.5)
+                        .padding(.horizontal, 3)
+                        .offset(y: -3 - inner * fraction(maximum))
+                }
+                Capsule().strokeBorder(Color.gray.opacity(0.7), lineWidth: 2)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
