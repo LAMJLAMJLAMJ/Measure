@@ -432,6 +432,11 @@ struct LiveView: View {
                 }
                 .frame(width: 140)
                 .onChange(of: range) { zoom.y = nil }
+                }
+            }
+            // Find Delay and Reset keep their place on a row of their own, whatever the window's width,
+            // with the delays beside them.
+            HStack(spacing: 8) {
                 Button("Find Delay") {
                     foundDelays = live.foundDelays()
                     proposedDelays = foundDelays
@@ -442,13 +447,12 @@ struct LiveView: View {
                         if let proposedDelays { delaySheet(live, proposedDelays) }
                     }
                 Button("Reset") { live.clearDelays(); live.reset() }
-                }
-            }
-            HStack {
+                    .help("Clear the delays and start the averaging again")
                 Text(statusText(live)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(-1)
+                Spacer(minLength: 0)
             }
         }
     }
