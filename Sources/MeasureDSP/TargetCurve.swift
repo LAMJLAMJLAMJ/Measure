@@ -14,6 +14,18 @@ public struct TargetCurve: Codable, Hashable {
         }
     }
 
+    /// The tolerance band at one frequency: how far above and below the target it reaches, dB (both positive).
+    public struct ToleranceBreakpoint: Codable, Hashable {
+        public var frequency: Double
+        public var above: Double
+        public var below: Double
+        public init(frequency: Double, above: Double, below: Double) {
+            self.frequency = frequency
+            self.above = above
+            self.below = below
+        }
+    }
+
     public var name: String
     /// dB per octave about 1 kHz, over the whole range. Negative falls towards high frequencies.
     public var tilt: Double
@@ -30,8 +42,12 @@ public struct TargetCurve: Codable, Hashable {
     /// Lowest and highest frequency the target applies to, Hz.
     public var low: Double
     public var high: Double
-    /// Half-width of the tolerance band drawn around the target, dB. 0 draws none.
-    public var tolerance: Double
+    /// Half-width of the tolerance band drawn around the target, dB. 0 draws none. Setting it replaces
+    /// a standard's band (`toleranceBand`) with this even one.
+    public var tolerance: Double { didSet { toleranceBand = nil } }
+    /// A standard's tolerance band, which can be uneven and change with frequency: dB above and below
+    /// the target at each breakpoint, interpolated on a log-frequency scale. Nil uses `tolerance`.
+    public var toleranceBand: [ToleranceBreakpoint]?
     /// dB added to the target after it is aligned to the measurement.
     public var offset: Double
 
@@ -55,7 +71,7 @@ public struct TargetCurve: Codable, Hashable {
     public enum Preset: String, CaseIterable, Identifiable {
         case flat = "Flat"
         case falling = "Falling 1 dB/octave"
-        case xCurve = "X-curve (flat to 2 kHz, then -3 dB/octave)"
+        case xCurve = "X-curve (ISO 2969 / SMPTE ST 202, medium room)"
         case livePA = "Live PA (+6 dB bass shelf, -1 dB/octave above 2 kHz)"
         public var id: String { rawValue }
 
@@ -63,7 +79,21 @@ public struct TargetCurve: Codable, Hashable {
             switch self {
             case .flat: return TargetCurve(name: "Flat")
             case .falling: return TargetCurve(name: "Falling 1 dB/octave", tilt: -1)
-            case .xCurve: return TargetCurve(name: "X-curve", trebleCorner: 2000, trebleSlope: 3, low: 63)
+            case .xCurve:
+                // SMPTE ST 202 figure 5 (medium-sized theatre): −3 dB/octave below 50 Hz, flat to 2 kHz,
+                // −3 dB/octave to 10 kHz, −6 dB/octave above; tolerances for 1/3-octave measurements.
+                var x = TargetCurve(name: "X-curve", points: [
+                    Point(frequency: 31.5, level: -2), Point(frequency: 50, level: 0), Point(frequency: 2000, level: 0),
+                    Point(frequency: 10_000, level: -7), Point(frequency: 16_000, level: -7 - 6 * log2(1.6)),
+                ], low: 31.5, high: 16_000, tolerance: 3)
+                x.toleranceBand = [
+                    ToleranceBreakpoint(frequency: 31.5, above: 3, below: 7.5),
+                    ToleranceBreakpoint(frequency: 50, above: 3, below: 3),
+                    ToleranceBreakpoint(frequency: 8000, above: 3, below: 3),
+                    ToleranceBreakpoint(frequency: 10_000, above: 3, below: 4),
+                    ToleranceBreakpoint(frequency: 16_000, above: 3, below: 6),
+                ]
+                return x
             case .livePA: return TargetCurve(name: "Live PA", bassGain: 6, bassFrequency: 100, trebleCorner: 2000, trebleSlope: 1)
             }
         }
@@ -85,6 +115,17 @@ public struct TargetCurve: Codable, Hashable {
         }
         return level
     }
+
+    /// dB the tolerance band reaches above and below the target at `f`. Zero for no band.
+    public func toleranceRange(at f: Double) -> (above: Double, below: Double) {
+        guard let band = toleranceBand, !band.isEmpty else { return (tolerance, tolerance) }
+        let above = TargetCurve.interpolate(band.map { Point(frequency: $0.frequency, level: $0.above) }, at: f)
+        let below = TargetCurve.interpolate(band.map { Point(frequency: $0.frequency, level: $0.below) }, at: f)
+        return (above, below)
+    }
+
+    /// Whether a tolerance band is drawn.
+    public var hasTolerance: Bool { !(toleranceBand ?? []).isEmpty || tolerance > 0 }
 
     /// Log-frequency linear interpolation, held at the ends.
     static func interpolate(_ points: [Point], at f: Double) -> Double {

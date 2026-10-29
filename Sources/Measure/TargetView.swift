@@ -20,7 +20,8 @@ extension AppModel {
         let shift = t.alignment(to: response.smoothed(fraction: 6))
         return t.grid(perOctave: 12).map { f in
             let y = t.level(at: f) + shift
-            return TargetPoint(x: f, y: y, low: y - t.tolerance, high: y + t.tolerance)
+            let band = t.toleranceRange(at: f)
+            return TargetPoint(x: f, y: y, low: y - band.below, high: y + band.above)
         }
     }
 
@@ -152,7 +153,7 @@ struct TargetEditor: View {
             Section("Range and level") {
                 number("From", $model.target.low, unit: "Hz", help: "The target applies, is aligned and is fitted from here")
                 number("To", $model.target.high, unit: "Hz", help: "The target applies, is aligned and is fitted up to here")
-                number("Tolerance ±", $model.target.tolerance, unit: "dB", help: "Half-width of the band drawn around the target; 0 for none")
+                number("Tolerance ±", $model.target.tolerance, unit: "dB", help: "Half-width of the band drawn around the target; 0 for none. Typing a value replaces a standard's uneven band, such as the X-curve's")
                 number("Offset", $model.target.offset, unit: "dB", help: "Moves the target up or down from where it is aligned")
             }
             Section {
