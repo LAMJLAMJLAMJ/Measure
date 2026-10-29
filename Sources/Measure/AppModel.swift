@@ -885,6 +885,15 @@ final class AppModel {
                 errorMessage = "\(url.lastPathComponent) is at \(Int(audio.sampleRate)) Hz. Set the sample rate in Measurement Setup to match it, with the sweep it was recorded with."
                 continue
             }
+            // A recording of another sweep deconvolves to nonsense, so check it is the one in Setup.
+            let first = audio.channels[0]
+            let recorded = await Task.detached(priority: .userInitiated) { sweep.recordedDuration(in: first) }.value
+            guard let recorded, abs(recorded / s.sweepLength - 1) < 0.03 else {
+                errorMessage = "\(url.lastPathComponent) does not hold the sweep set in Measurement Setup (\(Int(s.startFrequency)) Hz to \(Int(end)) Hz in \(String(format: "%g", s.sweepLength)) s)"
+                    + (recorded.map { String(format: ": over that range its sweep takes about %.1f s", $0) } ?? "")
+                    + ". Set the sweep it was recorded with, then import it again."
+                continue
+            }
             // At least as long as what was played, so the decay after the sweep is there to deconvolve.
             let mics = audio.channels.map { $0.count >= played.count ? $0 : $0 + [Double](repeating: 0, count: played.count - $0.count) }
             let colorIndex = next

@@ -75,6 +75,47 @@ public struct ExponentialSweep {
     }
 }
 
+extension ExponentialSweep {
+    /// How long this sweep's frequency range takes in the sweep found in `recording`, seconds: the time
+    /// it takes to pass from a quarter to three quarters of the range (on a log scale), scaled up. Equals
+    /// `duration` when the recording holds this sweep; a different value means it was made with another
+    /// length or range. Nil when the recording is too short to tell.
+    public func recordedDuration(in recording: [Double]) -> Double? {
+        let fs = sampleRate
+        let frame = Int(0.04 * fs)
+        let hop = max(1, Int(0.002 * fs))
+        guard frame > 0, recording.count > 2 * frame else { return nil }
+        let window = (0..<frame).map { 0.5 - 0.5 * cos(2 * Double.pi * Double($0) / Double(frame)) }
+        let ratio = endFrequency / startFrequency
+        let low = startFrequency * pow(ratio, 0.25), high = startFrequency * pow(ratio, 0.75)
+
+        /// The middle of the frame where `f` is loudest, seconds.
+        func loudest(_ f: Double) -> Double {
+            let w = 2 * Double.pi * f / fs
+            let c = recording.indices.map { cos(w * Double($0)) }
+            let s = recording.indices.map { sin(w * Double($0)) }
+            var best = 0.0, bestStart = 0
+            var start = 0
+            while start + frame <= recording.count {
+                var re = 0.0, im = 0.0
+                for j in 0..<frame {
+                    let v = recording[start + j] * window[j]
+                    re += v * c[start + j]
+                    im += v * s[start + j]
+                }
+                let p = re * re + im * im
+                if p > best { best = p; bestStart = start }
+                start += hop
+            }
+            return (Double(bestStart) + Double(frame) / 2) / fs
+        }
+
+        let passed = loudest(high) - loudest(low)
+        guard passed > 0 else { return nil }
+        return passed / log(high / low) * log(ratio)
+    }
+}
+
 /// Turns a recording into an impulse response by dividing its spectrum by the excitation's.
 ///
 /// Works with any broadband excitation, not only sweeps: a generated sweep, a loopback recording

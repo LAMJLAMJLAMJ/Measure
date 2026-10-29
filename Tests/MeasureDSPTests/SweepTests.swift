@@ -11,6 +11,20 @@ final class SweepTests: XCTestCase {
         XCTAssertLessThanOrEqual(s.samples().map(abs).max()!, 0.5 + 1e-12)
     }
 
+    func testRecordedDurationTellsTheSweepApart() {
+        let setup = ExponentialSweep(startFrequency: 20, endFrequency: 20_000, duration: 2, sampleRate: 48_000)
+        let latency = [Double](repeating: 0, count: 480)
+        // The same sweep, delayed and quieter: it matches.
+        let same = latency + setup.samples(silence: 0.5).map { 0.3 * $0 }
+        XCTAssertEqual(setup.recordedDuration(in: same) ?? 0, 2, accuracy: 0.03)
+        // A 3 s sweep over the same range, or a 2 s sweep over a narrower one, does not.
+        let longer = ExponentialSweep(startFrequency: 20, endFrequency: 20_000, duration: 3, sampleRate: 48_000)
+        XCTAssertEqual(setup.recordedDuration(in: latency + longer.samples(silence: 0.5)) ?? 0, 3, accuracy: 0.05)
+        let narrower = ExponentialSweep(startFrequency: 50, endFrequency: 10_000, duration: 2, sampleRate: 48_000)
+        XCTAssertGreaterThan(abs((setup.recordedDuration(in: latency + narrower.samples(silence: 0.5)) ?? 0) - 2), 0.1)
+        XCTAssertNil(setup.recordedDuration(in: [0, 0, 0]))
+    }
+
     func testDeconvolutionRecoversDelayAndGain() {
         let fs = 48_000.0
         let sweep = ExponentialSweep(startFrequency: 20, endFrequency: 20_000, duration: 1, sampleRate: fs).samples()
