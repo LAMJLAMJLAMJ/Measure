@@ -78,12 +78,36 @@ struct MeasureApp: App {
             }
         }
 
+        Window("Calibration", id: "calibration") {
+            CalibrationView()
+                .environment(model)
+                .frame(minWidth: 560, minHeight: 300)
+        }
+        .defaultSize(width: 620, height: 380)
+        .commands { CalibrationCommands(model: model) }
+
         Window("Signal Generator", id: "generator") {
             GeneratorView()
                 .environment(model)
                 .frame(minWidth: 560, minHeight: 420)
         }
         .defaultSize(width: 640, height: 520)
+    }
+}
+
+/// The Calibration menu: the Calibration window, and Erase All Calibration.
+@MainActor
+struct CalibrationCommands: Commands {
+    let model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandMenu("Calibration") {
+            Button("Calibrate Inputs…") { openWindow(id: "calibration") }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+            Divider()
+            Button("Erase All Calibration…") { confirmEraseAllCalibration(model) }
+        }
     }
 }
 

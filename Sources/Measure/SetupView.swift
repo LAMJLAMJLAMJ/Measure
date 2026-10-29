@@ -184,7 +184,7 @@ struct SetupView: View {
         guard let slot = model.settings.mics.first(where: { $0.micName == mic.name }) else {
             return "\(mic.name) is not assigned to a mic input. Assign it above first."
         }
-        return "Fit the calibrator to \(mic.name) on input \(slot.channel) and switch it on, then choose its level. Measure records 3 seconds."
+        return "Fit the calibrator to \(mic.name) on input \(slot.channel) and switch it on, then choose its level. Measure records 5 seconds."
     }
 
     private var rates: [Double] {
