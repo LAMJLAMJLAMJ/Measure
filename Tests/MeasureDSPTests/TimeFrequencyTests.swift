@@ -30,6 +30,36 @@ final class TimeFrequencyTests: XCTestCase {
         XCTAssertEqual(g.frequencies[peakBin], 1000, accuracy: fs / 2048)
     }
 
+    func testReducedSpectrogramKeepsItsSizeAndFindsTone() {
+        let fs = 8_000.0
+        // 60 s of a 1 kHz tone, the second half 20 dB down.
+        var x = TestSignals.sine(frequency: 1000, sampleRate: fs, count: Int(60 * fs))
+        for i in x.count / 2..<x.count { x[i] *= 0.1 }
+        let rows = (0..<64).map { 50 * pow(4000.0 / 50, Double($0) / 63) }
+        let g = TimeFrequency.reducedSpectrogram(x, range: 0..<x.count, sampleRate: fs, windowSize: 1024, hop: 512,
+                                                 frequencies: rows, columns: 100)!
+        XCTAssertEqual(g.levels.count, 100)
+        XCTAssertEqual(g.times.count, 100)
+        XCTAssertEqual(g.levels[0].count, 64)
+        XCTAssertEqual(g.times.last!, 60, accuracy: 0.5)
+        let first = g.levels[10], last = g.levels[90]
+        let peakRow = first.indices.max { first[$0] < first[$1] }!
+        XCTAssertEqual(rows[peakRow], 1000, accuracy: 60)
+        XCTAssertEqual(first[peakRow] - last[peakRow], 20, accuracy: 0.5)
+    }
+
+    func testReducedSpectrogramRangeAndCancel() {
+        let fs = 8_000.0
+        let x = TestSignals.sine(frequency: 500, sampleRate: fs, count: Int(30 * fs))
+        let g = TimeFrequency.reducedSpectrogram(x, range: Int(10 * fs)..<Int(20 * fs), sampleRate: fs, windowSize: 512,
+                                                 hop: 256, frequencies: [500], columns: 50)!
+        XCTAssertEqual(g.times.first!, 10, accuracy: 0.2)
+        XCTAssertEqual(g.times.last!, 20, accuracy: 0.2)
+        XCTAssertNil(TimeFrequency.reducedSpectrogram(x, range: 0..<x.count, sampleRate: fs, windowSize: 512, hop: 256,
+                                                      frequencies: [500], columns: 50, isCancelled: { true }))
+        XCTAssertEqual(TimeFrequency.reducedSpectrogramBytes(columns: 100, rows: 63), (100 * 64 + 63) * 8)
+    }
+
     func testWaterfallDecays() {
         let fs = 48_000.0
         let ir = TestSignals.exponentialDecay(rt: 0.5, sampleRate: fs, duration: 1, seed: 8)
