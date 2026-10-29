@@ -150,7 +150,8 @@ struct MicOffsetsRow: View {
     }
 }
 
-/// One meter: a big number, its maximum, and a bar.
+/// One meter, laid out as Smaart's: a vertical bar on the left, the mic's name over a big number,
+/// the maximum with a status light, and the unit, weighting and average as the menu that changes them.
 struct MeterCard: View {
     @Environment(AppModel.self) private var model
     let meter: MeterSettings
@@ -166,41 +167,61 @@ struct MeterCard: View {
         let over = limit.map { (level ?? -200) > $0 } ?? false
         let clipping = (mic?.recentPeak ?? -200) > -1
 
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Circle().fill(meterColor(index)).frame(width: 9, height: 9)
-                Text(micName).font(.headline).lineLimit(1)
-                Spacer()
-                if clipping { Text("Overload").font(.caption.bold()).foregroundStyle(.red) }
-                settingsMenu
-            }
-            Text(levelText(level))
-                .font(.system(size: 52, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(over ? Color.red : Color.green)
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .frame(maxWidth: .infinity, alignment: .center)
-            LevelBar(level: level, limit: limit, spl: offset != nil)
-                .frame(height: 8)
-            HStack {
-                Text("Max \(levelText(maximum))").monospacedDigit()
-                Spacer()
-                Text("\(monitor.unit(model, mic: meter.mic)) \(meter.average.label(meter.weighting))")
+        HStack(spacing: 12) {
+            TubeMeter(level: level, maximum: maximum, limit: limit, spl: offset != nil)
+                .frame(width: 22)
+            VStack(spacing: 2) {
+                HStack(spacing: 6) {
+                    Circle().fill(meterColor(index)).frame(width: 9, height: 9)
+                    micMenu
+                    if clipping { Text("Overload").font(.caption.bold()).foregroundStyle(.red) }
+                }
+                Text(levelText(level))
+                    .font(.system(size: 52, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(over ? Color.red : Color.green)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                HStack(spacing: 8) {
+                    Text("Max: \(levelText(maximum))").monospacedDigit()
+                    Circle().fill(statusColor(level: level, limit: limit, clipping: clipping)).frame(width: 12, height: 12)
+                        .help(statusHelp(level: level, limit: limit, clipping: clipping))
+                }
+                .font(.callout)
+                unitMenu
             }
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
         }
         .padding(10)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(over ? Color.red : meterColor(index).opacity(0.6), lineWidth: over ? 2 : 1))
+        .contextMenu {
+            if monitor.settings.meters.count > 1 {
+                Button("Remove This Meter", role: .destructive) { monitor.settings.meters.removeAll { $0.id == meter.id } }
+            }
+        }
     }
 
+    private var micNames: [String] { model.settings.mics.map { $0.micName ?? "Input \($0.channel)" } }
+
     private var micName: String {
-        let names = model.settings.mics.map { $0.micName ?? "Input \($0.channel)" }
-        return meter.mic < names.count ? names[meter.mic] : "Mic \(meter.mic + 1)"
+        meter.mic < micNames.count ? micNames[meter.mic] : "Mic \(meter.mic + 1)"
+    }
+
+    /// Green while the level is fine, yellow within 6 dB of the limit, red over it or when the input clips;
+    /// grey with no level.
+    private func statusColor(level: Double?, limit: Double?, clipping: Bool) -> Color {
+        guard let level, level > -150 else { return .gray }
+        if clipping { return .red }
+        guard let limit else { return .green }
+        return level > limit ? .red : level > limit - 6 ? .yellow : .green
+    }
+
+    private func statusHelp(level: Double?, limit: Double?, clipping: Bool) -> String {
+        if clipping { return "The input is clipping: the levels are not valid. Turn the input gain down." }
+        guard let limit else { return "No limit set for this weighting" }
+        return String(format: "Green below %.0f dB, yellow within 6 dB of the %.0f dB limit, red above it", limit - 6, limit)
     }
 
     /// Fast and Slow keep their maximum sample by sample; the Leqs take theirs from the history.
@@ -210,35 +231,89 @@ struct MeterCard: View {
         return model.monitor.histories[meter.id]?.max() ?? mic.level(meter.weighting, meter.average)
     }
 
-    private var settingsMenu: some View {
+    private func update(_ change: (inout MeterSettings) -> Void) {
         let monitor = model.monitor
-        let id = meter.id
-        func update(_ change: (inout MeterSettings) -> Void) {
-            guard let i = monitor.settings.meters.firstIndex(where: { $0.id == id }) else { return }
-            change(&monitor.settings.meters[i])
-        }
-        return Menu {
+        guard let i = monitor.settings.meters.firstIndex(where: { $0.id == meter.id }) else { return }
+        change(&monitor.settings.meters[i])
+    }
+
+    /// The mic's name, which chooses the mic.
+    private var micMenu: some View {
+        Menu {
             Picker("Mic", selection: Binding(get: { meter.mic }, set: { v in update { $0.mic = v } })) {
-                ForEach(Array(model.settings.mics.enumerated()), id: \.offset) { i, slot in
-                    Text(slot.micName ?? "Input \(slot.channel)").tag(i)
-                }
+                ForEach(Array(micNames.enumerated()), id: \.offset) { i, name in Text(name).tag(i) }
             }
+            .pickerStyle(.inline)
+        } label: {
+            Text(micName).font(.headline).lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Choose the mic. Right-click the meter to remove it.")
+    }
+
+    /// "dB SPL A Slow", which chooses the weighting and the average.
+    private var unitMenu: some View {
+        let unit = model.monitor.unit(model, mic: meter.mic)
+        return Menu {
             Picker("Weighting", selection: Binding(get: { meter.weighting }, set: { v in update { $0.weighting = v } })) {
                 ForEach(SoundLevel.FrequencyWeighting.allCases) { Text("\($0.rawValue) weighting").tag($0) }
             }
             Picker("Average", selection: Binding(get: { meter.average }, set: { v in update { $0.average = v } })) {
                 ForEach(LevelAverage.allCases) { Text($0.rawValue).tag($0) }
             }
-            if monitor.settings.meters.count > 1 {
-                Divider()
-                Button("Remove This Meter", role: .destructive) { monitor.settings.meters.removeAll { $0.id == id } }
-            }
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Text("\(unit) \(meter.weighting.rawValue) \(meter.average.rawValue)").lineLimit(1)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Mic, weighting and average")
+        .foregroundStyle(.secondary)
+        .help("\(meter.average.label(meter.weighting)): choose the weighting and the average")
+    }
+}
+
+/// A vertical meter tube, as Smaart's SPL meters draw: the level from the bottom in segments, green,
+/// yellow within 6 dB of the limit and red above it, with a line at the maximum.
+struct TubeMeter: View {
+    let level: Double?
+    let maximum: Double?
+    let limit: Double?
+    let spl: Bool
+
+    var body: some View {
+        let range: ClosedRange<Double> = spl ? 30...130 : -100...0
+        let span = range.upperBound - range.lowerBound
+        func fraction(_ v: Double?) -> CGFloat {
+            CGFloat(v.map { min(1, max(0, ($0 - range.lowerBound) / span)) } ?? 0)
+        }
+        let color: Color = {
+            guard let level, let limit else { return .green }
+            return level > limit ? .red : level > limit - 6 ? .yellow : .green
+        }()
+        return GeometryReader { geo in
+            let inner = geo.size.height - 6
+            ZStack(alignment: .bottom) {
+                Capsule().fill(Color.black.opacity(0.75))
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Rectangle().fill(color.gradient).frame(height: inner * fraction(level))
+                }
+                .padding(3)
+                .clipShape(Capsule().inset(by: 3))
+                // A divider every 10 dB, like the segments of a hardware meter.
+                ForEach(1..<10, id: \.self) { k in
+                    Rectangle().fill(Color.black.opacity(0.6)).frame(height: 1)
+                        .offset(y: -3 - inner * CGFloat(k) / 10)
+                }
+                if let maximum, maximum > range.lowerBound {
+                    Rectangle().fill(Color.white.opacity(0.9)).frame(height: 1.5)
+                        .padding(.horizontal, 3)
+                        .offset(y: -3 - inner * fraction(maximum))
+                }
+                Capsule().strokeBorder(Color.gray.opacity(0.7), lineWidth: 2)
+            }
+        }
+        .help(spl ? "30 to 130 dB SPL; the white line is the maximum" : "-100 to 0 dBFS; the white line is the maximum")
     }
 }
 
