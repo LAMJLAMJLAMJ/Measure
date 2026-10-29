@@ -561,9 +561,13 @@ struct LiveView: View {
     private func statusText(_ live: LiveAnalyzer) -> String {
         let fs = model.settings.sampleRate
         var parts: [String] = []
-        if let ref = live.peaks.first { parts.append(String(format: "Ref %.0f dBFS", ref)) }
+        // With the input meters on, the levels are in the list beside each mic; only the delays are listed here.
+        let meters = model.inputMeters.isRunning
+        if let ref = live.peaks.first, !meters || (live.settings.internalReference && live.settings.generator) { parts.append(String(format: "Ref %.0f dBFS", ref)) }
         for (i, p) in live.peaks.dropFirst().enumerated() {
-            parts.append(String(format: "Mic %d %.0f dBFS, delay %.2f ms", i + 1, p, Double(live.settings.delay(i)) / fs * 1000))
+            let delay = Double(live.settings.delay(i)) / fs * 1000
+            parts.append(meters ? String(format: "Mic %d delay %.2f ms", i + 1, delay)
+                                : String(format: "Mic %d %.0f dBFS, delay %.2f ms", i + 1, p, delay))
         }
         if live.isRunning { parts.append("\(live.blocks) blocks") }
         return parts.joined(separator: " · ")

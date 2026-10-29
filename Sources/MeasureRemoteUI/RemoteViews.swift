@@ -326,6 +326,8 @@ struct PeakMeterRow: View {
                 Text(meter.label).lineLimit(1)
                 Spacer()
                 if meter.overLimit { Text("Clipped").font(.caption.bold()).foregroundStyle(.red) }
+                // Below -90 dBFS peak: unplugged, unpowered or gain at zero, as the Mac's meters say.
+                if (meter.value ?? -200) < -90 { Text("No signal").font(.caption.bold()).foregroundStyle(.orange) }
                 Text(meter.value.map { String(format: "%.1f", $0) } ?? "–").monospacedDigit()
                 Text("dBFS").font(.caption).foregroundStyle(.secondary)
             }

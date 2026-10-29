@@ -20,6 +20,9 @@ final class InputMeters {
         var recentPeak = -200.0
         /// Peaked above `MeasurementQuality.clipLevel` since the clip marks were last cleared.
         var clipped = false
+        /// Nothing above `InputMeters.silenceLevel` for the last few seconds: the mic is unplugged, off,
+        /// muted, without phantom power or with its gain at zero.
+        var noSignal = false
     }
 
     /// Off stops the stream and hides the meters. Remembered between launches.
@@ -47,6 +50,11 @@ final class InputMeters {
     static let updateInterval = 0.1
     /// How long the peak readout holds, seconds.
     static let peakHold = 3.0
+    /// A peak below this for `peakHold` seconds is no signal, dBFS. A connected mic's own noise through
+    /// a preamp sits well above it; an unplugged or unpowered input sits below it.
+    static let silenceLevel = -90.0
+    /// The levels to aim for while a sweep plays, dBFS peak.
+    static let target: ClosedRange<Double> = -20 ... -6
 
     init() {
         enabled = UserDefaults.standard.object(forKey: "inputMeters") as? Bool ?? true
@@ -163,14 +171,31 @@ final class InputMeters {
     }
 
     private func update(_ meter: inout Channel, channel: Int, samples: [Double]) {
-        guard !samples.isEmpty, channel < recent.count else { return }
-        meter.reading.update(samples)
-        let peak = meter.reading.peak
+        guard channel < recent.count else { return }
+        // No samples at all (the device stopped delivering) counts as silence too.
+        var peak = -200.0
+        if samples.isEmpty {
+            meter.reading = MeterReading()
+        } else {
+            meter.reading.update(samples)
+            peak = meter.reading.peak
+        }
         let held = Int(Self.peakHold / Self.updateInterval)
         recent[channel].append(peak)
         if recent[channel].count > held { recent[channel].removeFirst(recent[channel].count - held) }
         meter.recentPeak = recent[channel].max() ?? peak
+        meter.noSignal = recent[channel].count >= held && meter.recentPeak < Self.silenceLevel
         if peak > MeasurementQuality.clipLevel { meter.clipped = true }
+    }
+
+    /// The mics that sweeps record and that hear nothing, as "Mic 2 (input 3)", for warnings.
+    func silentMics(_ model: AppModel) -> [String] {
+        guard isRunning else { return [] }
+        return mics.compactMap { c in
+            guard c.noSignal, c.id < model.settings.mics.count, model.settings.mics[c.id].active else { return nil }
+            let name = model.settings.mics[c.id].micName ?? "Mic \(c.id + 1)"
+            return "\(name) (input \(c.input))"
+        }
     }
 }
 
@@ -191,6 +216,11 @@ struct VerticalInputMeter: View {
             let scale = h - capHeight - 1
             ZStack(alignment: .bottom) {
                 RoundedRectangle(cornerRadius: 1.5).fill(.quaternary)
+                // The levels to aim for while a sweep plays, shaded.
+                Rectangle()
+                    .fill(Color.green.opacity(0.18))
+                    .frame(height: scale * (Self.fraction(InputMeters.target.upperBound) - Self.fraction(InputMeters.target.lowerBound)))
+                    .offset(y: -scale * Self.fraction(InputMeters.target.lowerBound))
                 // The RMS level, coloured by the peak.
                 Rectangle()
                     .fill(Self.color(channel.reading.peak))
@@ -234,9 +264,9 @@ struct InputMeterReadout: View {
     let channel: InputMeters.Channel
 
     var body: some View {
-        Text(channel.recentPeak > VerticalInputMeter.floor - 30 ? String(format: "%.0f", channel.recentPeak) : "–")
+        Text(channel.noSignal ? "off" : channel.recentPeak > -150 ? String(format: "%.0f", channel.recentPeak) : "–")
             .font(.caption2.monospacedDigit())
-            .foregroundStyle(channel.clipped ? Color.red : Color.secondary)
+            .foregroundStyle(channel.clipped ? Color.red : channel.noSignal ? Color.orange : Color.secondary)
             .frame(width: 24, alignment: .trailing)
     }
 }
@@ -261,7 +291,8 @@ struct InputMeterView: View {
         let peak = channel.recentPeak > -150 ? String(format: "%.1f dBFS", channel.recentPeak) : "no signal"
         let rms = channel.reading.rms > -150 ? String(format: "%.1f dBFS", channel.reading.rms) : "no signal"
         let clip = channel.clipped ? "\nClipped (above \(Int(MeasurementQuality.clipLevel)) dBFS). Click to clear." : ""
-        return "Input \(channel.input): peak over the last \(Int(InputMeters.peakHold)) s \(peak), RMS \(rms). Green to -12 dBFS, yellow to -3, red above.\(clip)"
+        let off = channel.noSignal ? "\nNo signal: check the cable, the mic's power (phantom) and the input gain." : ""
+        return "Input \(channel.input): peak over the last \(Int(InputMeters.peakHold)) s \(peak), RMS \(rms). Green to -12 dBFS, yellow to -3, red above; the shaded band is -20 to -6 dBFS, the range to aim for with the sweep.\(clip)\(off)"
     }
 }
 
@@ -295,13 +326,43 @@ struct InputsSection: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).lineLimit(1)
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if channel?.noSignal == true {
+                    Text("Input \(channel?.input ?? 0) · no signal").font(.caption).foregroundStyle(.orange).lineLimit(1)
+                } else {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
             .opacity(dimmed ? 0.6 : 1)
             Spacer(minLength: 0)
             if let channel { InputMeterView(channel: channel) }
         }
         .contextMenu { InputMetersMenu() }
+    }
+}
+
+/// Every metered input as a small meter with its input number, for the status bar, so the levels stay
+/// in sight with the sidebar hidden. Click to clear the clip marks.
+struct InputMeterStrip: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let meters = model.inputMeters
+        let channels = (meters.loopback.map { [$0] } ?? []) + meters.mics
+        if meters.isRunning && !channels.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(channels) { c in
+                    HStack(spacing: 2) {
+                        Text(c.id < 0 ? "L" : "\(c.input)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(c.noSignal ? Color.orange : Color.secondary)
+                        VerticalInputMeter(channel: c).frame(height: 16)
+                    }
+                    .help(c.id < 0 ? "Loopback, input \(c.input)" : "Input \(c.input)" + (c.noSignal ? ": no signal" : ""))
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { meters.resetClips() }
+        }
     }
 }
 

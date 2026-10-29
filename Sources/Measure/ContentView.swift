@@ -260,10 +260,16 @@ struct StatusBar: View {
                     .help(warning.text)
                 Spacer()
                 Button("Dismiss") { model.measurementWarning = nil }.buttonStyle(.borderless)
+            } else if !silentMics.isEmpty, !model.isMeasuring {
+                Image(systemName: "mic.slash.fill").foregroundStyle(.orange)
+                Text("No signal on \(silentMics.joined(separator: ", ")). Check the cable, the mic's phantom power and the input gain, or untick it in Setup.")
+                    .lineLimit(2)
+                Spacer()
             } else {
                 Text(model.status ?? setupSummary).foregroundStyle(.secondary)
                 Spacer()
             }
+            InputMeterStrip()
             if !model.remote.remotes.isEmpty {
                 Label(model.remote.remotes.joined(separator: ", "), systemImage: "ipad.landscape")
                     .foregroundStyle(.secondary)
@@ -275,6 +281,8 @@ struct StatusBar: View {
         .padding(.vertical, 6)
         .background(.bar)
     }
+
+    private var silentMics: [String] { model.inputMeters.silentMics(model) }
 
     private var setupSummary: String {
         guard let out = model.outputDevice, let input = model.inputDevice else { return "No audio device chosen" }
