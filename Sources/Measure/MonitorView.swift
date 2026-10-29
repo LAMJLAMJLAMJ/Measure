@@ -8,7 +8,30 @@ import UniformTypeIdentifiers
 /// Colours of the SPL meters, also used for their lines in the history.
 private let meterColors: [Color] = [.orange, .cyan, .pink, .yellow]
 
-private func meterColor(_ index: Int) -> Color { meterColors[index % meterColors.count] }
+/// The meter's chosen colour, or the default for its place.
+private func meterColor(_ meter: MeterSettings, _ index: Int) -> Color {
+    meter.colorHex.flatMap(Color.init(hex:)) ?? meterColors[index % meterColors.count]
+}
+
+/// The limit line's chosen colour: red for A and purple for C by default.
+func limitColor(_ settings: MonitorSettings, _ w: SoundLevel.FrequencyWeighting) -> Color {
+    let hex = w == .c ? settings.limitCColorHex : settings.limitAColorHex
+    return hex.flatMap(Color.init(hex:)) ?? (w == .c ? .purple : .red)
+}
+
+/// A colour well that stores its colour as "#RRGGBB", nil while it shows `standard`.
+struct HexColorWell: View {
+    @Binding var hex: String?
+    let standard: Color
+    let help: String
+
+    var body: some View {
+        ColorPicker("", selection: Binding(get: { hex.flatMap(Color.init(hex:)) ?? standard },
+                                           set: { hex = $0.hex }), supportsOpacity: false)
+            .labelsHidden()
+            .help(help)
+    }
+}
 
 private func levelText(_ level: Double?) -> String {
     guard let level, level > -150 else { return "–" }
@@ -42,6 +65,7 @@ struct SPLView: View {
                     Button {
                         var new = monitor.settings.meters.last ?? MeterSettings()
                         new.id = UUID()
+                        new.colorHex = nil
                         monitor.settings.meters.append(new)
                     } label: { Image(systemName: "plus.circle") }
                         .buttonStyle(.borderless)
@@ -51,9 +75,15 @@ struct SPLView: View {
             .frame(height: 170)
             HStack(spacing: 12) {
                 LimitField(title: "A limit", value: $monitor.settings.limitA, standard: 100,
-                           help: "A level not to exceed on A-weighted meters: they turn red above it, and the history draws it as a red line")
+                           help: "A level not to exceed on A-weighted meters: they turn red above it, and the history draws it as a line")
+                if monitor.settings.limitA != nil {
+                    HexColorWell(hex: $monitor.settings.limitAColorHex, standard: .red, help: "Colour of the A limit line in the history")
+                }
                 LimitField(title: "C limit", value: $monitor.settings.limitC, standard: 115,
-                           help: "A level not to exceed on C-weighted meters: they turn red above it, and the history draws it as a purple line")
+                           help: "A level not to exceed on C-weighted meters: they turn red above it, and the history draws it as a line")
+                if monitor.settings.limitC != nil {
+                    HexColorWell(hex: $monitor.settings.limitCColorHex, standard: .purple, help: "Colour of the C limit line in the history")
+                }
                 Picker("Show", selection: $monitor.settings.historyRange) {
                     Text("5 min").tag(300)
                     Text("15 min").tag(900)
@@ -172,7 +202,8 @@ struct MeterCard: View {
                 .frame(width: 22)
             VStack(spacing: 2) {
                 HStack(spacing: 6) {
-                    Circle().fill(meterColor(index)).frame(width: 9, height: 9)
+                    HexColorWell(hex: colorHex, standard: meterColors[index % meterColors.count],
+                                 help: "This meter's colour, on its card and its line in the history")
                     micMenu
                     if clipping { Text("Overload").font(.caption.bold()).foregroundStyle(.red) }
                 }
@@ -195,7 +226,7 @@ struct MeterCard: View {
         .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(over ? Color.red : meterColor(index).opacity(0.6), lineWidth: over ? 2 : 1))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(over ? Color.red : meterColor(meter, index).opacity(0.6), lineWidth: over ? 2 : 1))
         .contextMenu {
             if monitor.settings.meters.count > 1 {
                 Button("Remove This Meter", role: .destructive) { monitor.settings.meters.removeAll { $0.id == meter.id } }
@@ -229,6 +260,10 @@ struct MeterCard: View {
         guard let mic else { return nil }
         if meter.average == .fast || meter.average == .slow { return mic.maximum(meter.weighting, meter.average) }
         return model.monitor.histories[meter.id]?.max() ?? mic.level(meter.weighting, meter.average)
+    }
+
+    private var colorHex: Binding<String?> {
+        Binding(get: { meter.colorHex }, set: { v in update { $0.colorHex = v } })
     }
 
     private func update(_ change: (inout MeterSettings) -> Void) {
@@ -354,7 +389,7 @@ struct LevelHistoryChart: View {
     var body: some View {
         let monitor = model.monitor
         let lines = monitor.settings.meters.enumerated().map { i, meter in
-            (meter.id, meterColor(i), points(meter))
+            (meter.id, meterColor(meter, i), points(meter))
         }
         let levels = lines.flatMap { $0.2.map(\.level) }
         let low = ((levels.min() ?? 40) - 5).rounded(.down)
@@ -373,16 +408,18 @@ struct LevelHistoryChart: View {
                     }
                 }
                 if let limit = monitor.settings.limitA {
+                    let color = limitColor(monitor.settings, .a)
                     RuleMark(y: .value("A limit", limit))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(color)
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
-                        .annotation(position: .top, alignment: .leading) { Text("A limit").font(.caption).foregroundStyle(.red) }
+                        .annotation(position: .top, alignment: .leading) { Text("A limit").font(.caption).foregroundStyle(color) }
                 }
                 if let limit = monitor.settings.limitC {
+                    let color = limitColor(monitor.settings, .c)
                     RuleMark(y: .value("C limit", limit))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(color)
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
-                        .annotation(position: .top, alignment: .leading) { Text("C limit").font(.caption).foregroundStyle(.purple) }
+                        .annotation(position: .top, alignment: .leading) { Text("C limit").font(.caption).foregroundStyle(color) }
                 }
             }
             .chartYScale(domain: low...max(high, low + 10))

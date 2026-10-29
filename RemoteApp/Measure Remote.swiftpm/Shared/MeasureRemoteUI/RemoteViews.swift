@@ -816,12 +816,12 @@ struct HistorySection: View {
                     }
                     if let a = state.limitA {
                         RuleMark(y: .value("Limit A", a))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(state.limitAColor.map { Color(remoteHex: $0) } ?? .red)
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     }
                     if let c = state.limitC {
                         RuleMark(y: .value("Limit C", c))
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(state.limitCColor.map { Color(remoteHex: $0) } ?? .purple)
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     }
                 }

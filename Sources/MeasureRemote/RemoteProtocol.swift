@@ -269,6 +269,9 @@ public struct RemoteState: Codable, Equatable, Sendable {
     /// Limits for A- and C-weighted meters, drawn on the history.
     public var limitA: Double?
     public var limitC: Double?
+    /// The limit lines' colours, "#RRGGBB"; nil for red (A) and purple (C).
+    public var limitAColor: String?
+    public var limitCColor: String?
 
     /// The most recent measurements, newest last.
     public var traces: [RemoteTrace] = []

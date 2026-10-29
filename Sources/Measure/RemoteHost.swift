@@ -299,6 +299,8 @@ final class RemoteHost {
         s.historyRange = monitor.settings.historyRange
         s.limitA = monitor.settings.limitA
         s.limitC = monitor.settings.limitC
+        s.limitAColor = monitor.settings.limitAColorHex
+        s.limitCColor = monitor.settings.limitCColorHex
         if monitor.isRunning {
             s.rta = rta(model)
             s.histories = histories(model)
@@ -367,7 +369,7 @@ final class RemoteHost {
             let names = model.settings.mics.map { $0.micName ?? "Input \($0.channel)" }
             let name = meter.mic < names.count ? names[meter.mic] : "Mic \(meter.mic + 1)"
             return RemoteHistory(label: "\(name) · \(meter.average.label(meter.weighting))",
-                                 color: Self.meterColors[i % Self.meterColors.count],
+                                 color: meter.colorHex ?? Self.meterColors[i % Self.meterColors.count],
                                  levels: levels, secondsPerPoint: step)
         }
     }
