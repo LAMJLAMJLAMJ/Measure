@@ -44,6 +44,15 @@ struct MeasureApp: App {
                 Button("Measure") { Task { await model.measure() } }
                     .keyboardShortcut("m", modifiers: .command)
                     .disabled(model.isMeasuring)
+                Button(model.levelCheck.isRunning ? "Stop Level Check" : "Check Levels") {
+                    if model.levelCheck.isRunning { model.levelCheck.stop(); model.status = nil } else { Task { await model.levelCheck.start(model) } }
+                }
+                .keyboardShortcut("l", modifiers: .command)
+                .disabled(model.isMeasuring)
+                Toggle("Input Meters", isOn: Binding(get: { model.inputMeters.enabled }, set: { model.inputMeters.enabled = $0 }))
+                Button("Clear Clip Marks") { model.inputMeters.resetClips() }
+                    .disabled(!model.inputMeters.isRunning)
+                Divider()
                 Button("Import Files…") { importFiles(model) }
                     .keyboardShortcut("i", modifiers: .command)
                 Button("Import Recordings…") { importRecordings(model) }

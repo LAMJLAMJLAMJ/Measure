@@ -289,18 +289,24 @@ struct LevelCheckSection: View {
                       systemImage: state.levelCheckRunning ? "stop.fill" : "speaker.wave.2")
             }
             .disabled(state.isMeasuring)
-            if state.levelCheckRunning {
-                ForEach(Array(state.levelMeters.enumerated()), id: \.offset) { _, meter in
-                    PeakMeterRow(meter: meter)
-                }
+            // The Mac's input meters run all the time; a Mac without them sends the level check's.
+            ForEach(Array(meters.enumerated()), id: \.offset) { _, meter in
+                PeakMeterRow(meter: meter)
             }
         } header: {
             Text("Input levels")
         } footer: {
             Text(state.levelCheckRunning
-                 ? "Peaks over the last sweep. Aim for -20 to -6 dBFS; red means the input clipped since the check started."
-                 : "Plays the sweep in a loop at its level and meters each input. Measure stops it.")
+                 ? "Peaks over the last few seconds. Aim for -20 to -6 dBFS; red means the input clipped."
+                 : "Check Levels plays the sweep in a loop at its level, to set the gains on these meters. Measure stops it.")
         }
+    }
+}
+
+extension LevelCheckSection {
+    private var meters: [RemoteMeter] {
+        if !state.inputMeters.isEmpty { return state.inputMeters }
+        return state.levelCheckRunning ? state.levelMeters : []
     }
 }
 
@@ -388,6 +394,13 @@ struct LiveTab: View {
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             List {
+                if !state.inputMeters.isEmpty {
+                    Section("Input levels") {
+                        ForEach(Array(state.inputMeters.enumerated()), id: \.offset) { _, meter in
+                            PeakMeterRow(meter: meter)
+                        }
+                    }
+                }
                 Section {
                     ForEach(Array(state.traces.reversed())) { trace in
                         TraceRow(client: client, trace: trace, selected: trace.id == state.selected)

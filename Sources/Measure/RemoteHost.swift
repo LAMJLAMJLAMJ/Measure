@@ -237,6 +237,14 @@ final class RemoteHost {
                             unit: "dBFS peak", overLimit: meter.clipped)
             }
         }
+        let inputs = model.inputMeters
+        let names = model.settings.mics.enumerated().map { $0.element.micName ?? "Mic \($0.offset + 1)" }
+        let channels = (inputs.loopback.map { [$0] } ?? []) + inputs.mics
+        s.inputMeters = channels.map { c in
+            let name = c.id < 0 ? "Loopback" : c.id < names.count ? names[c.id] : "Mic \(c.id + 1)"
+            return RemoteMeter(label: "\(name) · in \(c.input)", value: c.recentPeak > -150 ? c.recentPeak.roundedTenth : nil,
+                               unit: "dBFS peak", overLimit: c.clipped)
+        }
 
         s.liveRunning = model.live.isRunning
         s.liveCurves = model.calibratedLiveCurves.map { curve in

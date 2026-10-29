@@ -209,6 +209,9 @@ public struct RemoteState: Codable, Equatable, Sendable {
     /// Peak of each input over the last loop of the sweep, loopback first when there is one.
     /// `overLimit` means it clipped since the check started.
     public var levelMeters: [RemoteMeter] = []
+    /// Every mic input (and the loopback, first, when there is one): the peak over the last few
+    /// seconds, from the Mac's input meters, which run all the time. `overLimit` means it clipped.
+    public var inputMeters: [RemoteMeter] = []
 
     public var liveRunning = false
     public var liveCurves: [RemoteCurve] = []

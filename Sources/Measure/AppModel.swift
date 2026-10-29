@@ -143,6 +143,8 @@ final class AppModel {
     let levelCheck: LevelCheck
     /// The iPad remote's link to this Mac.
     let remote: RemoteHost
+    /// A meter on every mic input and the loopback, running all the time.
+    let inputMeters: InputMeters
 
     var isMeasuring = false
     var status: String?
@@ -169,9 +171,11 @@ final class AppModel {
         generator = GeneratorModel()
         levelCheck = LevelCheck()
         remote = RemoteHost()
+        inputMeters = InputMeters()
         refreshDevices()
         openProject(projectFolder)
         remote.attach(self)
+        inputMeters.attach(self)
     }
 
     var selectedTrace: Trace? { traces.first { $0.id == selection } }

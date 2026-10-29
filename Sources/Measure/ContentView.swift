@@ -138,6 +138,7 @@ struct ContentView: View {
             .disabled(model.isMeasuring)
             .help("Start or stop the live analyser")
         } else {
+            CheckLevelsButton()
             Button { Task { await model.measure() } } label: {
                 Label(model.isMeasuring ? "Measuring" : "Measure", systemImage: model.isMeasuring ? "waveform" : "record.circle")
             }
@@ -174,6 +175,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var acousticsActions: some View {
+        CheckLevelsButton()
         Menu {
             Button("Sweep (impulse response)") { Task { await model.measure() } }
             Button("Plain recording…") { showPlainRecording = true }
@@ -218,6 +220,25 @@ struct ContentView: View {
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
+    }
+}
+
+/// Plays the sweep in a loop at its level, so the gains can be set on the input meters before measuring.
+struct CheckLevelsButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let check = model.levelCheck
+        Button {
+            if check.isRunning { check.stop(); model.status = nil } else { Task { await check.start(model) } }
+        } label: {
+            Label(check.isRunning ? "Stop Check" : "Check Levels",
+                  systemImage: check.isRunning ? "stop.circle" : "speaker.wave.2")
+        }
+        .disabled(model.isMeasuring)
+        .help(check.isRunning
+              ? "Stop playing the sweep"
+              : "Play the sweep in a loop at its level and watch the input meters in the list: aim for peaks between -20 and -6 dBFS (⌘L)")
     }
 }
 
@@ -291,6 +312,8 @@ struct TraceList: View {
         List(selection: $model.selection) {
             if mode == .tuning && source == .crossSpectrum {
                 LiveMicsSection()
+            } else if model.inputMeters.enabled {
+                InputsSection()
             }
             ForEach(model.folders) { folder in
                 DisclosureGroup(isExpanded: expanded(folder.id)) {
@@ -758,8 +781,11 @@ struct LiveMicsSection: View {
     var body: some View {
         let live = model.live
         Section("Live") {
+            referenceRow
             if live.curves.isEmpty {
-                Text("Press Start to measure live; each mic appears here.")
+                // Before starting, the mics are listed with their meters, to check the levels first.
+                ForEach(model.settings.mics.indices, id: \.self) { i in micRow(i) }
+                Text("Press Start to measure live.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(live.curves) { c in micRow(c.mic) }
@@ -790,6 +816,25 @@ struct LiveMicsSection: View {
                 .toggleStyle(.checkbox)
                 .font(.caption)
                 .help("Include this mic in the live average")
+            if let meter = model.inputMeters.mic(mic) { InputMeterView(channel: meter) }
+        }
+        .contextMenu { InputMetersMenu() }
+    }
+
+    /// The reference input with its meter, when the reference is an input rather than the internal one.
+    @ViewBuilder private var referenceRow: some View {
+        let live = model.live
+        if !(live.settings.internalReference && live.settings.generator), let input = model.settings.loopbackInput {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.left.and.right").foregroundStyle(.secondary).frame(width: 12)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Reference").lineLimit(1)
+                    Text("Input \(input)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if let meter = model.inputMeters.loopback { InputMeterView(channel: meter) }
+            }
+            .contextMenu { InputMetersMenu() }
         }
     }
 
