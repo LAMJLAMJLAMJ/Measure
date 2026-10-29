@@ -960,7 +960,7 @@ struct SpectrogramView: View {
     @State private var computedFor: String = ""
     /// Fraction of a recording's spectrogram computed so far.
     @State private var progress = 0.0
-    /// Why a recording's spectrogram was not drawn, or a warning about its memory.
+    /// Why a recording's spectrogram was not drawn: it would need more than a quarter of the Mac's memory.
     @State private var memoryNote: String?
 
     /// Rows and the most columns of a recording's spectrogram, which bound its memory.
@@ -1070,9 +1070,6 @@ struct SpectrogramView: View {
             }
         }
         .task(id: recordingKey(trace)) { await computeRecording(trace) }
-        if let note = memoryNote, grid != nil, computedFor == recordingKey(trace) {
-            Label(note, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
-        }
         Text(String(format: "Level over time and frequency of %@ from %.1f to %.1f s (%d-point Hann window). Each column averages the frames in it, so the display holds the same few MB however long the range.",
                     trace.info.name, r.lowerBound, r.upperBound, windowSize(trace)))
             .font(.caption).foregroundStyle(.secondary)
@@ -1094,9 +1091,7 @@ struct SpectrogramView: View {
         let frames = max(1, (max(range.count, window) - window) / hop + 1)
         let columns = min(Self.recordingColumns, frames)
         let rows = Self.recordingRows
-        // The display's memory against the recording's own size (32-bit samples, as in its WAV file).
         let bytes = TimeFrequency.reducedSpectrogramBytes(columns: columns, rows: rows)
-        let fileBytes = samples.count * 4
         let available = Int(min(ProcessInfo.processInfo.physicalMemory / 4, UInt64(Int.max)))
         grid = nil
         progress = 0
@@ -1105,9 +1100,6 @@ struct SpectrogramView: View {
             memoryNote = "This display would need \(megabytes(bytes)), more than a quarter of this Mac's memory, so it is not drawn. Shorten the range or choose a shorter window."
             computedFor = key
             return
-        }
-        if bytes > fileBytes {
-            memoryNote = "This display needs \(megabytes(bytes)), more than the recording itself (\(megabytes(fileBytes)))."
         }
         let fLow = min(lowFrequency, highFrequency / 2), fHigh = min(highFrequency, fs / 2)
         let frequencies = (0..<rows).map { fLow * pow(fHigh / fLow, (Double($0) + 0.5) / Double(rows)) }
