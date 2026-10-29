@@ -629,7 +629,7 @@ struct LiveView: View {
         let yShown = zoom.y == nil ? (top - range)...top : zoom.yDomain(yFull)
         let chart = Chart {
             if let targetPoints {
-                TargetMarks(points: targetPoints, tolerance: model.target.tolerance > 0)
+                TargetMarks(points: targetPoints, tolerance: model.target.hasTolerance)
             }
             ForEach(shown, id: \.0.id) { item in
                 ForEach(item.1) { p in

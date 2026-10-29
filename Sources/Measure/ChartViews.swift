@@ -85,7 +85,7 @@ struct FrequencyResponseView: View {
             } else {
                 Chart {
                     if let targetPoints {
-                        TargetMarks(points: targetPoints, tolerance: model.target.tolerance > 0)
+                        TargetMarks(points: targetPoints, tolerance: model.target.hasTolerance)
                     }
                     ForEach(series, id: \.0.id) { item in
                         let trace = item.0
