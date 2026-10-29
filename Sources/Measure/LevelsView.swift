@@ -26,16 +26,21 @@ struct LevelOffsetField: View {
 
     var body: some View {
         let micOffset = model.micProfiles.first { $0.name == trace.info.mic }?.splOffset
-        TextField("Offset (dB)", value: Binding(
-            get: { model.traces.first { $0.id == trace.id }?.info.splOffset },
-            set: { value in
-                guard var info = model.traces.first(where: { $0.id == trace.id })?.info else { return }
-                info.splOffset = value
-                model.update(info)
-            }),
-            format: .number.precision(.fractionLength(1)),
-            prompt: Text(micOffset.map { String(format: "%.1f (mic)", $0) } ?? "None, dB FS"))
-            .help("dB added to \(trace.info.name)'s level re full scale to give dB SPL")
+        HStack(spacing: 6) {
+            Text("Offset")
+            TextField("Offset (dB)", value: Binding(
+                get: { model.traces.first { $0.id == trace.id }?.info.splOffset },
+                set: { value in
+                    guard var info = model.traces.first(where: { $0.id == trace.id })?.info else { return }
+                    info.splOffset = value
+                    model.update(info)
+                }),
+                format: .number.precision(.fractionLength(1)),
+                prompt: Text(micOffset.map { String(format: "%.1f (mic)", $0) } ?? "None, dB FS"))
+                .labelsHidden()
+            Text("dB").foregroundStyle(.secondary)
+        }
+        .help("dB added to \(trace.info.name)'s level re full scale to give dB SPL")
     }
 }
 
