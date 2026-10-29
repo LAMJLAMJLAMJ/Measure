@@ -857,6 +857,65 @@ final class AppModel {
         status = nil
     }
 
+    /// Imports WAV recordings of Measure's sweep, made elsewhere (a recorder, a DAW, another interface),
+    /// and processes them as a measurement: impulse response and distortion. The sweep is the one set
+    /// in Measurement Setup, which must match the one recorded; each channel becomes a measurement. The
+    /// recording should start at or before the sweep, as a measurement's does.
+    func importSweepRecordings(_ urls: [URL]) async {
+        let s = settings
+        let end = min(s.endFrequency, s.sampleRate / 2)
+        if let problem = ExponentialSweep.validationError(startFrequency: s.startFrequency, endFrequency: end,
+                                                          duration: s.sweepLength, sampleRate: s.sampleRate,
+                                                          amplitude: pow(10, s.level / 20)) {
+            errorMessage = problem
+            return
+        }
+        let sweep = ExponentialSweep(startFrequency: s.startFrequency, endFrequency: end, duration: s.sweepLength,
+                                     sampleRate: s.sampleRate, amplitude: pow(10, s.level / 20))
+        let played = sweep.samples(silence: s.silence)
+        status = "Analysing…"
+        var next = traces.count
+        for url in urls {
+            let name = url.deletingPathExtension().lastPathComponent
+            guard let audio = try? WAV.read(contentsOf: url), !audio.channels.isEmpty else {
+                errorMessage = "Could not read \(url.lastPathComponent). Load WAV recordings of the sweep."
+                continue
+            }
+            guard audio.sampleRate == s.sampleRate else {
+                errorMessage = "\(url.lastPathComponent) is at \(Int(audio.sampleRate)) Hz. Set the sample rate in Measurement Setup to match it, with the sweep it was recorded with."
+                continue
+            }
+            // A recording of another sweep deconvolves to nonsense, so check it is the one in Setup.
+            let first = audio.channels[0]
+            let recorded = await Task.detached(priority: .userInitiated) { sweep.recordedDuration(in: first) }.value
+            guard let recorded, abs(recorded / s.sweepLength - 1) < 0.03 else {
+                errorMessage = "\(url.lastPathComponent) does not hold the sweep set in Measurement Setup (\(Int(s.startFrequency)) Hz to \(Int(end)) Hz in \(String(format: "%g", s.sweepLength)) s)"
+                    + (recorded.map { String(format: ": over that range its sweep takes about %.1f s", $0) } ?? "")
+                    + ". Set the sweep it was recorded with, then import it again."
+                continue
+            }
+            // At least as long as what was played, so the decay after the sweep is there to deconvolve.
+            let mics = audio.channels.map { $0.count >= played.count ? $0 : $0 + [Double](repeating: 0, count: played.count - $0.count) }
+            let colorIndex = next
+            let made: [Trace] = await Task.detached(priority: .userInitiated) {
+                let result = SweepProcessing.process(mics: mics, loopback: nil, sweep: sweep, played: played)
+                return result.impulseResponses.enumerated().map { i, ir -> Trace in
+                    var info = TraceInfo(name: mics.count == 1 ? name : "\(name) · ch \(i + 1)", source: .sweep,
+                                         sampleRate: s.sampleRate,
+                                         notes: "Sweep recording imported from \(url.lastPathComponent), analysed with the sweep in Measurement Setup: \(Int(s.startFrequency)) Hz to \(Int(end)) Hz, \(String(format: "%g", s.sweepLength)) s at \(Int(s.level)) dBFS",
+                                         timingReference: result.timingReference,
+                                         peakLevel: result.micPeakLevels[i], colorIndex: colorIndex + i)
+                    info.distortion = result.distortion[i]
+                    return Trace(info: info, impulseResponse: ir)
+                }
+            }.value
+            for trace in made { add(trace) }
+            selection = made.first?.id
+            next += made.count
+        }
+        status = nil
+    }
+
     /// Imports WAV impulse responses and REW text frequency responses.
     func importFiles(_ urls: [URL]) async {
         status = "Importing…"

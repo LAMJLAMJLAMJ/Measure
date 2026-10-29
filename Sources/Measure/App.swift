@@ -47,6 +47,7 @@ struct MeasureApp: App {
                 Button("Import Files…") { importFiles(model) }
                     .keyboardShortcut("i", modifiers: .command)
                 Button("Import Recordings…") { importRecordings(model) }
+                Button("Import Sweep Recordings…") { importSweepRecordings(model) }
                 Divider()
                 Button("Open Set or Project Folder…") { openProject(model) }
                     .keyboardShortcut("o", modifiers: .command)
@@ -99,6 +100,19 @@ func importRecordings(_ model: AppModel) {
     if panel.runModal() == .OK {
         let urls = panel.urls
         Task { await model.importRecordings(urls) }
+    }
+}
+
+@MainActor
+func importSweepRecordings(_ model: AppModel) {
+    let panel = NSOpenPanel()
+    panel.allowsMultipleSelection = true
+    panel.canChooseDirectories = false
+    panel.allowedContentTypes = [.wav]
+    panel.message = "Choose WAV recordings of the sweep set in Measurement Setup. Each channel becomes a measurement, with its distortion."
+    if panel.runModal() == .OK {
+        let urls = panel.urls
+        Task { await model.importSweepRecordings(urls) }
     }
 }
 

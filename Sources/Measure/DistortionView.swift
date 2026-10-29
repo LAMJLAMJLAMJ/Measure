@@ -106,6 +106,9 @@ struct DistortionView: View {
             var points: [ChartPoint] = []
             for i in f.indices {
                 let column = harmonics.map { $0[i] }
+                // Where the third harmonic is past the sweep's range the sum would leave it out and drop,
+                // so THD is drawn only while H2 and H3 are both measured.
+                guard column.prefix(2).allSatisfy({ $0 != nil }) else { continue }
                 guard let ratio = HarmonicDistortion.thd(fundamental: fundamental[i], harmonics: column) else { continue }
                 let y = display == .percent ? 100 * ratio : 20 * log10(max(ratio, 1e-10))
                 points.append(ChartPoint(x: f[i], y: y))
@@ -192,7 +195,7 @@ struct DistortionView: View {
     }
 
     private func caption(_ d: HarmonicDistortion) -> String {
-        "Harmonic k of a tone at f sounds at k·f and is drawn at f, so each harmonic stops where k·f leaves the sweep's range. THD is the root of the harmonics' summed power over the fundamental's, from H2 to H\(d.highestOrder). Below about \(Int(d.frequencies.first ?? 20)) Hz the windows that keep the harmonics apart are too short to resolve. Distortion rises with level: compare traces measured at the same sweep level, and keep the noise well below the harmonics."
+        "Harmonic k of a tone at f sounds at k·f and is drawn at f, so each harmonic stops a third of an octave before k·f reaches the top of the sweep. THD is the root of the harmonics' summed power over the fundamental's, from H2 to H\(d.highestOrder), drawn while H2 and H3 are both measured. Below about \(Int(d.frequencies.first ?? 20)) Hz the windows that keep the harmonics apart are too short to resolve. Distortion rises with level: compare traces measured at the same sweep level, and keep the noise well below the harmonics."
     }
 }
 #endif

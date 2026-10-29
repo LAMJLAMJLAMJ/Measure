@@ -52,6 +52,10 @@ final class DistortionTests: XCTestCase {
             // What is left is the deconvolution's own floor.
             XCTAssertLessThan(20 * log10(d.thd(i)!), -50, "\(d.frequencies[i]) Hz")
         }
+        // Including where the harmonics reach the top of the sweep, which once read false peaks there.
+        for i in d.frequencies.indices where d.frequencies[i] >= 1000 {
+            if let thd = d.thd(i) { XCTAssertLessThan(20 * log10(thd), -60, "\(d.frequencies[i]) Hz") }
+        }
     }
 
     func testTHDFromLevels() {
