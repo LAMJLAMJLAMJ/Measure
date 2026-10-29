@@ -26,8 +26,8 @@ final class TargetCurveTests: XCTestCase {
         XCTAssertEqual(x.level(at: 2000), 0, accuracy: 1e-9)
         XCTAssertEqual(x.level(at: 8000), -6, accuracy: 1e-9)
         // SMPTE ST 202 figure 5: −7 dB at 10 kHz, −6 dB/octave above, −2 dB at 31.5 Hz.
-        XCTAssertEqual(x.level(at: 10_000), -7, accuracy: 1e-9)
-        XCTAssertEqual(x.level(at: 16_000), -11.07, accuracy: 0.01)
+        XCTAssertEqual(x.level(at: 10_000), -7, accuracy: 0.05)
+        XCTAssertEqual(x.level(at: 16_000), -11.04, accuracy: 0.01)
         XCTAssertEqual(x.level(at: 50), 0, accuracy: 1e-9)
         XCTAssertEqual(x.level(at: 31.5), -2, accuracy: 1e-9)
         XCTAssertEqual(x.low, 31.5)

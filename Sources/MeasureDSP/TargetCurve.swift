@@ -81,10 +81,10 @@ public struct TargetCurve: Codable, Hashable {
             case .falling: return TargetCurve(name: "Falling 1 dB/octave", tilt: -1)
             case .xCurve:
                 // SMPTE ST 202 figure 5 (medium-sized theatre): −3 dB/octave below 50 Hz, flat to 2 kHz,
-                // −3 dB/octave to 10 kHz, −6 dB/octave above; tolerances for 1/3-octave measurements.
+                // −3 dB/octave to 10 kHz (−7.0 dB), −6 dB/octave above; tolerances for 1/3-octave measurements.
                 var x = TargetCurve(name: "X-curve", points: [
                     Point(frequency: 31.5, level: -2), Point(frequency: 50, level: 0), Point(frequency: 2000, level: 0),
-                    Point(frequency: 10_000, level: -7), Point(frequency: 16_000, level: -7 - 6 * log2(1.6)),
+                    Point(frequency: 10_000, level: -3 * log2(5)), Point(frequency: 16_000, level: -3 * log2(5) - 6 * log2(1.6)),
                 ], low: 31.5, high: 16_000, tolerance: 3)
                 x.toleranceBand = [
                     ToleranceBreakpoint(frequency: 31.5, above: 3, below: 7.5),
