@@ -92,9 +92,9 @@ public struct HarmonicDistortion: Codable, Hashable {
         }
         let linear = spectrum(1)
         let fundamental = frequencies.map { linear.magnitude(at: $0) }
-        // Harmonics stop a smoothing width short of the top: near the sweep's end its fade and the
+        // Harmonics stop a third of an octave short of the top: near the sweep's end its fade and the
         // deconvolution's band edge smear energy through every window, which reads as a false harmonic.
-        let harmonicTop = top / pow(2, 1 / smoothing)
+        let harmonicTop = top / pow(2, 1.0 / 3)
         var harmonics: [[Double?]] = []
         for k in 2...order {
             let s = spectrum(k)
