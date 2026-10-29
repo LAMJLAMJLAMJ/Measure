@@ -147,6 +147,8 @@ final class AppModel {
     let inputMeters: InputMeters
 
     var isMeasuring = false
+    /// The plain recording under way, if there is one.
+    var plainRecording: PlainRecording?
     var status: String?
     var errorMessage: String?
     /// Problems found in the last sweep (clipping, low level, low signal-to-noise), shown in the status
@@ -301,21 +303,42 @@ final class AppModel {
                             micChannels: settings.mics.map { $0.channel - 1 })
     }
 
-    /// Records every mic input for `duration` seconds and adds one trace per mic.
+    /// A plain recording under way, for its countdown.
+    struct PlainRecording {
+        let start: Date
+        let duration: Double
+        let label: String
+        let recorder: SweepRecorder
+    }
+
+    /// Records every mic input for `duration` seconds, or until `stopPlainRecording`, and adds one
+    /// trace per mic.
     func recordPlain(duration: Double, label: String) async {
         guard !isMeasuring else { return }
         live.stop()
         monitor.stop()
         generator.stop()
+        levelCheck.stop()
         let s = settings
         isMeasuring = true
         errorMessage = nil
         status = "Recording \(Int(duration)) s…"
-        defer { isMeasuring = false }
+        let recorder = SweepRecorder()
+        plainRecording = PlainRecording(start: Date(), duration: duration, label: label, recorder: recorder)
+        defer {
+            isMeasuring = false
+            plainRecording = nil
+        }
         do {
             let routing = try recordingRouting()
             let silence = [Double](repeating: 0, count: Int(duration * s.sampleRate))
-            let recording = try await SweepRecorder().record(silence, sampleRate: s.sampleRate, routing: routing)
+            let recording = try await recorder.record(silence, sampleRate: s.sampleRate, routing: routing)
+            // Stopped early, the recording is as long as it ran.
+            let duration = Double(recording.mics.first?.count ?? 0) / s.sampleRate
+            guard duration >= 0.1 else {
+                status = "Stopped before anything was recorded."
+                return
+            }
             let date = Date()
             let count = traces.count
             var peaks: [Double] = []
@@ -326,7 +349,7 @@ final class AppModel {
                 let base = label.isEmpty ? "Recording" : label
                 let info = TraceInfo(name: recording.mics.count > 1 ? "\(base) · Mic \(i + 1)" : base, date: date,
                                      source: .recording, sampleRate: s.sampleRate, mic: slot.micName, position: label,
-                                     notes: "Input \(slot.channel), \(Int(duration)) s plain recording",
+                                     notes: "Input \(slot.channel), \(Int(duration.rounded())) s plain recording",
                                      peakLevel: peak, colorIndex: count + i,
                                      splOffset: micProfiles.first { $0.name == slot.micName }?.splOffset)
                 add(Trace(info: info, recording: samples))
@@ -335,12 +358,17 @@ final class AppModel {
             if let worst = peaks.max(), worst > -1 {
                 status = "Recorded, but a mic clipped (peak \(String(format: "%.1f", worst)) dBFS). Lower the gain."
             } else {
-                status = "Recorded \(peaks.count) mic\(peaks.count == 1 ? "" : "s"), \(Int(duration)) s."
+                status = "Recorded \(peaks.count) mic\(peaks.count == 1 ? "" : "s"), \(Int(duration.rounded())) s."
             }
         } catch {
             status = nil
             errorMessage = "\(error)"
         }
+    }
+
+    /// Ends the plain recording under way and keeps what it has recorded.
+    func stopPlainRecording() {
+        plainRecording?.recorder.stop()
     }
 
     /// Records a calibrator on the input `mic` is assigned to and sets the mic's SPL offset so the

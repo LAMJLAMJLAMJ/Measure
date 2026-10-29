@@ -748,7 +748,8 @@ struct TraceEditor: View {
     }
 }
 
-/// Asks how long to record for, then records every mic input with nothing playing.
+/// Asks how long to record for, then records every mic input with nothing playing. While it records,
+/// the sheet counts down and shows the input meters, and Stop Now ends it early, keeping what it has.
 struct PlainRecordingSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -756,25 +757,47 @@ struct PlainRecordingSheet: View {
     @State private var label = ""
 
     var body: some View {
+        Group {
+            if let recording = model.plainRecording {
+                PlainRecordingProgress(recording: recording)
+            } else {
+                settings
+            }
+        }
+        .padding()
+        .frame(width: 420)
+        .interactiveDismissDisabled(model.plainRecording != nil)
+        .onAppear { label = model.settings.position }
+        .toolbar {
+            if model.plainRecording != nil {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Stop Now") { model.stopPlainRecording() }
+                        .keyboardShortcut(.defaultAction)
+                        .help("End the recording now and keep what it has recorded")
+                }
+            } else {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Record") {
+                        let seconds = min(max(duration, 1), 3600)
+                        let name = label
+                        // The sheet stays open with the countdown, and closes when the recording ends.
+                        Task {
+                            await model.recordPlain(duration: seconds, label: name)
+                            dismiss()
+                        }
+                    }
+                    .disabled(!(duration >= 1) || model.isMeasuring)
+                }
+            }
+        }
+    }
+
+    private var settings: some View {
         Form {
             TextField("Duration (s)", value: $duration, format: .number)
             TextField("Label", text: $label, prompt: Text("e.g. Background noise, seat A12"))
             Text(calibrationNote).font(.caption).foregroundStyle(.secondary)
-        }
-        .padding()
-        .frame(width: 420)
-        .onAppear { label = model.settings.position }
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Record") {
-                    let seconds = min(max(duration, 1), 3600)
-                    let name = label
-                    dismiss()
-                    Task { await model.recordPlain(duration: seconds, label: name) }
-                }
-                .disabled(!(duration >= 1))
-            }
         }
     }
 
@@ -784,6 +807,60 @@ struct PlainRecordingSheet: View {
         if uncalibrated.isEmpty { return "Records every mic input, in dB SPL from each mic's calibration." }
         let inputs = uncalibrated.map { "\($0.channel)" }.joined(separator: ", ")
         return "Input \(inputs) has no SPL calibration, so its levels will be re full scale. Calibrate the mic in Setup for dB SPL. Up to an hour."
+    }
+}
+/// The countdown of a plain recording: time left in large figures, a progress bar, and each mic's meter.
+struct PlainRecordingProgress: View {
+    @Environment(AppModel.self) private var model
+    let recording: AppModel.PlainRecording
+
+    var body: some View {
+        TimelineView(.periodic(from: recording.start, by: 0.25)) { context in
+            let elapsed = min(max(0, context.date.timeIntervalSince(recording.start)), recording.duration)
+            let left = recording.duration - elapsed
+            VStack(spacing: 14) {
+                HStack(spacing: 8) {
+                    Circle().fill(.red).frame(width: 10, height: 10)
+                    Text(recording.label.isEmpty ? "Recording" : "Recording \(recording.label)")
+                        .font(.headline).lineLimit(1)
+                }
+                Text(clock(left))
+                    .font(.system(size: 56, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text("left of \(clock(recording.duration))").foregroundStyle(.secondary)
+                ProgressView(value: elapsed, total: max(recording.duration, 0.001))
+                meters
+                Text("Stop Now ends the recording and keeps what it has recorded.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Each mic's input meter, so a dead mic or a clip shows while it records.
+    @ViewBuilder private var meters: some View {
+        let channels = model.inputMeters.mics
+        if !channels.isEmpty {
+            HStack(spacing: 16) {
+                ForEach(channels) { c in
+                    VStack(spacing: 4) {
+                        HStack(spacing: 4) {
+                            InputMeterReadout(channel: c)
+                            VerticalInputMeter(channel: c).frame(height: 40)
+                        }
+                        Text(c.id < model.settings.mics.count ? model.settings.mics[c.id].micName ?? "Mic \(c.id + 1)" : "Mic \(c.id + 1)")
+                            .font(.caption).lineLimit(1)
+                            .foregroundStyle(c.noSignal ? Color.orange : Color.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Seconds as m:ss, or h:mm:ss from an hour up.
+    private func clock(_ seconds: Double) -> String {
+        let t = Int(seconds.rounded(.up))
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
     }
 }
 /// The live mics at the top of the list in Live: which are drawn, which go into the live average (both
