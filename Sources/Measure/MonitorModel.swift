@@ -32,6 +32,8 @@ struct MonitorSettings: Codable, Equatable {
     var micOffsets: [Double] = []
     /// Seconds of history shown; 0 shows everything since the start.
     var historyRange = 900
+    /// The show's length in minutes, from the start of monitoring, for the show budget; nil for none.
+    var showMinutes: Int?
     var rtaMic = 0
     /// Bands per octave: 1, 3, 6, 12 or 24.
     var rtaFraction = 3
@@ -59,7 +61,7 @@ struct MonitorSettings: Codable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case meters, limitA, limitC, limitAColorHex, limitCColorHex, micOffsets, historyRange, rtaMic, rtaFraction, rtaAveraging, rtaWeighting, rtaFFTSize
+        case meters, limitA, limitC, limitAColorHex, limitCColorHex, micOffsets, historyRange, showMinutes, rtaMic, rtaFraction, rtaAveraging, rtaWeighting, rtaFFTSize
     }
 
     /// Settings saved by an earlier version lack some keys; those keep their defaults.
@@ -73,11 +75,33 @@ struct MonitorSettings: Codable, Equatable {
         limitCColorHex = try c.decodeIfPresent(String.self, forKey: .limitCColorHex)
         micOffsets = try c.decodeIfPresent([Double].self, forKey: .micOffsets) ?? []
         historyRange = try c.decodeIfPresent(Int.self, forKey: .historyRange) ?? d.historyRange
+        showMinutes = try c.decodeIfPresent(Int.self, forKey: .showMinutes)
         rtaMic = try c.decodeIfPresent(Int.self, forKey: .rtaMic) ?? d.rtaMic
         rtaFraction = try c.decodeIfPresent(Int.self, forKey: .rtaFraction) ?? d.rtaFraction
         rtaAveraging = try c.decodeIfPresent(RealTimeAnalyzer.Averaging.self, forKey: .rtaAveraging) ?? d.rtaAveraging
         rtaWeighting = try c.decodeIfPresent(SoundLevel.FrequencyWeighting.self, forKey: .rtaWeighting) ?? d.rtaWeighting
         rtaFFTSize = try c.decodeIfPresent(Int.self, forKey: .rtaFFTSize) ?? d.rtaFFTSize
+    }
+}
+
+/// A named moment in live monitoring: the second it falls in (from 0) and its name.
+struct MonitorMarker: Identifiable, Equatable {
+    let id = UUID()
+    var second: Int
+    var name: String
+}
+
+extension ShowBudget {
+    /// The budget's row as shown: "Rest of show (40:00)" and "≤ 98.3", "Over budget" or "Show over".
+    var row: (label: String, value: String) {
+        switch self {
+        case let .allowed(level, remaining):
+            return ("Rest of show (\(LeqOutlook.text(remaining)))", String(format: "≤ %.1f", level))
+        case let .spent(remaining):
+            return ("Rest of show (\(LeqOutlook.text(remaining)))", "Over budget")
+        case .finished:
+            return ("Rest of show", "Show over")
+        }
     }
 }
 
@@ -134,6 +158,8 @@ final class MonitorAnalyzer {
     /// Paused: the input is read but left out of the meters, averages, RTA and history until Resume.
     var isPaused = false
     var startDate: Date?
+    /// Named moments since the start or the last reset, drawn on the history and written to the log.
+    var markers: [MonitorMarker] = []
     /// The pauses since the start or the last reset, so the history and the log keep clock times.
     @ObservationIgnored private(set) var pauses: [LevelLog.Pause] = []
     @ObservationIgnored private var pausedAt: Date?
@@ -200,6 +226,7 @@ final class MonitorAnalyzer {
         statistics = [:]
         levelLogs = []
         pauses = []
+        markers = []
         pausedAt = nil
         isPaused = false
         startDate = Date()
@@ -240,7 +267,9 @@ final class MonitorAnalyzer {
             LevelLog.Column(name: i < micNames.count ? micNames[i] : "Mic \(i + 1)", offset: offset(model, mic: i) ?? 0,
                             unit: unit(model, mic: i), log: levelLogs[i])
         }
-        return LevelLog.csv(columns, start: startDate, pauses: pauses)
+        var named: [Int: String] = [:]
+        for m in markers { named[m.second] = named[m.second].map { $0 + "; " + m.name } ?? m.name }
+        return LevelLog.csv(columns, start: startDate, pauses: pauses, markers: named)
     }
 
     func stop(_ model: AppModel? = nil) {
@@ -286,11 +315,33 @@ final class MonitorAnalyzer {
         statistics = [:]
         levelLogs = []
         pauses = []
+        markers = []
         startDate = Date()
         if isPaused { pausedAt = startDate }
     }
 
     func resetPeaks() { engine?.resetPeaks() }
+
+    /// Marks the second being measured now with a name, such as a song, for the history and the log.
+    func addMarker(_ name: String) {
+        guard isRunning else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        markers.append(MonitorMarker(second: snapshot.seconds, name: trimmed.isEmpty ? "Marker \(markers.count + 1)" : trimmed))
+    }
+
+    /// The show budget for a meter with a limit: the highest Leq for the rest of the show that keeps
+    /// the whole show's Leq at the limit, from the meter's mic and weighting since the start. Nil
+    /// without a show length or a limit, or when not measuring.
+    func budget(_ model: AppModel, meter: MeterSettings) -> ShowBudget? {
+        guard isRunning, let minutes = settings.showMinutes, minutes > 0,
+              let limit = settings.limit(meter.weighting), meter.mic < levelLogs.count,
+              let k = SoundLevel.FrequencyWeighting.allCases.firstIndex(of: meter.weighting),
+              k < levelLogs[meter.mic].energy.count else { return nil }
+        let offset = self.offset(model, mic: meter.mic) ?? 0
+        let budget = ShowBudget.after(levelLogs[meter.mic].energy[k], showSeconds: minutes * 60, target: limit - offset)
+        if case let .allowed(level, remaining) = budget { return .allowed(level: level + offset, remaining: remaining) }
+        return budget
+    }
 
     /// The SPL offset from mic `index`'s calibration (Setup > Calibrate…), if it has one.
     func calibration(_ model: AppModel, mic index: Int) -> Double? {
@@ -309,7 +360,8 @@ final class MonitorAnalyzer {
     }
 
     /// How an Leq meter stands against its limit if the sound carries on at the Fast level now: the
-    /// time until it reaches the limit, or once over it, until it is back under. Nil for Fast and Slow meters, without a limit, or when not measuring.
+    /// time until it reaches the limit, or once over it, until it is back under. Nil for Fast and Slow
+    /// meters, without a limit, or when not measuring.
     func outlook(_ model: AppModel, meter: MeterSettings) -> LeqOutlook? {
         guard isRunning, !isPaused, meter.average != .fast, meter.average != .slow,
               let limit = settings.limit(meter.weighting),

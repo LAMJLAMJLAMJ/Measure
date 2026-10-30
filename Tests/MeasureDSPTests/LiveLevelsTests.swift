@@ -259,3 +259,27 @@ final class LeqForecastTests: XCTestCase {
         XCTAssertNil(LeqForecast.secondsToCross(energies: loud, window: nil, nowLevel: 96, targetLevel: 96))
     }
 }
+
+final class ShowBudgetTests: XCTestCase {
+    func ms(_ db: Double) -> Double { pow(10, db / 10) }
+
+    /// Half of a 60 min show at 98 dB with a 100 dB limit: the other half can run at the level that
+    /// makes the energy average 100 dB.
+    func testAllowedLevelForTheRestOfTheShow() {
+        let energies = [Double](repeating: ms(98), count: 1800)
+        guard case let .allowed(level, remaining) = ShowBudget.after(energies, showSeconds: 3600, target: 100) else {
+            return XCTFail("expected a budget")
+        }
+        XCTAssertEqual(remaining, 1800)
+        XCTAssertEqual(level, 10 * log10(2 * ms(100) - ms(98)), accuracy: 1e-9)
+        // Running at that level for the rest gives exactly the limit.
+        let total = (1800 * ms(98) + 1800 * ms(level)) / 3600
+        XCTAssertEqual(10 * log10(total), 100, accuracy: 1e-9)
+    }
+
+    func testSpentAndFinished() {
+        let loud = [Double](repeating: ms(110), count: 600)
+        XCTAssertEqual(ShowBudget.after(loud, showSeconds: 3600, target: 100), .spent(remaining: 3000))
+        XCTAssertEqual(ShowBudget.after(loud, showSeconds: 600, target: 100), .finished)
+    }
+}

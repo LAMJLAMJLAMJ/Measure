@@ -72,7 +72,7 @@ struct SPLView: View {
                         .help("Add a meter")
                 }
             }
-            .frame(height: monitor.settings.meters.contains { $0.hasForecast(monitor.settings) } ? 205 : 170)
+            .frame(height: meterRowHeight(monitor.settings))
             HStack(spacing: 12) {
                 LimitField(title: "A limit", value: $monitor.settings.limitA, standard: 100,
                            help: "A level not to exceed on A-weighted meters: they turn red above it, and the history draws it as a line")
@@ -101,6 +101,11 @@ struct SPLView: View {
                     .lineLimit(1)
                     .layoutPriority(-1)
             }
+            HStack(spacing: 12) {
+                ShowLengthField(minutes: $monitor.settings.showMinutes)
+                MarkerButton()
+                Spacer()
+            }
             MicOffsetsRow()
             LevelHistoryChart()
             StatisticsRow()
@@ -109,6 +114,12 @@ struct SPLView: View {
 }
 
 extension SPLView {
+    /// Taller when a card shows a forecast, and taller again with the show budget under it.
+    private func meterRowHeight(_ settings: MonitorSettings) -> CGFloat {
+        guard settings.meters.contains(where: { $0.hasForecast(settings) }) else { return 170 }
+        return settings.showMinutes == nil ? 205 : 230
+    }
+
     private func exportLog(_ monitor: MonitorAnalyzer) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
@@ -123,6 +134,67 @@ extension SPLView {
         } catch {
             model.errorMessage = "Could not save the SPL log: \(error.localizedDescription)"
         }
+    }
+}
+
+/// The show's length for the show budget: on, and the minutes from the start of monitoring.
+struct ShowLengthField: View {
+    @Binding var minutes: Int?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Toggle("Show length", isOn: Binding(get: { minutes != nil }, set: { minutes = $0 ? (minutes ?? 90) : nil }))
+            if minutes != nil {
+                TextField("Show length", value: Binding(get: { minutes ?? 90 }, set: { minutes = max(1, $0) }), format: .number)
+                    .labelsHidden()
+                    .frame(width: 50)
+                    .multilineTextAlignment(.trailing)
+                Text("min").foregroundStyle(.secondary)
+            }
+        }
+        .fixedSize()
+        .help("The show's length from when monitoring started or was reset. Each Leq meter with a limit then shows the highest level the rest of the show can run at and still finish with its Leq at the limit.")
+    }
+}
+
+/// Adds a named marker at the moment being measured, for the history and the CSV log.
+struct MarkerButton: View {
+    @Environment(AppModel.self) private var model
+    @State private var naming = false
+    @State private var name = ""
+
+    var body: some View {
+        let monitor = model.monitor
+        HStack(spacing: 6) {
+            Button {
+                name = ""
+                naming = true
+            } label: { Label("Add Marker", systemImage: "flag") }
+                .disabled(!monitor.isRunning)
+                .help("Mark this moment with a name, such as a song, on the history and in the exported log")
+                .popover(isPresented: $naming, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Marker \(monitor.markers.count + 1)", text: $name)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .onSubmit { add() }
+                        HStack {
+                            Spacer()
+                            Button("Add") { add() }.keyboardShortcut(.defaultAction)
+                        }
+                    }
+                    .padding()
+                }
+            if let last = monitor.markers.last {
+                Text("\(monitor.markers.count) marker\(monitor.markers.count == 1 ? "" : "s"), last: \(last.name)")
+                    .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+    }
+
+    private func add() {
+        model.monitor.addMarker(name)
+        naming = false
     }
 }
 
@@ -234,6 +306,9 @@ struct MeterCard: View {
             if meter.hasForecast(monitor.settings) {
                 Divider()
                 ForecastRows(outlook: monitor.outlook(model, meter: meter))
+                if monitor.settings.showMinutes != nil {
+                    BudgetRow(budget: monitor.budget(model, meter: meter))
+                }
             }
         }
         .padding(.vertical, 10)
@@ -378,6 +453,31 @@ struct ForecastRows: View {
     }
 }
 
+/// The show budget on a meter card: the highest Leq for the rest of the show.
+struct BudgetRow: View {
+    let budget: ShowBudget?
+
+    var body: some View {
+        let row: (label: String, value: String) = budget?.row ?? ("Rest of show", "–")
+        HStack {
+            Text(row.label).foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Text(row.value)
+                .monospacedDigit()
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(color)
+        }
+        .font(.callout)
+        .lineLimit(1)
+        .help("The highest Leq the rest of the show can run at and still finish with the whole show's Leq at the limit")
+    }
+
+    private var color: Color {
+        guard let budget, case .spent = budget else { return .primary }
+        return .red
+    }
+}
+
 /// A horizontal scale from 30 to 130 dB SPL (or -100 to 0 dBFS): the level as a bar,
 /// green, yellow within 5 dB of the limit and red over it, a mark at the limit and a small triangle
 /// over the maximum.
@@ -516,11 +616,37 @@ struct LevelHistoryChart: View {
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
                         .annotation(position: .top, alignment: .leading) { Text("C limit").font(.caption).foregroundStyle(color) }
                 }
+                ForEach(markers) { marker in
+                    RuleMark(x: .value("Marker", marker.time))
+                        .foregroundStyle(Color.secondary)
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                        .annotation(position: .top, alignment: .leading) {
+                            Text(marker.name).font(.caption).foregroundStyle(.secondary)
+                        }
+                }
             }
             .chartYScale(domain: low...max(high, low + 10))
             .chartYAxisLabel("dB")
             .chartLegend(.hidden)
             .exportablePlot("SPL history")
+        }
+    }
+
+    private struct ShownMarker: Identifiable {
+        let id: UUID
+        let time: Date
+        let name: String
+    }
+
+    /// The markers within the range shown, at the start of their second.
+    private var markers: [ShownMarker] {
+        let monitor = model.monitor
+        guard let start = monitor.startDate else { return [] }
+        let range = monitor.settings.historyRange
+        let first = range > 0 ? max(0, monitor.snapshot.seconds - range) : 0
+        return monitor.markers.filter { $0.second >= first }.map { m in
+            let time = m.second == 0 ? start : (monitor.endDate(ofSecond: m.second - 1) ?? start)
+            return ShownMarker(id: m.id, time: time, name: m.name)
         }
     }
 

@@ -466,7 +466,8 @@ public struct LevelLog: Equatable {
     /// A CSV with a row per second: the time it ended (when `start` is given, with any pauses counted)
     /// and the seconds measured, then for each mic and weighting the Leq over that second, the highest
     /// Fast level in it and the Slow level at its end, to 0.1 dB.
-    public static func csv(_ mics: [Column], start: Date?, pauses: [Pause] = []) -> String {
+    /// `markers` names seconds (by index from 0) in a last Marker column.
+    public static func csv(_ mics: [Column], start: Date?, pauses: [Pause] = [], markers: [Int: String] = [:]) -> String {
         let weightings = SoundLevel.FrequencyWeighting.allCases
         var header = ["Time", "Elapsed s"]
         for m in mics {
@@ -475,6 +476,7 @@ public struct LevelLog: Equatable {
                 header += ["\(m.name) \(l)eq,1s (\(m.unit))", "\(m.name) \(l)Fmax (\(m.unit))", "\(m.name) \(l)S (\(m.unit))"]
             }
         }
+        if !markers.isEmpty { header.append("Marker") }
         var lines = [header.map(field).joined(separator: ",")]
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -493,6 +495,7 @@ public struct LevelLog: Equatable {
                     }
                 }
             }
+            if !markers.isEmpty { row.append(field(markers[s] ?? "")) }
             lines.append(row.joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
@@ -550,5 +553,26 @@ public enum LeqForecast {
     /// `secondsToCross` with levels in dB instead of mean squares.
     public static func secondsToCross(energies: [Double], window: Int?, nowLevel: Double, targetLevel: Double) -> Int? {
         secondsToCross(energies: energies, window: window, now: pow(10, nowLevel / 10), target: pow(10, targetLevel / 10))
+    }
+}
+
+/// The show budget: the highest level that can be kept up for the rest of a show of fixed length and
+/// still bring the Leq over the whole show to the limit.
+public enum ShowBudget: Equatable {
+    /// Keep the Leq for the rest of the show at or below this level (dB) for `remaining` seconds.
+    case allowed(level: Double, remaining: Int)
+    /// The show's Leq is already over the limit, even with silence for the rest of it.
+    case spent(remaining: Int)
+    /// The show's length has passed.
+    case finished
+
+    /// The budget after `energies` (mean squares of the whole seconds so far, oldest first) in a show
+    /// of `showSeconds`, for a limit `target` in dB on the same scale as the energies.
+    public static func after(_ energies: [Double], showSeconds: Int, target: Double) -> ShowBudget {
+        let remaining = showSeconds - energies.count
+        guard remaining > 0 else { return .finished }
+        let allowed = (pow(10, target / 10) * Double(showSeconds) - energies.reduce(0, +)) / Double(remaining)
+        guard allowed > 0 else { return .spent(remaining: remaining) }
+        return .allowed(level: 10 * log10(allowed), remaining: remaining)
     }
 }
