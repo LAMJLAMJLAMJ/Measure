@@ -247,6 +247,8 @@ final class AppModel {
 
             let count = traces.count
             let date = Date()
+            // Each measurement keeps the calibration its mic had when it was made.
+            let offsets = mics.map { slot in micProfiles.first { $0.name == slot.micName }?.splOffset }
             let timingNote: String
             if let ppm = recording.driftPPM {
                 timingNote = String(format: ". Separate devices, clock difference %.1f ppm corrected", ppm)
@@ -266,7 +268,8 @@ final class AppModel {
                                          mic: slot.micName, position: s.position,
                                          notes: "Input \(slot.channel), output \(s.outputChannel), \(Int(s.sweepLength)) s sweep at \(Int(s.level)) dBFS" + timingNote,
                                          timingReference: result.timingReference,
-                                         peakLevel: result.micPeakLevels[i], colorIndex: count + i)
+                                         peakLevel: result.micPeakLevels[i], colorIndex: count + i,
+                                         splOffset: offsets[i])
                     info.distortion = result.distortion[i]
                     return Trace(info: info, impulseResponse: ir)
                 }
@@ -450,19 +453,14 @@ final class AppModel {
         return name
     }
 
-    /// Clears every SPL calibration: each mic's offset, the offsets typed on recordings, and the SPL
-    /// view's extra mic offsets. Levels go back to dB re full scale until the mics are calibrated again.
-    /// Calibration files (frequency response) stay.
+    /// Clears every mic's SPL offset and the SPL view's extra mic offsets, so new measurements and the
+    /// live meters read dB re full scale until the mics are calibrated again. Measurements already made
+    /// keep the calibration saved with them, and calibration files (frequency response) stay.
     func eraseAllCalibration() {
         for i in micProfiles.indices { micProfiles[i].splOffset = nil }
-        for trace in traces where trace.info.splOffset != nil {
-            var info = trace.info
-            info.splOffset = nil
-            update(info)
-        }
         monitor.settings.micOffsets = []
         errorMessage = nil
-        status = "Erased all calibration: levels are dB re full scale until the mics are calibrated again."
+        status = "Erased all calibration: new measurements read dB re full scale until the mics are calibrated again. Measurements already made keep theirs."
     }
 
     /// dB to add to a trace's level re full scale for dB SPL. Nil when its mic has not been calibrated.
