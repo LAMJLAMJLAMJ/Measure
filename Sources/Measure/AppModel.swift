@@ -119,8 +119,31 @@ final class AppModel {
     var folders: [TraceFolder] = []
     /// Traces drawn in the views (the overlay).
     var visible: Set<UUID> = []
-    /// The trace whose details (acoustics table, decay) are shown.
-    var selection: UUID?
+    /// The trace whose details (acoustics table, decay) are shown: the one clicked last.
+    var selection: UUID? {
+        didSet {
+            if let s = selection {
+                if !selected.contains(s) { selected = [s] }
+            } else if !selected.isEmpty {
+                selected = []
+            }
+        }
+    }
+    /// Every row selected in the list (⇧- or ⌘-click for several), for moving, deleting or exporting
+    /// them together. `selection` is the one of them the detail views show.
+    var selected: Set<UUID> = [] {
+        didSet {
+            guard selected != oldValue else { return }
+            let added = selected.subtracting(oldValue)
+            if added.count == 1 {
+                selection = added.first
+            } else if selection.map({ !selected.contains($0) }) ?? true {
+                selection = selected.first
+            }
+        }
+    }
+    /// The window's undo manager, so deleting measurements can be undone with ⌘Z.
+    @ObservationIgnored weak var undoManager: UndoManager?
     var projectFolder: URL
 
     var devices: [AudioDevice] = []
@@ -656,12 +679,45 @@ final class AppModel {
     func delete(_ ids: Set<UUID>) {
         // A summing folder's average is not a measurement: only its folder removes it.
         let ids = ids.filter { id in traces.first { $0.id == id }?.info.sumFolder == nil }
+        let removed = traces.enumerated().filter { ids.contains($0.element.id) }.map { DeletedTrace(index: $0.offset, trace: $0.element) }
+        guard !removed.isEmpty else { return }
+        let shown = visible.intersection(ids)
         let sums = summingFolders(of: ids)
         for id in ids { ProjectStore.delete(id, in: projectFolder) }
         traces.removeAll { ids.contains($0.id) }
         visible.subtract(ids)
         refreshSums(sums)
         if let s = selection, ids.contains(s) { selection = traces.last?.id }
+        selected.subtract(ids)
+        undoManager?.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated { model.restore(removed, shown: shown) }
+        }
+        undoManager?.setActionName(removed.count == 1 ? "Delete \(removed[0].trace.info.name)" : "Delete \(removed.count) Measurements")
+    }
+
+    /// A deleted trace and where it was in the list, for Undo.
+    struct DeletedTrace {
+        let index: Int
+        let trace: Trace
+    }
+
+    /// Puts deleted traces back where they were, saved again, ticked as they were and selected; Redo
+    /// deletes them again.
+    private func restore(_ removed: [DeletedTrace], shown: Set<UUID>) {
+        for item in removed.sorted(by: { $0.index < $1.index }) {
+            do { try ProjectStore.save(item.trace, in: projectFolder) } catch {
+                errorMessage = "Could not restore \(item.trace.info.name): \(error)"
+            }
+            traces.insert(item.trace, at: min(item.index, traces.count))
+        }
+        let ids = Set(removed.map(\.trace.id))
+        visible.formUnion(shown)
+        refreshSums(summingFolders(of: ids))
+        selected = ids
+        undoManager?.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated { model.delete(ids) }
+        }
+        undoManager?.setActionName(removed.count == 1 ? "Delete \(removed[0].trace.info.name)" : "Delete \(removed.count) Measurements")
     }
 
     /// The open project is the working folder, not a saved set or a folder chosen with Open.

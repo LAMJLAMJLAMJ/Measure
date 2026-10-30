@@ -301,6 +301,7 @@ struct StatusBar: View {
 
 struct TraceList: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.undoManager) private var undoManager
     /// Summing folders average frequency responses, so they are offered in System tuning only.
     @AppStorage("mode") private var mode: AppMode = .tuning
     @AppStorage("tuningSource") private var source: TuningSource = .sweep
@@ -323,7 +324,7 @@ struct TraceList: View {
             guard let id = trace.info.folder else { return true }
             return !folderIDs.contains(id)
         }
-        List(selection: $model.selection) {
+        List(selection: $model.selected) {
             if mode == .tuning && source == .crossSpectrum {
                 LiveMicsSection()
             } else if model.inputMeters.enabled {
@@ -349,8 +350,10 @@ struct TraceList: View {
                                        description: Text("Press Measure (⌘M) or import impulse responses (⌘I)."))
             }
         }
-        .onDeleteCommand { if let s = model.selection { model.delete([s]) } }
+        .onDeleteCommand { model.delete(model.selected) }
         .sheet(item: $editing) { info in TraceEditor(info: info) }
+        .onAppear { model.undoManager = undoManager }
+        .onChange(of: undoManager) { model.undoManager = undoManager }
     }
 
     /// One measurement: tick to show it, its colour, name and details. Drag it onto a folder to file it.
@@ -404,47 +407,64 @@ struct TraceList: View {
         }
         .help(trace.info.notes)
         .tag(trace.id)
-        .draggable(trace.id.uuidString)
+        // Dragging one of several selected rows drags them all, as their ids one per line.
+        .draggable(targets(trace).map(\.uuidString).joined(separator: "\n"))
         .dropDestination(for: String.self) { items, _ in drop(items, into: folderID(trace)) }
-        .contextMenu {
+        .contextMenu { contextMenu(trace) }
+    }
+
+    /// The measurements a context-menu command acts on: every selected row when the clicked one is
+    /// among several selected, otherwise just the clicked one.
+    private func targets(_ trace: Trace) -> Set<UUID> {
+        model.selected.count > 1 && model.selected.contains(trace.id) ? model.selected : [trace.id]
+    }
+
+    @ViewBuilder
+    private func contextMenu(_ trace: Trace) -> some View {
+        let ids = targets(trace)
+        let several = ids.count > 1
+        let withIR = model.traces.filter { ids.contains($0.id) && $0.impulseResponse != nil }.map(\.id)
+        if !several {
             Button("Rename") { startRename(trace) }
             Button("Edit…") { editing = trace.info }
-            Button("Show Only This") { model.visible = [trace.id] }
-            Button("Export Impulse Response…") { model.exportRequest = ExportRequest(traces: [trace.id]) }
-                .disabled(trace.impulseResponse == nil)
-            if let f = folderID(trace), model.folders.first(where: { $0.id == f })?.isSumming == true {
-                Button("Take Out of Summing Folder") { model.move([trace.id], to: nil) }
-                    .help("Moves it to the top level and ticks it; the folder's average is remade without it")
-            }
-            Menu("Move to Folder") {
-                Button("None (Top Level)") { model.move([trace.id], to: nil) }
-                    .disabled(folderID(trace) == nil)
-                if !model.folders.isEmpty { Divider() }
-                ForEach(model.folders) { f in
-                    Button(f.name) { model.move([trace.id], to: f.id) }
-                        .disabled(folderID(trace) == f.id)
-                }
-                Divider()
-                Button("New Folder…") {
-                    let id = model.addFolder()
-                    model.move([trace.id], to: id)
-                    startRenameFolder(id)
-                }
-                Button("New Summing Folder…") {
-                    let id = model.addSummingFolder()
-                    model.move([trace.id], to: id)
-                    startRenameFolder(id)
-                }
-                .disabled(mode != .tuning)
-            }
-            Menu("Colour") {
-                ForEach(TracePalette.names.indices, id: \.self) { i in
-                    Button(TracePalette.names[i]) { setColor(trace, index: i) }
-                }
+        }
+        Button(several ? "Show Only These \(ids.count)" : "Show Only This") { model.visible = ids }
+        Button(several ? "Export Impulse Responses…" : "Export Impulse Response…") { model.exportRequest = ExportRequest(traces: withIR) }
+            .disabled(withIR.isEmpty)
+        if let f = folderID(trace), model.folders.first(where: { $0.id == f })?.isSumming == true {
+            Button("Take Out of Summing Folder") { model.move(ids, to: nil) }
+                .help("Moves it to the top level and ticks it; the folder's average is remade without it")
+        }
+        Menu("Move to Folder") {
+            Button("None (Top Level)") { model.move(ids, to: nil) }
+                .disabled(!several && folderID(trace) == nil)
+            if !model.folders.isEmpty { Divider() }
+            ForEach(model.folders) { f in
+                Button(f.name) { model.move(ids, to: f.id) }
+                    .disabled(!several && folderID(trace) == f.id)
             }
             Divider()
-            Button("Delete", role: .destructive) { model.delete([trace.id]) }
+            Button("New Folder…") {
+                let id = model.addFolder()
+                model.move(ids, to: id)
+                startRenameFolder(id)
+            }
+            Button("New Summing Folder…") {
+                let id = model.addSummingFolder()
+                model.move(ids, to: id)
+                startRenameFolder(id)
+            }
+            .disabled(mode != .tuning)
         }
+        Menu("Colour") {
+            ForEach(TracePalette.names.indices, id: \.self) { i in
+                Button(TracePalette.names[i]) {
+                    for t in model.traces where ids.contains(t.id) { setColor(t, index: i) }
+                }
+            }
+        }
+        Divider()
+        Button(several ? "Delete \(ids.count) Measurements" : "Delete", role: .destructive) { model.delete(ids) }
     }
 
     // MARK: - Folders
@@ -462,7 +482,8 @@ struct TraceList: View {
 
     /// Moves dragged traces (their ids as text) into a folder, or to the top level for nil.
     private func drop(_ items: [String], into folder: UUID?) -> Bool {
-        let ids = Set(items.compactMap(UUID.init(uuidString:))).intersection(model.traces.map(\.id))
+        let strings = items.flatMap { $0.split(separator: "\n").map(String.init) }
+        let ids = Set(strings.compactMap(UUID.init(uuidString:))).intersection(model.traces.map(\.id))
         guard !ids.isEmpty else { return false }
         model.move(ids, to: folder)
         return true
@@ -707,7 +728,12 @@ struct TraceList: View {
     }
 
     private func subtitle(_ trace: Trace) -> String {
-        var parts = [trace.info.date.formatted(date: .abbreviated, time: .shortened)]
+        var parts: [String] = []
+        // The position and mic, unless the name already says them.
+        let position = trace.info.position
+        if !position.isEmpty && !trace.info.name.contains(position) { parts.append(position) }
+        if let mic = trace.info.mic, !trace.info.name.contains(mic) { parts.append(mic) }
+        parts.append(trace.info.date.formatted(date: .abbreviated, time: .shortened))
         if let t30 = trace.acoustics?.broadband.t30 { parts.append(String(format: "T30 %.2f s", t30)) }
         if trace.info.source == .importedFrequencyResponse { parts.append("imported FR") }
         if let samples = trace.recording {
