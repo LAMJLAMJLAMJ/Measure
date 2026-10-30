@@ -75,6 +75,8 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     case setMeterMic(index: Int, mic: Int)
     case setMeterWeighting(index: Int, weighting: String)
     case setMeterAverage(index: Int, average: String)
+    /// Marks the moment being measured on the SPL history and in the log; an empty name gets a number.
+    case addMarker(String)
 }
 
 /// The real-time analyser's bands, with the weighting, calibration and offset applied.
@@ -195,6 +197,17 @@ public struct RemoteMeter: Codable, Equatable, Sendable {
     }
 }
 
+/// A named moment on the SPL history, `secondsAgo` before the latest second.
+public struct RemoteMarker: Codable, Equatable, Sendable {
+    public var name: String
+    public var secondsAgo: Int
+
+    public init(name: String, secondsAgo: Int) {
+        self.name = name
+        self.secondsAgo = secondsAgo
+    }
+}
+
 /// One line of an SPL meter's forecast: "Limit in" and "2:31".
 public struct RemoteForecastRow: Codable, Equatable, Sendable {
     public var label: String
@@ -288,6 +301,8 @@ public struct RemoteState: Codable, Equatable, Sendable {
     public var rtaWeightings: [String] = []
     public var histories: [RemoteHistory] = []
     public var historyRange = 900
+    /// Markers on the SPL history. Optional, so either app can be older.
+    public var markers: [RemoteMarker]?
     /// Limits for A- and C-weighted meters, drawn on the history.
     public var limitA: Double?
     public var limitC: Double?

@@ -72,7 +72,7 @@ struct SPLView: View {
                         .help("Add a meter")
                 }
             }
-            .frame(height: monitor.settings.meters.contains { $0.hasForecast(monitor.settings) } ? 205 : 170)
+            .frame(height: meterRowHeight(monitor.settings))
             HStack(spacing: 12) {
                 LimitField(title: "A limit", value: $monitor.settings.limitA, standard: 100,
                            help: "A level not to exceed on A-weighted meters: they turn red above it, and the history draws it as a line")
@@ -101,6 +101,10 @@ struct SPLView: View {
                     .lineLimit(1)
                     .layoutPriority(-1)
             }
+            HStack(spacing: 12) {
+                MarkerButton()
+                Spacer()
+            }
             MicOffsetsRow()
             LevelHistoryChart()
             StatisticsRow()
@@ -109,6 +113,11 @@ struct SPLView: View {
 }
 
 extension SPLView {
+    /// Taller when a card shows a forecast.
+    private func meterRowHeight(_ settings: MonitorSettings) -> CGFloat {
+        settings.meters.contains(where: { $0.hasForecast(settings) }) ? 205 : 170
+    }
+
     private func exportLog(_ monitor: MonitorAnalyzer) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
@@ -123,6 +132,47 @@ extension SPLView {
         } catch {
             model.errorMessage = "Could not save the SPL log: \(error.localizedDescription)"
         }
+    }
+}
+
+/// Adds a named marker at the moment being measured, for the history and the CSV log.
+struct MarkerButton: View {
+    @Environment(AppModel.self) private var model
+    @State private var naming = false
+    @State private var name = ""
+
+    var body: some View {
+        let monitor = model.monitor
+        HStack(spacing: 6) {
+            Button {
+                name = ""
+                naming = true
+            } label: { Label("Add Marker", systemImage: "flag") }
+                .disabled(!monitor.isRunning)
+                .help("Mark this moment with a name, such as a song, on the history and in the exported log")
+                .popover(isPresented: $naming, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Marker \(monitor.markers.count + 1)", text: $name)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .onSubmit { add() }
+                        HStack {
+                            Spacer()
+                            Button("Add") { add() }.keyboardShortcut(.defaultAction)
+                        }
+                    }
+                    .padding()
+                }
+            if let last = monitor.markers.last {
+                Text("\(monitor.markers.count) marker\(monitor.markers.count == 1 ? "" : "s"), last: \(last.name)")
+                    .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+    }
+
+    private func add() {
+        model.monitor.addMarker(name)
+        naming = false
     }
 }
 
@@ -516,11 +566,37 @@ struct LevelHistoryChart: View {
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
                         .annotation(position: .top, alignment: .leading) { Text("C limit").font(.caption).foregroundStyle(color) }
                 }
+                ForEach(markers) { marker in
+                    RuleMark(x: .value("Marker", marker.time))
+                        .foregroundStyle(Color.secondary)
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                        .annotation(position: .top, alignment: .leading) {
+                            Text(marker.name).font(.caption).foregroundStyle(.secondary)
+                        }
+                }
             }
             .chartYScale(domain: low...max(high, low + 10))
             .chartYAxisLabel("dB")
             .chartLegend(.hidden)
             .exportablePlot("SPL history")
+        }
+    }
+
+    private struct ShownMarker: Identifiable {
+        let id: UUID
+        let time: Date
+        let name: String
+    }
+
+    /// The markers within the range shown, at the start of their second.
+    private var markers: [ShownMarker] {
+        let monitor = model.monitor
+        guard let start = monitor.startDate else { return [] }
+        let range = monitor.settings.historyRange
+        let first = range > 0 ? max(0, monitor.snapshot.seconds - range) : 0
+        return monitor.markers.filter { $0.second >= first }.map { m in
+            let time = m.second == 0 ? start : (monitor.endDate(ofSecond: m.second - 1) ?? start)
+            return ShownMarker(id: m.id, time: time, name: m.name)
         }
     }
 

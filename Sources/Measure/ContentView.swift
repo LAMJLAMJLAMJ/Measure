@@ -75,6 +75,9 @@ struct ContentView: View {
         .sheet(item: Binding(get: { model.exportRequest }, set: { model.exportRequest = $0 })) { request in
             ImpulseExportSheet(ids: request.traces)
         }
+        .sheet(item: Binding(get: { model.namingRequest }, set: { model.namingRequest = $0 })) { request in
+            NameMeasurementsSheet(ids: request.traces)
+        }
         .navigationTitle(model.projectFolder.lastPathComponent)
     }
 
@@ -740,6 +743,57 @@ struct TraceList: View {
             parts.append(String(format: "recording, %.0f s", Double(samples.count) / max(1, trace.info.sampleRate)))
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Names the measurements just made: one field per mic, filled with the name Measure gave it.
+/// Return keeps the names typed; Escape keeps the ones given.
+struct NameMeasurementsSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let ids: [UUID]
+    @State private var names: [UUID: String] = [:]
+    @AppStorage("nameEachMeasurement") private var askEachTime = true
+    @FocusState private var focused: UUID?
+
+    var body: some View {
+        let traces = ids.compactMap { id in model.traces.first { $0.id == id } }
+        VStack(alignment: .leading, spacing: 12) {
+            Text(traces.count == 1 ? "Name the measurement" : "Name the measurements").font(.headline)
+            ForEach(traces) { trace in
+                HStack {
+                    Circle().fill(trace.color).frame(width: 10, height: 10)
+                    TextField("Name", text: Binding(get: { names[trace.id] ?? trace.info.name },
+                                                    set: { names[trace.id] = $0 }))
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focused, equals: trace.id)
+                        .onSubmit { save() }
+                }
+            }
+            Toggle("Ask after each measurement", isOn: $askEachTime)
+                .font(.callout)
+                .help("Also in the Measurement menu")
+            HStack {
+                Spacer()
+                Button("Keep These Names") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+        .frame(width: 420)
+        .onAppear { focused = traces.first?.id }
+    }
+
+    private func save() {
+        for (id, name) in names {
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, var info = model.traces.first(where: { $0.id == id })?.info, info.name != trimmed else { continue }
+            info.name = trimmed
+            model.update(info)
+        }
+        dismiss()
     }
 }
 

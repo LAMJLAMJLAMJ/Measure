@@ -178,6 +178,8 @@ final class RemoteHost {
             guard model.monitor.settings.meters.indices.contains(index),
                   let w = SoundLevel.FrequencyWeighting(rawValue: name) else { return }
             model.monitor.settings.meters[index].weighting = w
+        case .addMarker(let name):
+            model.monitor.addMarker(name)
         case .setMeterAverage(let index, let name):
             guard model.monitor.settings.meters.indices.contains(index), let a = LevelAverage(rawValue: name) else { return }
             model.monitor.settings.meters[index].average = a
@@ -304,6 +306,8 @@ final class RemoteHost {
         if monitor.isRunning {
             s.rta = rta(model)
             s.histories = histories(model)
+            let now = monitor.snapshot.seconds
+            s.markers = monitor.markers.map { RemoteMarker(name: $0.name, secondsAgo: max(0, now - $0.second)) }
         }
 
         let measured = model.traces.filter(\.hasResponse).suffix(30)

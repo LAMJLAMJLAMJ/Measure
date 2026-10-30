@@ -650,6 +650,7 @@ struct MonitorTab: View {
                     .disabled(!state.monitorRunning)
                     Button("Reset") { client.send(.resetMonitor) }
                         .buttonStyle(.bordered)
+                    MarkerButton(client: client, state: state)
                     if state.monitorPaused {
                         Text("Paused: the levels are held and the paused time is left out.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -771,6 +772,12 @@ struct HistorySection: View {
         let level: Double
     }
 
+    /// The markers within the history shown.
+    private var shownMarkers: [RemoteMarker] {
+        let span = state.histories.map { $0.levels.count * $0.secondsPerPoint }.max() ?? 0
+        return (state.markers ?? []).filter { $0.secondsAgo <= span }
+    }
+
     private var points: [Point] {
         var result: [Point] = []
         for (n, history) in state.histories.enumerated() {
@@ -824,6 +831,14 @@ struct HistorySection: View {
                             .foregroundStyle(state.limitCColor.map { Color(remoteHex: $0) } ?? .purple)
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     }
+                    ForEach(Array(shownMarkers.enumerated()), id: \.offset) { _, marker in
+                        RuleMark(x: .value("Marker", -Double(marker.secondsAgo) / 60))
+                            .foregroundStyle(Color.secondary)
+                            .lineStyle(StrokeStyle(lineWidth: 1))
+                            .annotation(position: .top, alignment: .leading) {
+                                Text(marker.name).font(.caption).foregroundStyle(.secondary)
+                            }
+                    }
                 }
                 .chartForegroundStyleScale(domain: state.histories.indices.map { "\($0)" },
                                            range: state.histories.map { Color(remoteHex: $0.color) })
@@ -836,9 +851,33 @@ struct HistorySection: View {
     }
 }
 
-/// One SPL meter, laid out as the Mac's card and Smaart's: a vertical tube on the left, the mic's name
-/// over a big number, the maximum with a status light, and "dB SPL A Slow". The name and that line are
-/// menus that change the meter on the Mac. A Mac without the card's fields gets the plain tile.
+/// Marks this moment on the Mac's SPL history and log, with a name typed here.
+struct MarkerButton: View {
+    let client: RemoteClient
+    let state: RemoteState
+    @State private var naming = false
+    @State private var name = ""
+
+    var body: some View {
+        Button {
+            name = ""
+            naming = true
+        } label: { Label("Marker", systemImage: "flag") }
+            .buttonStyle(.bordered)
+            .disabled(!state.monitorRunning)
+            .alert("Add Marker", isPresented: $naming) {
+                TextField("Song or event", text: $name)
+                Button("Add") { client.send(.addMarker(name)) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Marks this moment on the history and in the exported log.")
+            }
+    }
+}
+
+/// One SPL meter, laid out as the Mac's card: a stripe in its colour, the mic's name and the weighting
+/// and average as menus, the level with its unit, a horizontal scale, and the forecast for Leq meters.
+/// A Mac without the card's fields gets the plain tile.
 struct MeterTile: View {
     let client: RemoteClient
     let state: RemoteState

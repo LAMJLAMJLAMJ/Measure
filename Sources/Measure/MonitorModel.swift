@@ -81,6 +81,13 @@ struct MonitorSettings: Codable, Equatable {
     }
 }
 
+/// A named moment in live monitoring: the second it falls in (from 0) and its name.
+struct MonitorMarker: Identifiable, Equatable {
+    let id = UUID()
+    var second: Int
+    var name: String
+}
+
 /// An Leq meter's forecast against its limit, in seconds; nil where the level never gets there.
 struct LeqOutlook: Equatable {
     /// The Leq is at or over the limit.
@@ -134,6 +141,8 @@ final class MonitorAnalyzer {
     /// Paused: the input is read but left out of the meters, averages, RTA and history until Resume.
     var isPaused = false
     var startDate: Date?
+    /// Named moments since the start or the last reset, drawn on the history and written to the log.
+    var markers: [MonitorMarker] = []
     /// The pauses since the start or the last reset, so the history and the log keep clock times.
     @ObservationIgnored private(set) var pauses: [LevelLog.Pause] = []
     @ObservationIgnored private var pausedAt: Date?
@@ -200,6 +209,7 @@ final class MonitorAnalyzer {
         statistics = [:]
         levelLogs = []
         pauses = []
+        markers = []
         pausedAt = nil
         isPaused = false
         startDate = Date()
@@ -240,7 +250,9 @@ final class MonitorAnalyzer {
             LevelLog.Column(name: i < micNames.count ? micNames[i] : "Mic \(i + 1)", offset: offset(model, mic: i) ?? 0,
                             unit: unit(model, mic: i), log: levelLogs[i])
         }
-        return LevelLog.csv(columns, start: startDate, pauses: pauses)
+        var named: [Int: String] = [:]
+        for m in markers { named[m.second] = named[m.second].map { $0 + "; " + m.name } ?? m.name }
+        return LevelLog.csv(columns, start: startDate, pauses: pauses, markers: named)
     }
 
     func stop(_ model: AppModel? = nil) {
@@ -286,11 +298,19 @@ final class MonitorAnalyzer {
         statistics = [:]
         levelLogs = []
         pauses = []
+        markers = []
         startDate = Date()
         if isPaused { pausedAt = startDate }
     }
 
     func resetPeaks() { engine?.resetPeaks() }
+
+    /// Marks the second being measured now with a name, such as a song, for the history and the log.
+    func addMarker(_ name: String) {
+        guard isRunning else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        markers.append(MonitorMarker(second: snapshot.seconds, name: trimmed.isEmpty ? "Marker \(markers.count + 1)" : trimmed))
+    }
 
     /// The SPL offset from mic `index`'s calibration (Setup > Calibrate…), if it has one.
     func calibration(_ model: AppModel, mic index: Int) -> Double? {
@@ -309,7 +329,8 @@ final class MonitorAnalyzer {
     }
 
     /// How an Leq meter stands against its limit if the sound carries on at the Fast level now: the
-    /// time until it reaches the limit, or once over it, until it is back under. Nil for Fast and Slow meters, without a limit, or when not measuring.
+    /// time until it reaches the limit, or once over it, until it is back under. Nil for Fast and Slow
+    /// meters, without a limit, or when not measuring.
     func outlook(_ model: AppModel, meter: MeterSettings) -> LeqOutlook? {
         guard isRunning, !isPaused, meter.average != .fast, meter.average != .slow,
               let limit = settings.limit(meter.weighting),

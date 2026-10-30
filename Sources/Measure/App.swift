@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct MeasureApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     private var model: AppModel { delegate.model }
+    @AppStorage("nameEachMeasurement") private var nameEachMeasurement = true
 
     init() {
         // Started with `swift run` the process is not a bundled app; make it a normal foreground app.
@@ -52,6 +53,7 @@ struct MeasureApp: App {
                 Toggle("Input Meters", isOn: Binding(get: { model.inputMeters.enabled }, set: { model.inputMeters.enabled = $0 }))
                 Button("Clear Clip Marks") { model.inputMeters.resetClips() }
                     .disabled(!model.inputMeters.isRunning)
+                Toggle("Name Each Measurement", isOn: $nameEachMeasurement)
                 Divider()
                 Button("Import Files…") { importFiles(model) }
                     .keyboardShortcut("i", modifiers: .command)

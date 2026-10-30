@@ -466,7 +466,8 @@ public struct LevelLog: Equatable {
     /// A CSV with a row per second: the time it ended (when `start` is given, with any pauses counted)
     /// and the seconds measured, then for each mic and weighting the Leq over that second, the highest
     /// Fast level in it and the Slow level at its end, to 0.1 dB.
-    public static func csv(_ mics: [Column], start: Date?, pauses: [Pause] = []) -> String {
+    /// `markers` names seconds (by index from 0) in a last Marker column.
+    public static func csv(_ mics: [Column], start: Date?, pauses: [Pause] = [], markers: [Int: String] = [:]) -> String {
         let weightings = SoundLevel.FrequencyWeighting.allCases
         var header = ["Time", "Elapsed s"]
         for m in mics {
@@ -475,6 +476,7 @@ public struct LevelLog: Equatable {
                 header += ["\(m.name) \(l)eq,1s (\(m.unit))", "\(m.name) \(l)Fmax (\(m.unit))", "\(m.name) \(l)S (\(m.unit))"]
             }
         }
+        if !markers.isEmpty { header.append("Marker") }
         var lines = [header.map(field).joined(separator: ",")]
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -493,6 +495,7 @@ public struct LevelLog: Equatable {
                     }
                 }
             }
+            if !markers.isEmpty { row.append(field(markers[s] ?? "")) }
             lines.append(row.joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
