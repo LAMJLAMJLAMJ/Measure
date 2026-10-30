@@ -924,7 +924,7 @@ struct MeterTile: View {
         .padding(.vertical, 12)
         .padding(.leading, 18)
         .padding(.trailing, 12)
-        .frame(height: [170, 215, 240][min(2, state.meters.map { $0.forecast?.count ?? 0 }.max() ?? 0)])
+        .frame(height: state.meters.contains { $0.forecast != nil } ? 215 : 170)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
         .overlay(alignment: .leading) {
             UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12)

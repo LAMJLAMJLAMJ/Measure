@@ -555,24 +555,3 @@ public enum LeqForecast {
         secondsToCross(energies: energies, window: window, now: pow(10, nowLevel / 10), target: pow(10, targetLevel / 10))
     }
 }
-
-/// The show budget: the highest level that can be kept up for the rest of a show of fixed length and
-/// still bring the Leq over the whole show to the limit.
-public enum ShowBudget: Equatable {
-    /// Keep the Leq for the rest of the show at or below this level (dB) for `remaining` seconds.
-    case allowed(level: Double, remaining: Int)
-    /// The show's Leq is already over the limit, even with silence for the rest of it.
-    case spent(remaining: Int)
-    /// The show's length has passed.
-    case finished
-
-    /// The budget after `energies` (mean squares of the whole seconds so far, oldest first) in a show
-    /// of `showSeconds`, for a limit `target` in dB on the same scale as the energies.
-    public static func after(_ energies: [Double], showSeconds: Int, target: Double) -> ShowBudget {
-        let remaining = showSeconds - energies.count
-        guard remaining > 0 else { return .finished }
-        let allowed = (pow(10, target / 10) * Double(showSeconds) - energies.reduce(0, +)) / Double(remaining)
-        guard allowed > 0 else { return .spent(remaining: remaining) }
-        return .allowed(level: 10 * log10(allowed), remaining: remaining)
-    }
-}

@@ -416,10 +416,6 @@ final class RemoteHost {
                     ?? [("Limit in (min:s)", "–")]
                 let soon = outlook.map { !$0.over && ($0.atCurrent ?? Int.max) < 60 } ?? false
                 forecast = rows.enumerated().map { i, row in RemoteForecastRow(label: row.label, time: row.time, soon: i == 0 && soon) }
-                if monitor.settings.showMinutes != nil {
-                    let budget: (label: String, value: String) = monitor.budget(model, meter: meter)?.row ?? ("Rest of show", "–")
-                    forecast?.append(RemoteForecastRow(label: budget.label, time: budget.value))
-                }
                 forecastOver = outlook?.over ?? false
             }
             return RemoteMeter(label: "\(name) · \(meter.average.label(meter.weighting))",

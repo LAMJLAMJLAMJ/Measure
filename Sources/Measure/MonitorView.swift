@@ -102,7 +102,6 @@ struct SPLView: View {
                     .layoutPriority(-1)
             }
             HStack(spacing: 12) {
-                ShowLengthField(minutes: $monitor.settings.showMinutes)
                 MarkerButton()
                 Spacer()
             }
@@ -114,10 +113,9 @@ struct SPLView: View {
 }
 
 extension SPLView {
-    /// Taller when a card shows a forecast, and taller again with the show budget under it.
+    /// Taller when a card shows a forecast.
     private func meterRowHeight(_ settings: MonitorSettings) -> CGFloat {
-        guard settings.meters.contains(where: { $0.hasForecast(settings) }) else { return 170 }
-        return settings.showMinutes == nil ? 205 : 230
+        settings.meters.contains(where: { $0.hasForecast(settings) }) ? 205 : 170
     }
 
     private func exportLog(_ monitor: MonitorAnalyzer) {
@@ -134,26 +132,6 @@ extension SPLView {
         } catch {
             model.errorMessage = "Could not save the SPL log: \(error.localizedDescription)"
         }
-    }
-}
-
-/// The show's length for the show budget: on, and the minutes from the start of monitoring.
-struct ShowLengthField: View {
-    @Binding var minutes: Int?
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Toggle("Show length", isOn: Binding(get: { minutes != nil }, set: { minutes = $0 ? (minutes ?? 90) : nil }))
-            if minutes != nil {
-                TextField("Show length", value: Binding(get: { minutes ?? 90 }, set: { minutes = max(1, $0) }), format: .number)
-                    .labelsHidden()
-                    .frame(width: 50)
-                    .multilineTextAlignment(.trailing)
-                Text("min").foregroundStyle(.secondary)
-            }
-        }
-        .fixedSize()
-        .help("The show's length from when monitoring started or was reset. Each Leq meter with a limit then shows the highest level the rest of the show can run at and still finish with its Leq at the limit.")
     }
 }
 
@@ -306,9 +284,6 @@ struct MeterCard: View {
             if meter.hasForecast(monitor.settings) {
                 Divider()
                 ForecastRows(outlook: monitor.outlook(model, meter: meter))
-                if monitor.settings.showMinutes != nil {
-                    BudgetRow(budget: monitor.budget(model, meter: meter))
-                }
             }
         }
         .padding(.vertical, 10)
@@ -450,31 +425,6 @@ struct ForecastRows: View {
         if outlook.over { return .red }
         if let t = outlook.atCurrent, t < 60 { return .orange }
         return .primary
-    }
-}
-
-/// The show budget on a meter card: the highest Leq for the rest of the show.
-struct BudgetRow: View {
-    let budget: ShowBudget?
-
-    var body: some View {
-        let row: (label: String, value: String) = budget?.row ?? ("Rest of show", "–")
-        HStack {
-            Text(row.label).foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            Text(row.value)
-                .monospacedDigit()
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(color)
-        }
-        .font(.callout)
-        .lineLimit(1)
-        .help("The highest Leq the rest of the show can run at and still finish with the whole show's Leq at the limit")
-    }
-
-    private var color: Color {
-        guard let budget, case .spent = budget else { return .primary }
-        return .red
     }
 }
 
