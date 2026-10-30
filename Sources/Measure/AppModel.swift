@@ -463,9 +463,26 @@ final class AppModel {
         status = "Erased all calibration: new measurements read dB re full scale until the mics are calibrated again. Measurements already made keep theirs."
     }
 
-    /// dB to add to a trace's level re full scale for dB SPL. Nil when its mic has not been calibrated.
+    /// dB to add to a trace's level re full scale for dB SPL. Nil when it was not calibrated.
     func splOffset(for trace: Trace) -> Double? {
-        trace.info.splOffset ?? micProfiles.first { $0.name == trace.info.mic }?.splOffset
+        if trace.info.calibrationKept == true { return trace.info.splOffset }
+        return trace.info.splOffset ?? micProfiles.first { $0.name == trace.info.mic }?.splOffset
+    }
+
+    /// Fixes a trace's calibration as its mic's is now, unless it was fixed already. After this a new
+    /// calibration of the mic no longer reaches the trace.
+    func keepCalibration(_ info: inout TraceInfo) {
+        guard info.calibrationKept != true else { return }
+        if info.splOffset == nil { info.splOffset = micProfiles.first { $0.name == info.mic }?.splOffset }
+        info.calibrationKept = true
+    }
+
+    /// Fixes the calibration of traces saved before calibrations were kept with them, and saves it.
+    private func keepCalibrationOfLoadedTraces() {
+        for i in traces.indices where traces[i].info.calibrationKept != true && traces[i].info.sumFolder == nil {
+            keepCalibration(&traces[i].info)
+            try? ProjectStore.saveInfo(traces[i].info, in: projectFolder)
+        }
     }
 
     /// Uses octave noise levels (125 Hz to 8 kHz, dB SPL) as the background noise for STI.
@@ -629,6 +646,8 @@ final class AppModel {
     // MARK: - Library
 
     func add(_ trace: Trace) {
+        var trace = trace
+        keepCalibration(&trace.info)
         traces.append(trace)
         visible.insert(trace.id)
         do { try ProjectStore.save(trace, in: projectFolder) } catch { errorMessage = "Could not save \(trace.info.name): \(error)" }
@@ -769,6 +788,7 @@ final class AppModel {
             // Keep anything measured while the project was loading.
             let loadedIDs = Set(loaded.map(\.id))
             traces = loaded + traces.filter { !loadedIDs.contains($0.id) }
+            keepCalibrationOfLoadedTraces()
             let summing = Set(folders.filter(\.isSumming).map(\.id))
             visible.formUnion(loaded.suffix(4).filter { !($0.info.folder.map(summing.contains) ?? false) }.map(\.id))
             refreshSums()
@@ -905,6 +925,7 @@ final class AppModel {
             let valid = Set(folders.map(\.id))
             var loose: UUID?
             for var trace in new {
+                keepCalibration(&trace.info)
                 if trace.info.folder.map({ !valid.contains($0) }) ?? true {
                     if loose == nil { loose = addFolder(named: name) }
                     trace.info.folder = loose

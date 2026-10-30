@@ -34,8 +34,11 @@ struct TraceInfo: Codable, Identifiable, Hashable {
     /// Window for the frequency response. Nil means `ResponseWindow.standard`.
     var window: ResponseWindow?
     /// dB added to a recording's level re full scale to give dB SPL, from the mic's calibration when it
-    /// was recorded. Nil falls back to the mic's current calibration.
+    /// was recorded. Once `calibrationKept` is set, nil means the trace was not calibrated.
     var splOffset: Double?
+    /// Set when the trace was added: from then on `splOffset` is its calibration for good, so a new
+    /// calibration or Erase All Calibration never changes it. Nil only for traces saved before this.
+    var calibrationKept: Bool?
     /// For an average, the names of the traces it was made from.
     var averagedFrom: [String]?
     /// A colour chosen by the user, as sRGB hex ("#RRGGBB"). Nil uses the palette colour `colorIndex`.
