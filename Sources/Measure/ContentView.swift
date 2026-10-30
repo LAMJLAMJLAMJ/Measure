@@ -138,6 +138,7 @@ struct ContentView: View {
             .disabled(model.isMeasuring)
             .help("Start or stop the live analyser")
         } else {
+            CheckLevelsButton()
             Button { Task { await model.measure() } } label: {
                 Label(model.isMeasuring ? "Measuring" : "Measure", systemImage: model.isMeasuring ? "waveform" : "record.circle")
             }
@@ -173,22 +174,29 @@ struct ContentView: View {
             .help("Start the meters, averages, maxima and history again")
     }
 
+    /// The same buttons, icons and order as System tuning's Sweep: Import, Check Levels, Measure. Import
+    /// and Measure also open a menu, for recordings, which levels and noise need.
     @ViewBuilder private var acousticsActions: some View {
         Menu {
-            Button("Sweep (impulse response)") { Task { await model.measure() } }
-            Button("Plain recording…") { showPlainRecording = true }
-        } label: {
-            Label(model.isMeasuring ? "Recording" : "Record", systemImage: model.isMeasuring ? "waveform" : "record.circle")
-        }
-        .disabled(model.isMeasuring)
-        .help("Record a sweep for an impulse response (⌘M), or a plain recording for levels and noise")
-        Menu {
-            Button("Impulse responses or frequency responses…") { importFiles(model) }
+            Button("Impulse Responses or Frequency Responses…") { importFiles(model) }
             Button("Recordings…") { importRecordings(model) }
         } label: {
-            Label("Load", systemImage: "square.and.arrow.down")
+            Label("Import", systemImage: "square.and.arrow.down")
+        } primaryAction: {
+            importFiles(model)
         }
-        .help("Load WAV impulse responses or REW text exports (⌘I), or WAV recordings for levels and noise")
+        .help("Import WAV impulse responses or REW text exports (⌘I). Click and hold for WAV recordings, for levels and noise.")
+        CheckLevelsButton()
+        Menu {
+            Button("Sweep (Impulse Response)") { Task { await model.measure() } }
+            Button("Plain Recording…") { showPlainRecording = true }
+        } label: {
+            Label(model.isMeasuring ? "Measuring" : "Measure", systemImage: model.isMeasuring ? "waveform" : "record.circle")
+        } primaryAction: {
+            Task { await model.measure() }
+        }
+        .disabled(model.isMeasuring)
+        .help("Play the sweep and record (⌘M). Click and hold for a plain recording, for levels and noise.")
     }
 
     /// ⌘1 to ⌘7 pick a view in the current mode; ⌥⌘1 to ⌥⌘3 switch mode.
@@ -221,6 +229,25 @@ struct ContentView: View {
     }
 }
 
+/// Plays the sweep in a loop at its level, so the gains can be set on the input meters before measuring.
+struct CheckLevelsButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let check = model.levelCheck
+        Button {
+            if check.isRunning { check.stop(); model.status = nil } else { Task { await check.start(model) } }
+        } label: {
+            Label(check.isRunning ? "Stop Check" : "Check Levels",
+                  systemImage: check.isRunning ? "stop.circle" : "speaker.wave.2")
+        }
+        .disabled(model.isMeasuring)
+        .help(check.isRunning
+              ? "Stop playing the sweep"
+              : "Play the sweep in a loop at its level and watch the input meters in the list: aim for peaks between -20 and -6 dBFS (⌘L)")
+    }
+}
+
 struct StatusBar: View {
     @Environment(AppModel.self) private var model
 
@@ -239,10 +266,16 @@ struct StatusBar: View {
                     .help(warning.text)
                 Spacer()
                 Button("Dismiss") { model.measurementWarning = nil }.buttonStyle(.borderless)
+            } else if !silentMics.isEmpty, !model.isMeasuring {
+                Image(systemName: "mic.slash.fill").foregroundStyle(.orange)
+                Text("No signal on \(silentMics.joined(separator: ", ")). Check the cable, the mic's phantom power and the input gain, or untick it in Setup.")
+                    .lineLimit(2)
+                Spacer()
             } else {
                 Text(model.status ?? setupSummary).foregroundStyle(.secondary)
                 Spacer()
             }
+            InputMeterStrip()
             if !model.remote.remotes.isEmpty {
                 Label(model.remote.remotes.joined(separator: ", "), systemImage: "ipad.landscape")
                     .foregroundStyle(.secondary)
@@ -254,6 +287,8 @@ struct StatusBar: View {
         .padding(.vertical, 6)
         .background(.bar)
     }
+
+    private var silentMics: [String] { model.inputMeters.silentMics(model) }
 
     private var setupSummary: String {
         guard let out = model.outputDevice, let input = model.inputDevice else { return "No audio device chosen" }
@@ -291,6 +326,8 @@ struct TraceList: View {
         List(selection: $model.selection) {
             if mode == .tuning && source == .crossSpectrum {
                 LiveMicsSection()
+            } else if model.inputMeters.enabled {
+                InputsSection()
             }
             ForEach(model.folders) { folder in
                 DisclosureGroup(isExpanded: expanded(folder.id)) {
@@ -711,7 +748,8 @@ struct TraceEditor: View {
     }
 }
 
-/// Asks how long to record for, then records every mic input with nothing playing.
+/// Asks how long to record for, then records every mic input with nothing playing. While it records,
+/// the sheet counts down and shows the input meters, and Stop Now ends it early, keeping what it has.
 struct PlainRecordingSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -719,25 +757,47 @@ struct PlainRecordingSheet: View {
     @State private var label = ""
 
     var body: some View {
+        Group {
+            if let recording = model.plainRecording {
+                PlainRecordingProgress(recording: recording)
+            } else {
+                settings
+            }
+        }
+        .padding()
+        .frame(width: 420)
+        .interactiveDismissDisabled(model.plainRecording != nil)
+        .onAppear { label = model.settings.position }
+        .toolbar {
+            if model.plainRecording != nil {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Stop Now") { model.stopPlainRecording() }
+                        .keyboardShortcut(.defaultAction)
+                        .help("End the recording now and keep what it has recorded")
+                }
+            } else {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Record") {
+                        let seconds = min(max(duration, 1), 3600)
+                        let name = label
+                        // The sheet stays open with the countdown, and closes when the recording ends.
+                        Task {
+                            await model.recordPlain(duration: seconds, label: name)
+                            dismiss()
+                        }
+                    }
+                    .disabled(!(duration >= 1) || model.isMeasuring)
+                }
+            }
+        }
+    }
+
+    private var settings: some View {
         Form {
             TextField("Duration (s)", value: $duration, format: .number)
             TextField("Label", text: $label, prompt: Text("e.g. Background noise, seat A12"))
             Text(calibrationNote).font(.caption).foregroundStyle(.secondary)
-        }
-        .padding()
-        .frame(width: 420)
-        .onAppear { label = model.settings.position }
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Record") {
-                    let seconds = min(max(duration, 1), 3600)
-                    let name = label
-                    dismiss()
-                    Task { await model.recordPlain(duration: seconds, label: name) }
-                }
-                .disabled(!(duration >= 1))
-            }
         }
     }
 
@@ -749,6 +809,60 @@ struct PlainRecordingSheet: View {
         return "Input \(inputs) has no SPL calibration, so its levels will be re full scale. Calibrate the mic in Setup for dB SPL. Up to an hour."
     }
 }
+/// The countdown of a plain recording: time left in large figures, a progress bar, and each mic's meter.
+struct PlainRecordingProgress: View {
+    @Environment(AppModel.self) private var model
+    let recording: AppModel.PlainRecording
+
+    var body: some View {
+        TimelineView(.periodic(from: recording.start, by: 0.25)) { context in
+            let elapsed = min(max(0, context.date.timeIntervalSince(recording.start)), recording.duration)
+            let left = recording.duration - elapsed
+            VStack(spacing: 14) {
+                HStack(spacing: 8) {
+                    Circle().fill(.red).frame(width: 10, height: 10)
+                    Text(recording.label.isEmpty ? "Recording" : "Recording \(recording.label)")
+                        .font(.headline).lineLimit(1)
+                }
+                Text(clock(left))
+                    .font(.system(size: 56, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text("left of \(clock(recording.duration))").foregroundStyle(.secondary)
+                ProgressView(value: elapsed, total: max(recording.duration, 0.001))
+                meters
+                Text("Stop Now ends the recording and keeps what it has recorded.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Each mic's input meter, so a dead mic or a clip shows while it records.
+    @ViewBuilder private var meters: some View {
+        let channels = model.inputMeters.mics
+        if !channels.isEmpty {
+            HStack(spacing: 16) {
+                ForEach(channels) { c in
+                    VStack(spacing: 4) {
+                        HStack(spacing: 4) {
+                            InputMeterReadout(channel: c)
+                            VerticalInputMeter(channel: c).frame(height: 40)
+                        }
+                        Text(c.id < model.settings.mics.count ? model.settings.mics[c.id].micName ?? "Mic \(c.id + 1)" : "Mic \(c.id + 1)")
+                            .font(.caption).lineLimit(1)
+                            .foregroundStyle(c.noSignal ? Color.orange : Color.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Seconds as m:ss, or h:mm:ss from an hour up.
+    private func clock(_ seconds: Double) -> String {
+        let t = Int(seconds.rounded(.up))
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
 /// The live mics at the top of the list in Live: which are drawn, which go into the live average (both
 /// can be changed while measuring), and the average itself, which Save keeps as a summing folder of the
 /// mics' measurements.
@@ -758,8 +872,11 @@ struct LiveMicsSection: View {
     var body: some View {
         let live = model.live
         Section("Live") {
+            referenceRow
             if live.curves.isEmpty {
-                Text("Press Start to measure live; each mic appears here.")
+                // Before starting, the mics are listed with their meters, to check the levels first.
+                ForEach(model.settings.mics.indices, id: \.self) { i in micRow(i) }
+                Text("Press Start to measure live.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(live.curves) { c in micRow(c.mic) }
@@ -790,6 +907,25 @@ struct LiveMicsSection: View {
                 .toggleStyle(.checkbox)
                 .font(.caption)
                 .help("Include this mic in the live average")
+            if let meter = model.inputMeters.mic(mic) { InputMeterView(channel: meter) }
+        }
+        .contextMenu { InputMetersMenu() }
+    }
+
+    /// The reference input with its meter, when the reference is an input rather than the internal one.
+    @ViewBuilder private var referenceRow: some View {
+        let live = model.live
+        if !(live.settings.internalReference && live.settings.generator), let input = model.settings.loopbackInput {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.left.and.right").foregroundStyle(.secondary).frame(width: 12)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Reference").lineLimit(1)
+                    Text("Input \(input)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if let meter = model.inputMeters.loopback { InputMeterView(channel: meter) }
+            }
+            .contextMenu { InputMetersMenu() }
         }
     }
 

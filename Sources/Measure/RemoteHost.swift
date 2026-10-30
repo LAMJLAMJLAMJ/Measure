@@ -171,6 +171,16 @@ final class RemoteHost {
         case .setHistoryRange(let seconds):
             guard [300, 900, 3600, 14_400, 0].contains(seconds) else { return }
             model.monitor.settings.historyRange = seconds
+        case .setMeterMic(let index, let mic):
+            guard model.monitor.settings.meters.indices.contains(index), model.settings.mics.indices.contains(mic) else { return }
+            model.monitor.settings.meters[index].mic = mic
+        case .setMeterWeighting(let index, let name):
+            guard model.monitor.settings.meters.indices.contains(index),
+                  let w = SoundLevel.FrequencyWeighting(rawValue: name) else { return }
+            model.monitor.settings.meters[index].weighting = w
+        case .setMeterAverage(let index, let name):
+            guard model.monitor.settings.meters.indices.contains(index), let a = LevelAverage(rawValue: name) else { return }
+            model.monitor.settings.meters[index].average = a
         case .captureLive:
             model.live.captureAll(model)
         case .findLiveDelay:
@@ -237,6 +247,14 @@ final class RemoteHost {
                             unit: "dBFS peak", overLimit: meter.clipped)
             }
         }
+        let inputs = model.inputMeters
+        let names = model.settings.mics.enumerated().map { $0.element.micName ?? "Mic \($0.offset + 1)" }
+        let channels = (inputs.loopback.map { [$0] } ?? []) + inputs.mics
+        s.inputMeters = channels.map { c in
+            let name = c.id < 0 ? "Loopback" : c.id < names.count ? names[c.id] : "Mic \(c.id + 1)"
+            return RemoteMeter(label: "\(name) · in \(c.input)", value: c.recentPeak > -150 ? c.recentPeak.roundedTenth : nil,
+                               unit: "dBFS peak", overLimit: c.clipped)
+        }
 
         s.liveRunning = model.live.isRunning
         s.liveCurves = model.calibratedLiveCurves.map { curve in
@@ -277,9 +295,12 @@ final class RemoteHost {
         s.rtaFraction = monitor.settings.rtaFraction
         s.rtaWeighting = monitor.settings.rtaWeighting.rawValue
         s.rtaWeightings = SoundLevel.FrequencyWeighting.allCases.map(\.rawValue)
+        s.meterAverages = LevelAverage.allCases.map(\.rawValue)
         s.historyRange = monitor.settings.historyRange
         s.limitA = monitor.settings.limitA
         s.limitC = monitor.settings.limitC
+        s.limitAColor = monitor.settings.limitAColorHex
+        s.limitCColor = monitor.settings.limitCColorHex
         if monitor.isRunning {
             s.rta = rta(model)
             s.histories = histories(model)
@@ -348,7 +369,7 @@ final class RemoteHost {
             let names = model.settings.mics.map { $0.micName ?? "Input \($0.channel)" }
             let name = meter.mic < names.count ? names[meter.mic] : "Mic \(meter.mic + 1)"
             return RemoteHistory(label: "\(name) · \(meter.average.label(meter.weighting))",
-                                 color: Self.meterColors[i % Self.meterColors.count],
+                                 color: meter.colorHex ?? Self.meterColors[i % Self.meterColors.count],
                                  levels: levels, secondsPerPoint: step)
         }
     }
@@ -382,9 +403,12 @@ final class RemoteHost {
             let limit = monitor.settings.limit(meter.weighting)
             let over = limit.map { (level ?? -200) > $0 } ?? false
             let name = meter.mic < micNames.count ? micNames[meter.mic] : "Mic \(meter.mic + 1)"
+            let unit = monitor.unit(model, mic: meter.mic)
             return RemoteMeter(label: "\(name) · \(meter.average.label(meter.weighting))",
-                               value: level, unit: monitor.unit(model, mic: meter.mic),
-                               maximum: maximum, overLimit: over)
+                               value: level, unit: unit,
+                               maximum: maximum, overLimit: over,
+                               name: name, detail: "\(unit) \(meter.weighting.rawValue) \(meter.average.rawValue)",
+                               limit: limit, clipping: (mic?.recentPeak ?? -200) > -1)
         }
     }
 

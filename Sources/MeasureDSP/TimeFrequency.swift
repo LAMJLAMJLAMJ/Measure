@@ -70,6 +70,60 @@ public enum TimeFrequency {
         return Grid(times: times, frequencies: fft.binFrequencies(sampleRate: sampleRate), levels: levels)
     }
 
+    /// A spectrogram of part of a long signal, such as a plain recording, reduced while it is computed:
+    /// to at most `columns` columns, each the power average of the frames that fall in it, and to the
+    /// level at each of `frequencies` (the nearest bin). Its memory is `columns × frequencies.count`
+    /// levels whatever the length, so an hour of recording takes no more than ten seconds.
+    /// - Parameters:
+    ///   - range: the samples of `x` to analyse.
+    ///   - isCancelled: checked every few frames; returning true abandons the work and returns nil.
+    ///   - progress: called every few frames with the fraction done.
+    /// Times are seconds from the start of `x`, at the middle of each column.
+    public static func reducedSpectrogram(_ x: [Double], range: Range<Int>, sampleRate fs: Double,
+                                          windowSize: Int, hop: Int, frequencies: [Double], columns maxColumns: Int,
+                                          isCancelled: () -> Bool = { false },
+                                          progress: (Double) -> Void = { _ in }) -> Grid? {
+        let range = max(0, range.lowerBound)..<min(x.count, max(range.lowerBound, range.upperBound))
+        let hop = max(1, hop)
+        let frames = max(1, (max(range.count, windowSize) - windowSize) / hop + 1)
+        let columns = max(1, min(maxColumns, frames))
+        let fft = FFT(size: windowSize)
+        let window = hann(windowSize)
+        let windowPower = window.reduce(0) { $0 + $1 * $1 }
+        let binWidth = fs / Double(windowSize)
+        let bins = frequencies.map { min(windowSize / 2, max(0, Int(($0 / binWidth).rounded()))) }
+        var sums = [[Double]](repeating: [Double](repeating: 0, count: bins.count), count: columns)
+        var counts = [Int](repeating: 0, count: columns)
+        var frame = [Double](repeating: 0, count: windowSize)
+        for f in 0..<frames {
+            if f % 64 == 0 {
+                if isCancelled() { return nil }
+                progress(Double(f) / Double(frames))
+            }
+            let start = range.lowerBound + f * hop
+            for i in 0..<windowSize {
+                let j = start + i
+                frame[i] = j < range.upperBound ? x[j] * window[i] : 0
+            }
+            let p = fft.forward(frame).power
+            let c = min(columns - 1, f * columns / frames)
+            for (r, b) in bins.enumerated() { sums[c][r] += p[b] }
+            counts[c] += 1
+        }
+        progress(1)
+        let levels = sums.indices.map { c in
+            sums[c].map { 10 * log10(max($0 / Double(max(1, counts[c])) / windowPower, 1e-30)) }
+        }
+        let span = Double(max(range.count, windowSize))
+        let times = (0..<columns).map { c in (Double(range.lowerBound) + (Double(c) + 0.5) / Double(columns) * span) / fs }
+        return Grid(times: times, frequencies: frequencies, levels: levels)
+    }
+
+    /// The memory a `reducedSpectrogram` takes, bytes: its levels, plus its times and frequencies.
+    public static func reducedSpectrogramBytes(columns: Int, rows: Int) -> Int {
+        (columns * (rows + 1) + rows) * MemoryLayout<Double>.size
+    }
+
     /// Cumulative spectral decay (waterfall): the spectrum of the impulse response from successively
     /// later start times, each with a fixed-length window that ends in a half-Hann fade.
     /// Levels are relative to the peak of the first slice.

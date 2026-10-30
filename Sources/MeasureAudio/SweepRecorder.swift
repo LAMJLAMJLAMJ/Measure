@@ -70,7 +70,24 @@ public struct SweepRecording {
 /// The audio callbacks only copy samples between preallocated buffers: no allocation, locks or
 /// Swift object access happens on the audio thread.
 public final class SweepRecorder {
+    private let stopLock = NSLock()
+    private var stopFlag = false
+
     public init() {}
+
+    /// Ends a recording under way early, from any thread: `record` returns what was captured so far,
+    /// as if the signal had been that long. For plain recordings, which play silence.
+    public func stop() {
+        stopLock.lock()
+        stopFlag = true
+        stopLock.unlock()
+    }
+
+    private var stopRequested: Bool {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return stopFlag
+    }
 
     /// Asks for microphone access if it has not been decided yet. On macOS the first call shows the
     /// system prompt (for Terminal when run from the command line).
@@ -117,6 +134,7 @@ public final class SweepRecorder {
         // by the signal's length, plus a little for the interface's latency.
         let timeout = Double(signal.count) / sampleRate + 10
         try await waitUntil(timeout: timeout) {
+            if self.stopRequested { return true }
             let now = state.pointee
             guard now.playedFrames >= signal.count, now.firstOutputHostTime > 0 else { return false }
             let start = self.startOffset(firstInput: now.firstInputHostTime, firstOutput: now.firstOutputHostTime,

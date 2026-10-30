@@ -70,6 +70,11 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     case resetRTAPeaks
     /// Seconds of SPL history shown; 0 for everything.
     case setHistoryRange(Int)
+    /// SPL meter `index`'s mic (an index into `RemoteState.mics`), weighting (one of
+    /// `RemoteState.rtaWeightings`) and average (one of `RemoteState.meterAverages`).
+    case setMeterMic(index: Int, mic: Int)
+    case setMeterWeighting(index: Int, weighting: String)
+    case setMeterAverage(index: Int, average: String)
 }
 
 /// The real-time analyser's bands, with the weighting, calibration and offset applied.
@@ -161,13 +166,24 @@ public struct RemoteMeter: Codable, Equatable, Sendable {
     public var unit: String
     public var maximum: Double?
     public var overLimit: Bool
+    /// SPL meters only, for the card laid out as the Mac's: the mic's name; "dB SPL A Slow"; the limit
+    /// for the meter's weighting; whether the input is clipping. Optional, so either app can be older.
+    public var name: String?
+    public var detail: String?
+    public var limit: Double?
+    public var clipping: Bool?
 
-    public init(label: String, value: Double?, unit: String, maximum: Double? = nil, overLimit: Bool = false) {
+    public init(label: String, value: Double?, unit: String, maximum: Double? = nil, overLimit: Bool = false,
+                name: String? = nil, detail: String? = nil, limit: Double? = nil, clipping: Bool? = nil) {
         self.label = label
         self.value = value
         self.unit = unit
         self.maximum = maximum
         self.overLimit = overLimit
+        self.name = name
+        self.detail = detail
+        self.limit = limit
+        self.clipping = clipping
     }
 }
 
@@ -209,6 +225,9 @@ public struct RemoteState: Codable, Equatable, Sendable {
     /// Peak of each input over the last loop of the sweep, loopback first when there is one.
     /// `overLimit` means it clipped since the check started.
     public var levelMeters: [RemoteMeter] = []
+    /// Every mic input (and the loopback, first, when there is one): the peak over the last few
+    /// seconds, from the Mac's input meters, which run all the time. `overLimit` means it clipped.
+    public var inputMeters: [RemoteMeter] = []
 
     public var liveRunning = false
     public var liveCurves: [RemoteCurve] = []
@@ -238,6 +257,8 @@ public struct RemoteState: Codable, Equatable, Sendable {
     public var monitorRunning = false
     public var monitorPaused = false
     public var meters: [RemoteMeter] = []
+    /// The averages an SPL meter can use: "Fast", "Slow", "Leq 1 min" and so on.
+    public var meterAverages: [String] = []
     public var rta: RemoteRTA?
     public var rtaMic = 0
     public var rtaFraction = 3
@@ -248,6 +269,9 @@ public struct RemoteState: Codable, Equatable, Sendable {
     /// Limits for A- and C-weighted meters, drawn on the history.
     public var limitA: Double?
     public var limitC: Double?
+    /// The limit lines' colours, "#RRGGBB"; nil for red (A) and purple (C).
+    public var limitAColor: String?
+    public var limitCColor: String?
 
     /// The most recent measurements, newest last.
     public var traces: [RemoteTrace] = []

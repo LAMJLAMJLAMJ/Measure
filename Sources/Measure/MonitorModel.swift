@@ -11,6 +11,8 @@ struct MeterSettings: Codable, Equatable, Identifiable {
     var mic = 0
     var weighting: SoundLevel.FrequencyWeighting = .a
     var average: LevelAverage = .fast
+    /// The meter's colour as "#RRGGBB", for its card and its line in the history; nil for the default.
+    var colorHex: String?
 }
 
 /// Live monitoring settings, remembered between launches.
@@ -22,6 +24,9 @@ struct MonitorSettings: Codable, Equatable {
     /// calibrated). Meters above their limit turn red, and the history draws both as lines. Nil for none.
     var limitA: Double?
     var limitC: Double?
+    /// The limits' colours as "#RRGGBB"; nil for the defaults, red for A and purple for C.
+    var limitAColorHex: String?
+    var limitCColorHex: String?
     /// dB added to each mic's levels, by mic index, on top of its calibration: for a mic without a
     /// calibrator reading, or to refer a level measured at one place to another.
     var micOffsets: [Double] = []
@@ -54,7 +59,7 @@ struct MonitorSettings: Codable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case meters, limitA, limitC, micOffsets, historyRange, rtaMic, rtaFraction, rtaAveraging, rtaWeighting, rtaFFTSize
+        case meters, limitA, limitC, limitAColorHex, limitCColorHex, micOffsets, historyRange, rtaMic, rtaFraction, rtaAveraging, rtaWeighting, rtaFFTSize
     }
 
     /// Settings saved by an earlier version lack some keys; those keep their defaults.
@@ -64,6 +69,8 @@ struct MonitorSettings: Codable, Equatable {
         meters = try c.decodeIfPresent([MeterSettings].self, forKey: .meters) ?? d.meters
         limitA = try c.decodeIfPresent(Double.self, forKey: .limitA)
         limitC = try c.decodeIfPresent(Double.self, forKey: .limitC)
+        limitAColorHex = try c.decodeIfPresent(String.self, forKey: .limitAColorHex)
+        limitCColorHex = try c.decodeIfPresent(String.self, forKey: .limitCColorHex)
         micOffsets = try c.decodeIfPresent([Double].self, forKey: .micOffsets) ?? []
         historyRange = try c.decodeIfPresent(Int.self, forKey: .historyRange) ?? d.historyRange
         rtaMic = try c.decodeIfPresent(Int.self, forKey: .rtaMic) ?? d.rtaMic

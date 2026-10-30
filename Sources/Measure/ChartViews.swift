@@ -952,29 +952,51 @@ struct SpectrogramView: View {
     @AppStorage("waterfall.window") private var waterfallWindow = 300.0
     @AppStorage("waterfall.step") private var waterfallStep = 10.0
     @AppStorage("waterfall.slices") private var waterfallSlices = 25
+    /// For a plain recording: where the spectrogram starts and how much of it, seconds. Only this range
+    /// is computed, so a long recording starts with its first 20 s and grows as the range is extended.
+    @AppStorage("spectrogram.recordingStart") private var recordingStart = 0.0
+    @AppStorage("spectrogram.recordingLength") private var recordingLength = 20.0
     @State private var grid: TimeFrequency.Grid?
     @State private var computedFor: String = ""
+    /// Fraction of a recording's spectrogram computed so far.
+    @State private var progress = 0.0
+    /// Why a recording's spectrogram was not drawn: it would need more than a quarter of the Mac's memory.
+    @State private var memoryNote: String?
+
+    /// Rows and the most columns of a recording's spectrogram, which bound its memory.
+    static let recordingRows = 160
+    static let recordingColumns = 1600
 
     var body: some View {
+        let trace = model.selectedTrace
+        let recording = trace.map { $0.impulseResponse == nil && $0.recording != nil } ?? false
         VStack(alignment: .leading) {
             HStack(spacing: 8) {
-                Picker("Show", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
-                    .pickerStyle(.segmented).frame(width: 260)
-                if mode == .spectrogram {
-                    Text("Length")
-                    TextField("Length", value: Binding(get: { length }, set: { length = min(max($0, 0.02), 60) }),
-                              format: .number.precision(.fractionLength(0...3)))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 70)
-                        .help("How much of the impulse response to analyse, in seconds from just before the direct sound: 0.02 to 60")
-                    Text("s")
+                if recording {
+                    recordingRangeFields(trace!)
                     frequencyFields
-                    windowPicker(sampleRate: model.selectedTrace?.info.sampleRate ?? 48_000)
+                    windowPicker(sampleRate: trace!.info.sampleRate)
                 } else {
-                    waterfallControls
+                    Picker("Show", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
+                        .pickerStyle(.segmented).frame(width: 260)
+                    if mode == .spectrogram {
+                        Text("Length")
+                        TextField("Length", value: Binding(get: { length }, set: { length = min(max($0, 0.02), 60) }),
+                                  format: .number.precision(.fractionLength(0...3)))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 70)
+                            .help("How much of the impulse response to analyse, in seconds from just before the direct sound: 0.02 to 60")
+                        Text("s")
+                        frequencyFields
+                        windowPicker(sampleRate: model.selectedTrace?.info.sampleRate ?? 48_000)
+                    } else {
+                        waterfallControls
+                    }
                 }
             }
-            if let trace = model.selectedTrace, trace.impulseResponse != nil {
+            if let trace, recording {
+                recordingSpectrogram(trace)
+            } else if let trace, trace.impulseResponse != nil {
                 Group {
                     if let grid, computedFor == key(trace) {
                         if mode == .spectrogram {
@@ -991,9 +1013,116 @@ struct SpectrogramView: View {
                      : "Cumulative spectral decay: the spectrum from successively later start times, \(number(waterfallStep)) ms apart, \(number(waterfallWindow)) ms windows, coloured from the first slice (dark blue) to the last (yellow).")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                EmptyState(text: "Select a measured or imported impulse response")
+                EmptyState(text: "Select an impulse response or a plain recording")
             }
         }
+    }
+
+    // MARK: Plain recordings
+
+    /// The part of the recording shown, clamped to the recording, seconds.
+    private func recordingRange(_ trace: Trace) -> ClosedRange<Double> {
+        let total = Double(trace.recording?.count ?? 0) / trace.info.sampleRate
+        let start = min(max(0, recordingStart), max(0, total - 0.1))
+        let end = min(total, start + max(0.1, recordingLength))
+        return start...max(end, start)
+    }
+
+    private func recordingRangeFields(_ trace: Trace) -> some View {
+        let total = Double(trace.recording?.count ?? 0) / trace.info.sampleRate
+        return HStack(spacing: 6) {
+            Text("From")
+            TextField("From", value: Binding(get: { recordingStart }, set: { recordingStart = min(max($0, 0), total) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 60)
+                .help("Where the spectrogram starts, seconds into the recording")
+            Text("s   Length")
+            TextField("Length", value: Binding(get: { recordingLength }, set: { recordingLength = min(max($0, 0.1), max(total, 0.1)) }),
+                      format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 70)
+                .help("How much of the recording to analyse, seconds. Only this part is computed; extend it to see more.")
+            Text(String(format: "s of %.0f s", total)).foregroundStyle(.secondary)
+            Button("All") { recordingStart = 0; recordingLength = total }
+                .help("The whole recording")
+        }
+        .textFieldStyle(.roundedBorder)
+        .fixedSize()
+    }
+
+    private func recordingKey(_ trace: Trace) -> String {
+        let r = recordingRange(trace)
+        return "rec-\(trace.id)-\(r.lowerBound)-\(r.upperBound)-\(windowChoice)-\(lowFrequency)-\(highFrequency)"
+    }
+
+    @ViewBuilder
+    private func recordingSpectrogram(_ trace: Trace) -> some View {
+        let r = recordingRange(trace)
+        Group {
+            if let grid, computedFor == recordingKey(trace) {
+                Heatmap(grid: grid, low: lowFrequency, high: highFrequency, timeRange: r)
+                    .exportablePlot("Spectrogram")
+            } else if let note = memoryNote, computedFor == recordingKey(trace) {
+                EmptyState(text: note)
+            } else {
+                ProgressView("Computing \(String(format: "%.0f", r.upperBound - r.lowerBound)) s…", value: progress, total: 1)
+                    .frame(maxWidth: 320)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: recordingKey(trace)) { await computeRecording(trace) }
+        Text(String(format: "Level over time and frequency of %@ from %.1f to %.1f s (%d-point Hann window). Each column averages the frames in it, so the display holds the same few MB however long the range.",
+                    trace.info.name, r.lowerBound, r.upperBound, windowSize(trace)))
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private func windowSize(_ trace: Trace) -> Int {
+        TimeFrequencySettings(length: min(recordingLength, 20), sampleRate: trace.info.sampleRate, window: windowChoice).windowSize
+    }
+
+    private func computeRecording(_ trace: Trace) async {
+        guard let samples = trace.recording else { return }
+        let key = recordingKey(trace)
+        let fs = trace.info.sampleRate
+        let r = recordingRange(trace)
+        let range = Int(r.lowerBound * fs)..<Int(r.upperBound * fs)
+        let window = windowSize(trace)
+        // Frames half a window apart, or closer for a short range, so there are enough to fill the columns.
+        let hop = max(32, min(window / 2, range.count / Self.recordingColumns))
+        let frames = max(1, (max(range.count, window) - window) / hop + 1)
+        let columns = min(Self.recordingColumns, frames)
+        let rows = Self.recordingRows
+        let bytes = TimeFrequency.reducedSpectrogramBytes(columns: columns, rows: rows)
+        let available = Int(min(ProcessInfo.processInfo.physicalMemory / 4, UInt64(Int.max)))
+        grid = nil
+        progress = 0
+        memoryNote = nil
+        guard bytes <= available else {
+            memoryNote = "This display would need \(megabytes(bytes)), more than a quarter of this Mac's memory, so it is not drawn. Shorten the range or choose a shorter window."
+            computedFor = key
+            return
+        }
+        let fLow = min(lowFrequency, highFrequency / 2), fHigh = min(highFrequency, fs / 2)
+        let frequencies = (0..<rows).map { fLow * pow(fHigh / fLow, (Double($0) + 0.5) / Double(rows)) }
+        let progressBinding = $progress
+        let work = Task.detached(priority: .userInitiated) { () -> TimeFrequency.Grid? in
+            var last = 0.0
+            return TimeFrequency.reducedSpectrogram(samples, range: range, sampleRate: fs, windowSize: window, hop: hop,
+                                                    frequencies: frequencies, columns: columns,
+                                                    isCancelled: { Task.isCancelled },
+                                                    progress: { p in
+                                                        guard p - last >= 0.02 || p == 1 else { return }
+                                                        last = p
+                                                        DispatchQueue.main.async { progressBinding.wrappedValue = p }
+                                                    })
+        }
+        let result = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+        guard !Task.isCancelled, let result else { return }
+        grid = result
+        computedFor = key
+    }
+
+    private func megabytes(_ bytes: Int) -> String {
+        String(format: bytes >= 10_000_000 ? "%.0f MB" : "%.1f MB", Double(bytes) / 1_000_000)
     }
 
     private func key(_ trace: Trace) -> String {
@@ -1109,6 +1238,8 @@ struct Heatmap: View {
     let grid: TimeFrequency.Grid
     var low = 20.0
     var high = 20_000.0
+    /// The span of a recording shown, seconds, for the time label; nil for an impulse response (ms).
+    var timeRange: ClosedRange<Double>? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -1120,11 +1251,13 @@ struct Heatmap: View {
             let cols = grid.times.count
             guard cols > 0 else { return }
             let w = size.width / CGFloat(cols), h = size.height / CGFloat(rows)
-            let binWidth = grid.frequencies.count > 1 ? grid.frequencies[1] : 1
+            // The grid's row nearest each drawn row: an FFT's bins, or a recording's log-spaced rows.
+            let bins = (0..<rows).map { r in
+                Heatmap.nearest(grid.frequencies, to: fLow * pow(fHigh / fLow, (Double(r) + 0.5) / Double(rows)))
+            }
             for c in 0..<cols {
                 for r in 0..<rows {
-                    let f = fLow * pow(fHigh / fLow, (Double(r) + 0.5) / Double(rows))
-                    let bin = min(grid.levels[c].count - 1, Int((f / binWidth).rounded()))
+                    let bin = min(grid.levels[c].count - 1, bins[r])
                     let level = grid.levels[c][bin] - top // 0 at the loudest point
                     let x = CGFloat(c) * w, y = size.height - CGFloat(r + 1) * h
                     context.fill(Path(CGRect(x: x, y: y, width: w + 0.5, height: h + 0.5)), with: .color(color(level)))
@@ -1136,10 +1269,27 @@ struct Heatmap: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            Text("0 to \(Int((grid.times.last ?? 0) * 1000)) ms →").font(.caption2).foregroundStyle(labelColor).padding(4)
+            Text(timeLabel).font(.caption2).foregroundStyle(labelColor).padding(4)
         }
         .overlay(alignment: .topTrailing) { legend.padding(6) }
         .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    private var timeLabel: String {
+        if let timeRange { return String(format: "%.1f to %.1f s →", timeRange.lowerBound, timeRange.upperBound) }
+        return "0 to \(Int((grid.times.last ?? 0) * 1000)) ms →"
+    }
+
+    /// Index of the value in `sorted` (ascending) nearest `x`.
+    static func nearest(_ sorted: [Double], to x: Double) -> Int {
+        guard !sorted.isEmpty else { return 0 }
+        var lo = 0, hi = sorted.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if sorted[mid] < x { lo = mid + 1 } else { hi = mid }
+        }
+        if lo > 0 && abs(sorted[lo - 1] - x) <= abs(sorted[lo] - x) { return lo - 1 }
+        return lo
     }
 
     /// The colour scale: level below the loudest point, and the axes.

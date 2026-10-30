@@ -143,8 +143,12 @@ final class AppModel {
     let levelCheck: LevelCheck
     /// The iPad remote's link to this Mac.
     let remote: RemoteHost
+    /// A meter on every mic input and the loopback, running all the time.
+    let inputMeters: InputMeters
 
     var isMeasuring = false
+    /// The plain recording under way, if there is one.
+    var plainRecording: PlainRecording?
     var status: String?
     var errorMessage: String?
     /// Problems found in the last sweep (clipping, low level, low signal-to-noise), shown in the status
@@ -169,9 +173,11 @@ final class AppModel {
         generator = GeneratorModel()
         levelCheck = LevelCheck()
         remote = RemoteHost()
+        inputMeters = InputMeters()
         refreshDevices()
         openProject(projectFolder)
         remote.attach(self)
+        inputMeters.attach(self)
     }
 
     var selectedTrace: Trace? { traces.first { $0.id == selection } }
@@ -297,21 +303,42 @@ final class AppModel {
                             micChannels: settings.mics.map { $0.channel - 1 })
     }
 
-    /// Records every mic input for `duration` seconds and adds one trace per mic.
+    /// A plain recording under way, for its countdown.
+    struct PlainRecording {
+        let start: Date
+        let duration: Double
+        let label: String
+        let recorder: SweepRecorder
+    }
+
+    /// Records every mic input for `duration` seconds, or until `stopPlainRecording`, and adds one
+    /// trace per mic.
     func recordPlain(duration: Double, label: String) async {
         guard !isMeasuring else { return }
         live.stop()
         monitor.stop()
         generator.stop()
+        levelCheck.stop()
         let s = settings
         isMeasuring = true
         errorMessage = nil
         status = "Recording \(Int(duration)) s…"
-        defer { isMeasuring = false }
+        let recorder = SweepRecorder()
+        plainRecording = PlainRecording(start: Date(), duration: duration, label: label, recorder: recorder)
+        defer {
+            isMeasuring = false
+            plainRecording = nil
+        }
         do {
             let routing = try recordingRouting()
             let silence = [Double](repeating: 0, count: Int(duration * s.sampleRate))
-            let recording = try await SweepRecorder().record(silence, sampleRate: s.sampleRate, routing: routing)
+            let recording = try await recorder.record(silence, sampleRate: s.sampleRate, routing: routing)
+            // Stopped early, the recording is as long as it ran.
+            let duration = Double(recording.mics.first?.count ?? 0) / s.sampleRate
+            guard duration >= 0.1 else {
+                status = "Stopped before anything was recorded."
+                return
+            }
             let date = Date()
             let count = traces.count
             var peaks: [Double] = []
@@ -322,7 +349,7 @@ final class AppModel {
                 let base = label.isEmpty ? "Recording" : label
                 let info = TraceInfo(name: recording.mics.count > 1 ? "\(base) · Mic \(i + 1)" : base, date: date,
                                      source: .recording, sampleRate: s.sampleRate, mic: slot.micName, position: label,
-                                     notes: "Input \(slot.channel), \(Int(duration)) s plain recording",
+                                     notes: "Input \(slot.channel), \(Int(duration.rounded())) s plain recording",
                                      peakLevel: peak, colorIndex: count + i,
                                      splOffset: micProfiles.first { $0.name == slot.micName }?.splOffset)
                 add(Trace(info: info, recording: samples))
@@ -331,7 +358,7 @@ final class AppModel {
             if let worst = peaks.max(), worst > -1 {
                 status = "Recorded, but a mic clipped (peak \(String(format: "%.1f", worst)) dBFS). Lower the gain."
             } else {
-                status = "Recorded \(peaks.count) mic\(peaks.count == 1 ? "" : "s"), \(Int(duration)) s."
+                status = "Recorded \(peaks.count) mic\(peaks.count == 1 ? "" : "s"), \(Int(duration.rounded())) s."
             }
         } catch {
             status = nil
@@ -339,41 +366,103 @@ final class AppModel {
         }
     }
 
+    /// Ends the plain recording under way and keeps what it has recorded.
+    func stopPlainRecording() {
+        plainRecording?.recorder.stop()
+    }
+
     /// Records a calibrator on the input `mic` is assigned to and sets the mic's SPL offset so the
     /// calibrator reads `reference` dB.
     func calibrateSPL(mic id: UUID, reference: Double) async {
-        guard !isMeasuring, let mic = micProfiles.first(where: { $0.id == id }) else { return }
-        live.stop()
-        monitor.stop()
-        generator.stop()
+        guard let mic = micProfiles.first(where: { $0.id == id }) else { return }
         guard let index = settings.mics.firstIndex(where: { $0.micName == mic.name }) else {
             errorMessage = "Assign \(mic.name) to a mic input first."
             return
         }
+        await calibrateInput(index, reference: reference)
+    }
+
+    /// What a calibration found: the calibrator's level re full scale and the offset that makes it read
+    /// the reference.
+    struct CalibrationResult {
+        let level: Double
+        let offset: Double
+        let mic: String
+    }
+
+    /// Records a calibrator on mic input `index` of Measurement Setup for `seconds` and sets the SPL
+    /// offset of the mic on that input, so the calibrator reads `reference` dB SPL. The offset lives
+    /// with the mic, so every view that shows dB SPL (Levels, Noise, STI, the SPL meters, the RTA)
+    /// uses it. An input without a mic gets one named after it, to hold the offset.
+    @discardableResult
+    func calibrateInput(_ index: Int, reference: Double, seconds: Double = 5) async -> CalibrationResult? {
+        guard !isMeasuring, settings.mics.indices.contains(index) else { return nil }
+        live.stop()
+        monitor.stop()
+        generator.stop()
+        levelCheck.stop()
+        let name = micName(forInput: index)
         isMeasuring = true
         errorMessage = nil
-        status = "Calibrating \(mic.name)…"
+        status = "Calibrating \(name)…"
         defer { isMeasuring = false }
         do {
             let fs = settings.sampleRate
             let routing = try recordingRouting()
-            let silence = [Double](repeating: 0, count: Int(3 * fs))
+            // Half a second more than asked for, dropped while the calibrator and the interface settle.
+            let silence = [Double](repeating: 0, count: Int((seconds + 0.5) * fs))
             let recording = try await SweepRecorder().record(silence, sampleRate: fs, routing: routing)
-            // Skip the first half second while the calibrator and the interface settle.
             let samples = Array(recording.mics[index].dropFirst(Int(0.5 * fs)))
+            let channel = settings.mics[index].channel
+            if SignalLevel.peak(samples) > MeasurementQuality.clipLevel {
+                throw SetupError(message: "Input \(channel) clipped while calibrating. Turn its gain down and calibrate again.")
+            }
             let level = SoundLevel.analyze(samples, sampleRate: fs, weighting: .z, timeWeighting: .slow).leq
             if level < -70 {
                 throw SetupError(message: String(format: "The calibrator read only %.1f dBFS on input %d. Check it is on the mic and switched on.",
-                                                 level, settings.mics[index].channel))
+                                                 level, channel))
             }
-            if let i = micProfiles.firstIndex(where: { $0.id == id }) {
-                micProfiles[i].splOffset = reference - level
+            let offset = reference - level
+            if let i = micProfiles.firstIndex(where: { $0.name == name }) {
+                micProfiles[i].splOffset = offset
             }
-            status = String(format: "Calibrated %@: %.1f dBFS reads %.1f dB SPL.", mic.name, level, reference)
+            status = String(format: "Calibrated %@: %.1f dBFS reads %.1f dB SPL.", name, level, reference)
+            return CalibrationResult(level: level, offset: offset, mic: name)
         } catch {
             status = nil
             errorMessage = "\(error)"
+            return nil
         }
+    }
+
+    /// The name of the mic on input `index`, giving the input a mic of its own when it has none.
+    private func micName(forInput index: Int) -> String {
+        if let name = settings.mics[index].micName, micProfiles.contains(where: { $0.name == name }) { return name }
+        let base = "Mic on input \(settings.mics[index].channel)"
+        var name = base
+        var n = 2
+        while micProfiles.contains(where: { $0.name == name }) && settings.mics.contains(where: { $0.micName == name }) {
+            name = "\(base) (\(n))"
+            n += 1
+        }
+        if !micProfiles.contains(where: { $0.name == name }) { micProfiles.append(MicProfile(name: name)) }
+        settings.mics[index].micName = name
+        return name
+    }
+
+    /// Clears every SPL calibration: each mic's offset, the offsets typed on recordings, and the SPL
+    /// view's extra mic offsets. Levels go back to dB re full scale until the mics are calibrated again.
+    /// Calibration files (frequency response) stay.
+    func eraseAllCalibration() {
+        for i in micProfiles.indices { micProfiles[i].splOffset = nil }
+        for trace in traces where trace.info.splOffset != nil {
+            var info = trace.info
+            info.splOffset = nil
+            update(info)
+        }
+        monitor.settings.micOffsets = []
+        errorMessage = nil
+        status = "Erased all calibration: levels are dB re full scale until the mics are calibrated again."
     }
 
     /// dB to add to a trace's level re full scale for dB SPL. Nil when its mic has not been calibrated.
