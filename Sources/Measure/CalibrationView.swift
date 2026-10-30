@@ -179,7 +179,7 @@ struct CalibrateInputSheet: View {
 func confirmEraseAllCalibration(_ model: AppModel) {
     let alert = NSAlert()
     alert.messageText = "Erase all calibration?"
-    alert.informativeText = "Every mic's SPL offset, the offsets typed on recordings and the SPL view's mic offsets are cleared. Levels show dB re full scale until the mics are calibrated again. Calibration files stay."
+    alert.informativeText = "Every mic's SPL offset and the SPL view's mic offsets are cleared, so new measurements and the live meters show dB re full scale until the mics are calibrated again. Measurements already made keep the calibration saved with them, and calibration files stay."
     alert.addButton(withTitle: "Erase All")
     alert.addButton(withTitle: "Cancel")
     alert.buttons.first?.hasDestructiveAction = true

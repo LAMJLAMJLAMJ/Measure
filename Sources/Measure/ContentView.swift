@@ -738,8 +738,11 @@ struct TraceEditor: View {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
-                    // A recording's SPL offset belongs to the mic it was recorded with.
-                    if info.mic != model.traces.first(where: { $0.id == info.id })?.info.mic { info.splOffset = nil }
+                    // A recording's SPL offset belongs to the mic it was recorded with: changing the mic
+                    // takes that mic's calibration as it is now.
+                    if info.mic != model.traces.first(where: { $0.id == info.id })?.info.mic {
+                        info.splOffset = model.micProfiles.first { $0.name == info.mic }?.splOffset
+                    }
                     model.update(info)
                     dismiss()
                 }

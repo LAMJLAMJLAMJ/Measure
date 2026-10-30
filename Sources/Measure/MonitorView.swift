@@ -184,8 +184,9 @@ struct MicOffsetsRow: View {
     }
 }
 
-/// One meter, laid out as Smaart's: a vertical bar on the left, the mic's name over a big number,
-/// the maximum with a status light, and the unit, weighting and average as the menu that changes them.
+/// One meter: a stripe in the meter's colour, the mic's name and the weighting and average as menus,
+/// the level large with its unit, a horizontal scale with the limit and maximum, and the maximum and
+/// how the level stands against the limit.
 struct MeterCard: View {
     @Environment(AppModel.self) private var model
     let meter: MeterSettings
@@ -198,39 +199,51 @@ struct MeterCard: View {
         let level = mic.map { $0.level(meter.weighting, meter.average) + (offset ?? 0) }
         let maximum = self.maximum(mic).map { $0 + (offset ?? 0) }
         let limit = monitor.settings.limit(meter.weighting)
-        let over = limit.map { (level ?? -200) > $0 } ?? false
+        let over = limit.map { (level ?? -200) >= $0 } ?? false
+        let near = limit.map { (level ?? -200) > $0 - 5 } ?? false
         let clipping = (mic?.recentPeak ?? -200) > -1
 
-        HStack(spacing: 12) {
-            TubeMeter(level: level, maximum: maximum, limit: limit, spl: offset != nil)
-                .frame(width: 22)
-            VStack(spacing: 2) {
-                HStack(spacing: 6) {
-                    HexColorWell(hex: colorHex, standard: meterColors[index % meterColors.count],
-                                 help: "This meter's colour, on its card and its line in the history")
-                    micMenu
-                    if clipping { Text("Overload").font(.caption.bold()).foregroundStyle(.red) }
-                }
-                Text(levelText(level))
-                    .font(.system(size: 52, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(over ? Color.red : Color.green)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                HStack(spacing: 8) {
-                    Text("Max: \(levelText(maximum))").monospacedDigit()
-                    Circle().fill(statusColor(level: level, limit: limit, clipping: clipping)).frame(width: 12, height: 12)
-                        .help(statusHelp(level: level, limit: limit, clipping: clipping))
-                }
-                .font(.callout)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                HexColorWell(hex: colorHex, standard: meterColors[index % meterColors.count],
+                             help: "This meter's colour, on its card and its line in the history")
+                micMenu
+                Spacer(minLength: 4)
+                if clipping { OverloadBadge() }
                 unitMenu
             }
-            .frame(maxWidth: .infinity)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(levelText(level))
+                    .font(.system(size: 46, weight: .light))
+                    .monospacedDigit()
+                    .foregroundStyle(over ? Color.red : Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                Text(monitor.unit(model, mic: meter.mic)).font(.title3).foregroundStyle(.secondary)
+            }
+            ScaleBar(level: level, maximum: maximum, limit: limit, spl: offset != nil,
+                     limitTint: limitColor(monitor.settings, meter.weighting))
+            HStack {
+                Text("Max \(levelText(maximum))").monospacedDigit()
+                Spacer()
+                Text(statusText(level: level, limit: limit, clipping: clipping))
+                    .foregroundStyle(statusColor(level: level, limit: limit, clipping: clipping))
+                    .help(statusHelp(level: level, limit: limit, clipping: clipping))
+            }
+            .font(.callout)
         }
-        .padding(10)
+        .padding(.vertical, 10)
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(over ? Color.red : meterColor(meter, index).opacity(0.6), lineWidth: over ? 2 : 1))
+        .background(RoundedRectangle(cornerRadius: 10).fill(.quaternary.opacity(0.35)))
+        .overlay(alignment: .leading) {
+            UnevenRoundedRectangle(topLeadingRadius: 10, bottomLeadingRadius: 10)
+                .fill(meterColor(meter, index))
+                .frame(width: 5)
+        }
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(over ? Color.red : near ? Color.yellow : Color.clear, lineWidth: over ? 4 : 2.5))
         .contextMenu {
             if monitor.settings.meters.count > 1 {
                 Button("Remove This Meter", role: .destructive) { monitor.settings.meters.removeAll { $0.id == meter.id } }
@@ -244,19 +257,27 @@ struct MeterCard: View {
         meter.mic < micNames.count ? micNames[meter.mic] : "Mic \(meter.mic + 1)"
     }
 
-    /// Green while the level is fine, yellow within 6 dB of the limit, red over it or when the input clips;
-    /// grey with no level.
+    /// Secondary while the level is fine, yellow within 5 dB of the limit, red over it or when the input
+    /// clips.
     private func statusColor(level: Double?, limit: Double?, clipping: Bool) -> Color {
-        guard let level, level > -150 else { return .gray }
+        guard let level, level > -150 else { return .secondary }
         if clipping { return .red }
-        guard let limit else { return .green }
-        return level > limit ? .red : level > limit - 6 ? .yellow : .green
+        guard let limit else { return .secondary }
+        return level >= limit ? .red : level > limit - 5 ? .yellow : .secondary
+    }
+
+    /// "Under limit", "Near limit", "Over limit" or "Overload"; "No limit" when none is set.
+    private func statusText(level: Double?, limit: Double?, clipping: Bool) -> String {
+        if clipping { return "Overload" }
+        guard let limit else { return "No limit" }
+        guard let level, level > -150 else { return String(format: "Limit %.0f", limit) }
+        return level >= limit ? "Over limit" : level > limit - 5 ? "Near limit" : String(format: "Limit %.0f", limit)
     }
 
     private func statusHelp(level: Double?, limit: Double?, clipping: Bool) -> String {
         if clipping { return "The input is clipping: the levels are not valid. Turn the input gain down." }
         guard let limit else { return "No limit set for this weighting" }
-        return String(format: "Green below %.0f dB, yellow within 6 dB of the %.0f dB limit, red above it", limit - 6, limit)
+        return String(format: "Yellow within 5 dB of the %.0f dB limit, red at or above it", limit)
     }
 
     /// Fast and Slow keep their maximum sample by sample; the Leqs take theirs from the history.
@@ -291,10 +312,9 @@ struct MeterCard: View {
         .help("Choose the mic. Right-click the meter to remove it.")
     }
 
-    /// "dB SPL A Slow", which chooses the weighting and the average.
+    /// "A · Slow", which chooses the weighting and the average.
     private var unitMenu: some View {
-        let unit = model.monitor.unit(model, mic: meter.mic)
-        return Menu {
+        Menu {
             Picker("Weighting", selection: Binding(get: { meter.weighting }, set: { v in update { $0.weighting = v } })) {
                 ForEach(SoundLevel.FrequencyWeighting.allCases) { Text("\($0.rawValue) weighting").tag($0) }
             }
@@ -302,57 +322,81 @@ struct MeterCard: View {
                 ForEach(LevelAverage.allCases) { Text($0.rawValue).tag($0) }
             }
         } label: {
-            Text("\(unit) \(meter.weighting.rawValue) \(meter.average.rawValue)").lineLimit(1)
+            Text("\(meter.weighting.rawValue) · \(meter.average.rawValue)").lineLimit(1)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .controlSize(.small)
         .fixedSize()
-        .foregroundStyle(.secondary)
         .help("\(meter.average.label(meter.weighting)): choose the weighting and the average")
     }
 }
 
-/// A vertical meter tube, as Smaart's SPL meters draw: the level from the bottom in segments, green,
-/// yellow within 6 dB of the limit and red above it, with a line at the maximum.
-struct TubeMeter: View {
+/// A horizontal scale from 30 to 130 dB SPL (or -100 to 0 dBFS): the level as a bar,
+/// green, yellow within 5 dB of the limit and red over it, a mark at the limit and a small triangle
+/// over the maximum.
+struct ScaleBar: View {
     let level: Double?
     let maximum: Double?
     let limit: Double?
     let spl: Bool
+    let limitTint: Color
+
+    private var range: ClosedRange<Double> { spl ? 30...130 : -100...0 }
+
+    private func x(_ value: Double, _ width: CGFloat) -> CGFloat {
+        width * CGFloat(min(1, max(0, (value - range.lowerBound) / (range.upperBound - range.lowerBound))))
+    }
+
+    private var fill: Color {
+        guard let level, let limit else { return .green }
+        return level >= limit ? .red : level > limit - 5 ? .yellow : .green
+    }
 
     var body: some View {
-        let range: ClosedRange<Double> = spl ? 30...130 : -100...0
-        let span = range.upperBound - range.lowerBound
-        func fraction(_ v: Double?) -> CGFloat {
-            CGFloat(v.map { min(1, max(0, ($0 - range.lowerBound) / span)) } ?? 0)
-        }
-        let color: Color = {
-            guard let level, let limit else { return .green }
-            return level > limit ? .red : level > limit - 6 ? .yellow : .green
-        }()
-        return GeometryReader { geo in
-            let inner = geo.size.height - 6
-            ZStack(alignment: .bottom) {
-                Capsule().fill(Color.black.opacity(0.75))
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    Rectangle().fill(color.gradient).frame(height: inner * fraction(level))
+        VStack(spacing: 3) {
+            GeometryReader { geo in
+                let w = geo.size.width
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.18))
+                    RoundedRectangle(cornerRadius: 3).fill(fill.gradient).frame(width: level.map { x($0, w) } ?? 0)
+                    if let limit {
+                        Rectangle().fill(limitTint).frame(width: 2, height: 16).offset(x: x(limit, w) - 1)
+                    }
+                    if let maximum, maximum > range.lowerBound {
+                        Image(systemName: "arrowtriangle.down.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                            .offset(x: x(maximum, w) - 4, y: -11)
+                    }
                 }
-                .padding(3)
-                .clipShape(Capsule().inset(by: 3))
-                // A divider every 10 dB, like the segments of a hardware meter.
-                ForEach(1..<10, id: \.self) { k in
-                    Rectangle().fill(Color.black.opacity(0.6)).frame(height: 1)
-                        .offset(y: -3 - inner * CGFloat(k) / 10)
-                }
-                if let maximum, maximum > range.lowerBound {
-                    Rectangle().fill(Color.white.opacity(0.9)).frame(height: 1.5)
-                        .padding(.horizontal, 3)
-                        .offset(y: -3 - inner * fraction(maximum))
-                }
-                Capsule().strokeBorder(Color.gray.opacity(0.7), lineWidth: 2)
             }
+            .frame(height: 10)
+            HStack {
+                Text("\(Int(range.lowerBound))")
+                Spacer()
+                Text("\(Int((range.lowerBound + range.upperBound) / 2))")
+                Spacer()
+                Text("\(Int(range.upperBound))")
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .monospacedDigit()
         }
-        .help(spl ? "30 to 130 dB SPL; the white line is the maximum" : "-100 to 0 dBFS; the white line is the maximum")
+        .padding(.top, 8)
+        .help(spl ? "30 to 130 dB SPL; the triangle is the maximum, the mark the limit"
+                  : "-100 to 0 dBFS; the triangle is the maximum, the mark the limit")
+    }
+}
+
+/// A red "Overload" capsule, shown while the input clips.
+struct OverloadBadge: View {
+    var body: some View {
+        Text("Overload")
+            .font(.caption.bold())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.red))
     }
 }
 

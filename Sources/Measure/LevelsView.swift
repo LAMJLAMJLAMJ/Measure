@@ -18,14 +18,14 @@ private func unitNote(_ offset: Double?) -> String {
     offset == nil ? "dB re full scale (mic not calibrated)" : "dB SPL"
 }
 
-/// The dB added to a recording's level re full scale to give dB SPL. Typing a value sets it for this
-/// recording; clearing it falls back to the mic's calibration.
+/// The dB added to a recording's level re full scale to give dB SPL: the calibration it was recorded
+/// with, which typing changes for this recording only. Empty means it was not calibrated.
 struct LevelOffsetField: View {
     @Environment(AppModel.self) private var model
     let trace: Trace
 
     var body: some View {
-        let micOffset = model.micProfiles.first { $0.name == trace.info.mic }?.splOffset
+        let micOffset = trace.info.calibrationKept == true ? nil : model.micProfiles.first { $0.name == trace.info.mic }?.splOffset
         HStack(spacing: 6) {
             Text("Offset")
             TextField("Offset (dB)", value: Binding(
