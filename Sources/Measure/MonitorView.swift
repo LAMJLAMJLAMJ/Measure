@@ -270,12 +270,15 @@ struct MeterCard: View {
         return level >= limit ? .red : level > limit - 5 ? .yellow : .secondary
     }
 
-    /// "Under limit", "Near limit", "Over limit" or "Overload"; "No limit" when none is set.
+    /// "2.3 dB under limit" within 5 dB of it, "1.2 dB over limit" at or over it, otherwise the limit;
+    /// "Overload" while the input clips, "No limit" when none is set.
     private func statusText(level: Double?, limit: Double?, clipping: Bool) -> String {
         if clipping { return "Overload" }
         guard let limit else { return "No limit" }
         guard let level, level > -150 else { return String(format: "Limit %.0f", limit) }
-        return level >= limit ? "Over limit" : level > limit - 5 ? "Near limit" : String(format: "Limit %.0f", limit)
+        if level >= limit { return String(format: "%.1f dB over limit", level - limit) }
+        if level > limit - 5 { return String(format: "%.1f dB under limit", limit - level) }
+        return String(format: "Limit %.0f", limit)
     }
 
     private func statusHelp(level: Double?, limit: Double?, clipping: Bool) -> String {

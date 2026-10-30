@@ -914,12 +914,14 @@ struct MeterTile: View {
         return state.limitAColor.map { Color(remoteHex: $0) } ?? .red
     }
 
-    /// "Over limit", "Near limit" within 5 dB, "Overload" while clipping, otherwise the limit.
+    /// "1.2 dB over limit", "2.3 dB under limit" within 5 dB, "Overload" while clipping, otherwise the limit.
     private var statusText: String {
         if meter.clipping == true { return "Overload" }
         guard let limit = meter.limit else { return "No limit" }
         guard let value = meter.value else { return String(format: "Limit %.0f", limit) }
-        return value >= limit ? "Over limit" : value > limit - 5 ? "Near limit" : String(format: "Limit %.0f", limit)
+        if value >= limit { return String(format: "%.1f dB over limit", value - limit) }
+        if value > limit - 5 { return String(format: "%.1f dB under limit", limit - value) }
+        return String(format: "Limit %.0f", limit)
     }
 
     /// Secondary while the level is fine, yellow within 5 dB of the limit, red over it or while clipping.
