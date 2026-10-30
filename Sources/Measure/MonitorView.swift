@@ -72,7 +72,7 @@ struct SPLView: View {
                         .help("Add a meter")
                 }
             }
-            .frame(height: 170)
+            .frame(height: monitor.settings.meters.contains { $0.hasForecast(monitor.settings) } ? 250 : 170)
             HStack(spacing: 12) {
                 LimitField(title: "A limit", value: $monitor.settings.limitA, standard: 100,
                            help: "A level not to exceed on A-weighted meters: they turn red above it, and the history draws it as a line")
@@ -231,6 +231,10 @@ struct MeterCard: View {
                     .help(statusHelp(level: level, limit: limit, clipping: clipping))
             }
             .font(.callout)
+            if meter.hasForecast(monitor.settings) {
+                Divider()
+                ForecastRows(outlook: monitor.outlook(model, meter: meter))
+            }
         }
         .padding(.vertical, 10)
         .padding(.leading, 16)
@@ -328,6 +332,46 @@ struct MeterCard: View {
         .controlSize(.small)
         .fixedSize()
         .help("\(meter.average.label(meter.weighting)): choose the weighting and the average")
+    }
+}
+
+extension MeterSettings {
+    /// An Leq meter with a limit, which shows how long until it reaches the limit or is back under.
+    func hasForecast(_ settings: MonitorSettings) -> Bool {
+        average != .fast && average != .slow && settings.limit(weighting) != nil
+    }
+}
+
+/// An Leq meter's forecast against its limit: the time until it reaches the limit at the Fast level
+/// now, or once over, until it is back under at that level and at 3 and 5 dB below the limit.
+struct ForecastRows: View {
+    let outlook: LeqOutlook?
+
+    var body: some View {
+        let rows: [(label: String, time: String)] = outlook?.rows ?? [("Limit in", "–"), ("Under at −3 dB", "–"), ("Under at −5 dB", "–")]
+        VStack(spacing: 3) {
+            ForEach(rows.indices, id: \.self) { i in
+                HStack {
+                    Text(rows[i].label).foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Text(rows[i].time)
+                        .monospacedDigit()
+                        .font(i == 0 ? .title3.weight(.semibold) : .callout)
+                        .foregroundStyle(color(i))
+                }
+            }
+        }
+        .font(.callout)
+        .lineLimit(1)
+        .help("If the sound carries on at the Fast level now: how long until this Leq reaches the limit, or once over it, until it is back under. −3 dB and −5 dB: back under if the level is held that far below the limit from now.")
+    }
+
+    /// The first row red while over the limit, orange when the limit is less than a minute away.
+    private func color(_ row: Int) -> Color {
+        guard row == 0, let outlook else { return .primary }
+        if outlook.over { return .red }
+        if let t = outlook.atCurrent, t < 60 { return .orange }
+        return .primary
     }
 }
 
