@@ -846,41 +846,76 @@ struct MeterTile: View {
     let index: Int
 
     var body: some View {
-        HStack(spacing: 14) {
-            RemoteTubeMeter(level: meter.value, maximum: meter.maximum, limit: meter.limit, spl: meter.unit == "dB SPL")
-                .frame(width: 22)
-            VStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
                 micMenu
-                Text(meter.value.map { String(format: "%.1f", $0) } ?? "–")
-                    .font(.system(size: 48, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(meter.overLimit ? Color.red : Color.green)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                HStack(spacing: 8) {
-                    Text("Max: " + (meter.maximum.map { String(format: "%.1f", $0) } ?? "–")).monospacedDigit()
-                    Circle().fill(statusColor).frame(width: 12, height: 12)
-                }
-                .font(.callout)
+                Spacer(minLength: 4)
                 if meter.clipping == true {
-                    Text("Overload").font(.caption.bold()).foregroundStyle(.red)
+                    Text("Overload")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.red))
                 }
                 unitMenu
             }
-            .frame(maxWidth: .infinity)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(meter.value.map { String(format: "%.1f", $0) } ?? "–")
+                    .font(.system(size: 46, weight: .light))
+                    .monospacedDigit()
+                    .foregroundStyle(meter.overLimit ? Color.red : Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                Text(meter.unit).font(.title3).foregroundStyle(.secondary)
+            }
+            RemoteScaleBar(level: meter.value, maximum: meter.maximum, limit: meter.limit,
+                           spl: meter.unit == "dB SPL", tint: tint, limitTint: limitTint)
+            HStack {
+                Text("Max " + (meter.maximum.map { String(format: "%.1f", $0) } ?? "–")).monospacedDigit()
+                Spacer()
+                Text(statusText).foregroundStyle(statusColor)
+            }
+            .font(.callout)
         }
+        .padding(.vertical, 12)
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
         .frame(height: 170)
-        .padding(12)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(alignment: .leading) {
+            UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12)
+                .fill(tint)
+                .frame(width: 5)
+        }
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(meter.overLimit ? Color.red : Color.clear, lineWidth: 2))
     }
 
-    /// Green while the level is fine, yellow within 6 dB of the limit, red over it or while clipping.
+    /// The meter's colour on the Mac, which its history line carries.
+    private var tint: Color {
+        index < state.histories.count ? Color(remoteHex: state.histories[index].color) : .accentColor
+    }
+
+    /// The limit's colour on the Mac: the C limit's for a C-weighted meter, otherwise the A limit's.
+    private var limitTint: Color {
+        if meter.detail?.contains(" C ") == true { return state.limitCColor.map { Color(remoteHex: $0) } ?? .purple }
+        return state.limitAColor.map { Color(remoteHex: $0) } ?? .red
+    }
+
+    /// "Over limit", "Near limit" within 6 dB, "Overload" while clipping, otherwise the limit.
+    private var statusText: String {
+        if meter.clipping == true { return "Overload" }
+        guard let limit = meter.limit else { return "No limit" }
+        guard let value = meter.value else { return String(format: "Limit %.0f", limit) }
+        return value > limit ? "Over limit" : value > limit - 6 ? "Near limit" : String(format: "Limit %.0f", limit)
+    }
+
+    /// Secondary while the level is fine, orange within 6 dB of the limit, red over it or while clipping.
     private var statusColor: Color {
-        guard let value = meter.value else { return .gray }
+        guard let value = meter.value else { return .secondary }
         if meter.clipping == true || meter.overLimit { return .red }
-        if let limit = meter.limit, value > limit - 6 { return .yellow }
-        return .green
+        if let limit = meter.limit, value > limit - 6 { return .orange }
+        return .secondary
     }
 
     @ViewBuilder private var micMenu: some View {
@@ -913,60 +948,79 @@ struct MeterTile: View {
                 }
             } label: {
                 HStack(spacing: 4) {
-                    Text(detail).lineLimit(1)
-                    Image(systemName: "chevron.down").font(.caption)
+                    Text(chipText(detail)).lineLimit(1)
+                    Image(systemName: "chevron.down").font(.caption2)
                 }
-                .foregroundStyle(.secondary)
+                .font(.callout)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.secondary.opacity(0.15)))
             }
         } else {
             Text(meter.unit).foregroundStyle(.secondary)
         }
     }
+
+    /// "A · Slow" from "dB SPL A Slow": the unit is shown beside the number.
+    private func chipText(_ detail: String) -> String {
+        let rest = detail.hasPrefix(meter.unit + " ") ? String(detail.dropFirst(meter.unit.count + 1)) : detail
+        return rest.replacingOccurrences(of: " ", with: " · ")
+    }
 }
 
-/// A vertical meter tube: the level from the bottom in 10 dB segments, green, yellow within 6 dB of the
-/// limit and red above it, with a white line at the maximum. 30 to 130 dB SPL, or -100 to 0 dB.
-struct RemoteTubeMeter: View {
+/// A horizontal scale from 30 to 130 dB SPL (or -100 to 0 dB): the level as a bar in the meter's
+/// colour, orange within 6 dB of the limit and red over it, a mark at the limit and a small triangle
+/// over the maximum.
+struct RemoteScaleBar: View {
     let level: Double?
     let maximum: Double?
     let limit: Double?
     let spl: Bool
+    let tint: Color
+    let limitTint: Color
 
     private var range: ClosedRange<Double> { spl ? 30...130 : -100...0 }
 
-    private func fraction(_ v: Double?) -> CGFloat {
-        let span = range.upperBound - range.lowerBound
-        return CGFloat(v.map { min(1, max(0, ($0 - range.lowerBound) / span)) } ?? 0)
+    private func x(_ value: Double, _ width: CGFloat) -> CGFloat {
+        width * CGFloat(min(1, max(0, (value - range.lowerBound) / (range.upperBound - range.lowerBound))))
     }
 
-    private var color: Color {
-        guard let level, let limit else { return .green }
-        return level > limit ? .red : level > limit - 6 ? .yellow : .green
+    private var fill: Color {
+        guard let level, let limit else { return tint }
+        return level > limit ? .red : level > limit - 6 ? .orange : tint
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let inner = geo.size.height - 6
-            ZStack(alignment: .bottom) {
-                Capsule().fill(Color.black.opacity(0.75))
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    Rectangle().fill(color.gradient).frame(height: inner * fraction(level))
+        VStack(spacing: 3) {
+            GeometryReader { geo in
+                let w = geo.size.width
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.18))
+                    RoundedRectangle(cornerRadius: 3).fill(fill.gradient).frame(width: level.map { x($0, w) } ?? 0)
+                    if let limit {
+                        Rectangle().fill(limitTint).frame(width: 2, height: 16).offset(x: x(limit, w) - 1)
+                    }
+                    if let maximum, maximum > range.lowerBound {
+                        Image(systemName: "arrowtriangle.down.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                            .offset(x: x(maximum, w) - 4, y: -11)
+                    }
                 }
-                .padding(3)
-                .clipShape(Capsule().inset(by: 3))
-                ForEach(1..<10, id: \.self) { k in
-                    Rectangle().fill(Color.black.opacity(0.6)).frame(height: 1)
-                        .offset(y: -3 - inner * CGFloat(k) / 10)
-                }
-                if let maximum, maximum > range.lowerBound {
-                    Rectangle().fill(Color.white.opacity(0.9)).frame(height: 1.5)
-                        .padding(.horizontal, 3)
-                        .offset(y: -3 - inner * fraction(maximum))
-                }
-                Capsule().strokeBorder(Color.gray.opacity(0.7), lineWidth: 2)
             }
+            .frame(height: 10)
+            HStack {
+                Text("\(Int(range.lowerBound))")
+                Spacer()
+                Text("\(Int((range.lowerBound + range.upperBound) / 2))")
+                Spacer()
+                Text("\(Int(range.upperBound))")
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .monospacedDigit()
         }
+        .padding(.top, 8)
     }
 }
 
