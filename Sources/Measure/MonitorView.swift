@@ -160,8 +160,12 @@ struct MicOffsetsRow: View {
         HStack(spacing: 14) {
             Text("Mic offsets").foregroundStyle(.secondary)
             ForEach(Array(model.settings.mics.enumerated()), id: \.offset) { i, slot in
+                let cal = monitor.calibration(model, mic: i)
                 HStack(spacing: 4) {
                     Text(slot.micName ?? "Input \(slot.channel)").lineLimit(1)
+                    Text(cal.map { String(format: "cal %.1f dB +", $0) } ?? "not calibrated +")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
                     TextField("Offset", value: Binding(get: { monitor.settings.micOffset(i) },
                                                        set: { monitor.settings.setMicOffset($0, for: i) }),
                               format: .number.precision(.fractionLength(0...1)))
@@ -171,8 +175,8 @@ struct MicOffsetsRow: View {
                     Text("dB").foregroundStyle(.secondary)
                 }
                 .fixedSize()
-                .help(monitor.calibration(model, mic: i).map { String(format: "Added to the %.1f dB from this mic's calibration", $0) }
-                      ?? "This mic has no calibration: its levels are dB re full scale plus this offset. Calibrate it in Setup for dB SPL.")
+                .help(cal.map { String(format: "Added to the %.1f dB from this mic's calibration", $0) }
+                      ?? "This mic has no calibration: its levels are dB re full scale plus this offset. Calibrate it from the Calibration menu for dB SPL.")
             }
             Spacer()
         }
