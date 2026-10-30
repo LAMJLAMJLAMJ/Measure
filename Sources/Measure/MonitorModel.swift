@@ -95,9 +95,11 @@ struct LeqOutlook: Equatable {
                          : String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    /// The row as shown: "Limit in" or "Under in", and the time.
+    /// The row as shown: "Limit in" or "Under in", and the time; "Safe" when the level now never
+    /// reaches the limit.
     var rows: [(label: String, time: String)] {
-        [(over ? "Under in" : "Limit in", atCurrent.map { Self.text($0) } ?? "Not at this level")]
+        let never = over ? "Not at this level" : "Safe"
+        return [(over ? "Under in" : "Limit in", atCurrent.map { Self.text($0) } ?? never)]
     }
 }
 
