@@ -602,12 +602,20 @@ struct StatisticsRow: View {
 struct RTAView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("rtaRange") private var range: Double = 80
+    @State private var zoom = ChartZoom()
+
+    /// The whole frequency axis, Hz.
+    private static let xFull: ClosedRange<Double> = 15...22_000
 
     var body: some View {
         @Bindable var monitor = model.monitor
         let snap = monitor.snapshot
         let offset = monitor.offset(model, mic: monitor.settings.rtaMic)
         let bars = self.bars(snap, offset: offset)
+        let top: Double = offset == nil ? 0 : 130
+        // Zooming out goes past the preset range, down to 150 dB below the top.
+        let yFull = (top - 150)...(top + 10)
+        let yShown = zoom.y == nil ? (top - range)...top : zoom.yDomain(yFull)
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Picker("Mic", selection: $monitor.settings.rtaMic) {
@@ -649,6 +657,8 @@ struct RTAView: View {
                     Text("120 dB").tag(120.0)
                 }
                 .fixedSize()
+                .onChange(of: range) { zoom.y = nil }
+                ZoomControls(zoom: $zoom, xFull: Self.xFull, yFull: yFull, xLog: true, yStart: (top - range)...top)
                 Button("Reset Peaks") { monitor.resetPeaks() }
                     .disabled(!monitor.isRunning)
                 Spacer()
@@ -660,7 +670,8 @@ struct RTAView: View {
             if bars.isEmpty {
                 EmptyState(text: monitor.isRunning ? "Waiting for the first block" : "Start live monitoring to see the spectrum")
             } else {
-                chart(bars, top: offset == nil ? 0 : 130)
+                chart(bars, y: yShown)
+                    .zoomScrollBars($zoom, xFull: Self.xFull, yFull: yFull, xLog: true, yShown: yShown)
             }
             Text("Bands from an FFT of the latest block (Hann window), each bin shared between the bands it overlaps. \(offset == nil ? "dB re full scale: calibrate the mic in Setup for dB SPL." : "Levels include the mic's calibration and offset.") Grey ticks: peak hold.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -699,8 +710,8 @@ struct RTAView: View {
         return String(format: "Total %.1f %@ (%@)   Loudest band %@, %.1f", total, unit, w, band, loudest.level)
     }
 
-    private func chart(_ bars: [Bar], top: Double) -> some View {
-        let bottom = top - range
+    private func chart(_ bars: [Bar], y: ClosedRange<Double>) -> some View {
+        let bottom = y.lowerBound, top = y.upperBound
         return Chart {
             ForEach(bars) { bar in
                 // A small gap between neighbouring bars.
@@ -716,10 +727,11 @@ struct RTAView: View {
                     .lineStyle(StrokeStyle(lineWidth: 2))
             }
         }
-        .chartXScale(domain: 15...22_000, type: .log)
-        .chartYScale(domain: bottom...top)
+        .chartXScale(domain: zoom.xDomain(Self.xFull), type: .log)
+        .chartYScale(domain: y)
+        .chartPlotStyle { $0.clipped() }
         .chartXAxis {
-            AxisMarks(values: frequencyTicks) { value in
+            AxisMarks(values: zoom.x == nil ? frequencyTicks : zoomedFrequencyTicks(in: zoom.xDomain(Self.xFull))) { value in
                 AxisGridLine()
                 AxisTick()
                 AxisValueLabel { if let f = value.as(Double.self) { Text(frequencyLabel(f)) } }
@@ -727,6 +739,7 @@ struct RTAView: View {
         }
         .chartXAxisLabel("Hz")
         .chartYAxisLabel("dB")
+        .chartZoomDrag($zoom)
         .clipped()
         .exportablePlot("RTA")
     }
