@@ -870,7 +870,7 @@ struct MeterTile: View {
                 Text(meter.unit).font(.title3).foregroundStyle(.secondary)
             }
             RemoteScaleBar(level: meter.value, maximum: meter.maximum, limit: meter.limit,
-                           spl: meter.unit == "dB SPL", tint: tint, limitTint: limitTint)
+                           spl: meter.unit == "dB SPL", limitTint: limitTint)
             HStack {
                 Text("Max " + (meter.maximum.map { String(format: "%.1f", $0) } ?? "–")).monospacedDigit()
                 Spacer()
@@ -910,11 +910,11 @@ struct MeterTile: View {
         return value > limit ? "Over limit" : value > limit - 6 ? "Near limit" : String(format: "Limit %.0f", limit)
     }
 
-    /// Secondary while the level is fine, orange within 6 dB of the limit, red over it or while clipping.
+    /// Secondary while the level is fine, yellow within 6 dB of the limit, red over it or while clipping.
     private var statusColor: Color {
         guard let value = meter.value else { return .secondary }
         if meter.clipping == true || meter.overLimit { return .red }
-        if let limit = meter.limit, value > limit - 6 { return .orange }
+        if let limit = meter.limit, value > limit - 6 { return .yellow }
         return .secondary
     }
 
@@ -968,15 +968,14 @@ struct MeterTile: View {
     }
 }
 
-/// A horizontal scale from 30 to 130 dB SPL (or -100 to 0 dB): the level as a bar in the meter's
-/// colour, orange within 6 dB of the limit and red over it, a mark at the limit and a small triangle
+/// A horizontal scale from 30 to 130 dB SPL (or -100 to 0 dB): the level as a bar,
+/// green, yellow within 6 dB of the limit and red over it, a mark at the limit and a small triangle
 /// over the maximum.
 struct RemoteScaleBar: View {
     let level: Double?
     let maximum: Double?
     let limit: Double?
     let spl: Bool
-    let tint: Color
     let limitTint: Color
 
     private var range: ClosedRange<Double> { spl ? 30...130 : -100...0 }
@@ -986,8 +985,8 @@ struct RemoteScaleBar: View {
     }
 
     private var fill: Color {
-        guard let level, let limit else { return tint }
-        return level > limit ? .red : level > limit - 6 ? .orange : tint
+        guard let level, let limit else { return .green }
+        return level > limit ? .red : level > limit - 6 ? .yellow : .green
     }
 
     var body: some View {

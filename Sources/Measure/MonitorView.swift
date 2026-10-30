@@ -221,7 +221,7 @@ struct MeterCard: View {
                 Text(monitor.unit(model, mic: meter.mic)).font(.title3).foregroundStyle(.secondary)
             }
             ScaleBar(level: level, maximum: maximum, limit: limit, spl: offset != nil,
-                     tint: meterColor(meter, index), limitTint: limitColor(monitor.settings, meter.weighting))
+                     limitTint: limitColor(monitor.settings, meter.weighting))
             HStack {
                 Text("Max \(levelText(maximum))").monospacedDigit()
                 Spacer()
@@ -255,13 +255,13 @@ struct MeterCard: View {
         meter.mic < micNames.count ? micNames[meter.mic] : "Mic \(meter.mic + 1)"
     }
 
-    /// Secondary while the level is fine, orange within 6 dB of the limit, red over it or when the input
+    /// Secondary while the level is fine, yellow within 6 dB of the limit, red over it or when the input
     /// clips.
     private func statusColor(level: Double?, limit: Double?, clipping: Bool) -> Color {
         guard let level, level > -150 else { return .secondary }
         if clipping { return .red }
         guard let limit else { return .secondary }
-        return level > limit ? .red : level > limit - 6 ? .orange : .secondary
+        return level > limit ? .red : level > limit - 6 ? .yellow : .secondary
     }
 
     /// "Under limit", "Near limit", "Over limit" or "Overload"; "No limit" when none is set.
@@ -275,7 +275,7 @@ struct MeterCard: View {
     private func statusHelp(level: Double?, limit: Double?, clipping: Bool) -> String {
         if clipping { return "The input is clipping: the levels are not valid. Turn the input gain down." }
         guard let limit else { return "No limit set for this weighting" }
-        return String(format: "Orange within 6 dB of the %.0f dB limit, red above it", limit)
+        return String(format: "Yellow within 6 dB of the %.0f dB limit, red above it", limit)
     }
 
     /// Fast and Slow keep their maximum sample by sample; the Leqs take theirs from the history.
@@ -329,15 +329,14 @@ struct MeterCard: View {
     }
 }
 
-/// A horizontal scale from 30 to 130 dB SPL (or -100 to 0 dBFS): the level as a bar in the meter's
-/// colour, orange within 6 dB of the limit and red over it, a mark at the limit and a small triangle
+/// A horizontal scale from 30 to 130 dB SPL (or -100 to 0 dBFS): the level as a bar,
+/// green, yellow within 6 dB of the limit and red over it, a mark at the limit and a small triangle
 /// over the maximum.
 struct ScaleBar: View {
     let level: Double?
     let maximum: Double?
     let limit: Double?
     let spl: Bool
-    let tint: Color
     let limitTint: Color
 
     private var range: ClosedRange<Double> { spl ? 30...130 : -100...0 }
@@ -347,8 +346,8 @@ struct ScaleBar: View {
     }
 
     private var fill: Color {
-        guard let level, let limit else { return tint }
-        return level > limit ? .red : level > limit - 6 ? .orange : tint
+        guard let level, let limit else { return .green }
+        return level > limit ? .red : level > limit - 6 ? .yellow : .green
     }
 
     var body: some View {
