@@ -81,16 +81,12 @@ struct MonitorSettings: Codable, Equatable {
     }
 }
 
-/// What the views draw, copied from the engine about ten times a second.
 /// An Leq meter's forecast against its limit, in seconds; nil where the level never gets there.
 struct LeqOutlook: Equatable {
     /// The Leq is at or over the limit.
     var over: Bool
     /// At the Fast level now: until it reaches the limit, or once over, until it is back under.
     var atCurrent: Int?
-    /// Once over: until it is back under if the level is held 3 or 5 dB below the limit.
-    var below3: Int?
-    var below5: Int?
 
     /// "2:31", or "1:02:31" from an hour.
     static func text(_ seconds: Int?) -> String {
@@ -99,16 +95,13 @@ struct LeqOutlook: Equatable {
                          : String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    /// The rows as shown: a label and a time, the first for the level now. "−3 dB" and "−5 dB" are
-    /// below the limit, and only apply once over it.
+    /// The row as shown: "Limit in" or "Under in", and the time.
     var rows: [(label: String, time: String)] {
-        let first: String = atCurrent.map { Self.text($0) } ?? "Not at this level"
-        let minus3: String = over ? Self.text(below3) : "–"
-        let minus5: String = over ? Self.text(below5) : "–"
-        return [(over ? "Under in" : "Limit in", first), ("Under at −3 dB", minus3), ("Under at −5 dB", minus5)]
+        [(over ? "Under in" : "Limit in", atCurrent.map { Self.text($0) } ?? "Not at this level")]
     }
 }
 
+/// What the views draw, copied from the engine about ten times a second.
 struct MonitorSnapshot {
     struct Mic {
         /// Level now, highest level since the start, per weighting and average (dB re full scale).
@@ -314,8 +307,7 @@ final class MonitorAnalyzer {
     }
 
     /// How an Leq meter stands against its limit if the sound carries on at the Fast level now: the
-    /// time until it reaches the limit, or once over it, until it is back under at that level and at 3
-    /// and 5 dB below the limit. Nil for Fast and Slow meters, without a limit, or when not measuring.
+    /// time until it reaches the limit, or once over it, until it is back under. Nil for Fast and Slow meters, without a limit, or when not measuring.
     func outlook(_ model: AppModel, meter: MeterSettings) -> LeqOutlook? {
         guard isRunning, !isPaused, meter.average != .fast, meter.average != .slow,
               let limit = settings.limit(meter.weighting),
@@ -332,9 +324,7 @@ final class MonitorAnalyzer {
         func seconds(at level: Double) -> Int? {
             LeqForecast.secondsToCross(energies: energies, window: meter.average.window, nowLevel: level, targetLevel: target)
         }
-        return LeqOutlook(over: over, atCurrent: seconds(at: now),
-                          below3: over ? seconds(at: target - 3) : nil,
-                          below5: over ? seconds(at: target - 5) : nil)
+        return LeqOutlook(over: over, atCurrent: seconds(at: now))
     }
 
     /// "dB SPL" for a calibrated mic, "dB" for one with only a typed offset, "dBFS" otherwise.

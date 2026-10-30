@@ -885,7 +885,7 @@ struct MeterTile: View {
         .padding(.vertical, 12)
         .padding(.leading, 18)
         .padding(.trailing, 12)
-        .frame(height: state.meters.contains { $0.forecast != nil } ? 260 : 170)
+        .frame(height: state.meters.contains { $0.forecast != nil } ? 215 : 170)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
         .overlay(alignment: .leading) {
             UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12)
@@ -981,7 +981,7 @@ struct MeterTile: View {
 }
 
 /// An Leq meter's forecast as the Mac sends it: until the limit, or once over, until back under at
-/// the level now and at 3 and 5 dB below the limit.
+/// the level now.
 struct RemoteForecastRows: View {
     let rows: [RemoteForecastRow]
     let over: Bool

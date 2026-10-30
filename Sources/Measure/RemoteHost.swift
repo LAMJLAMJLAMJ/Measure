@@ -409,7 +409,7 @@ final class RemoteHost {
             if meter.hasForecast(monitor.settings) {
                 let outlook = monitor.outlook(model, meter: meter)
                 let rows: [(label: String, time: String)] = outlook?.rows
-                    ?? [("Limit in", "–"), ("Under at −3 dB", "–"), ("Under at −5 dB", "–")]
+                    ?? [("Limit in", "–")]
                 let soon = outlook.map { !$0.over && ($0.atCurrent ?? Int.max) < 60 } ?? false
                 forecast = rows.enumerated().map { i, row in RemoteForecastRow(label: row.label, time: row.time, soon: i == 0 && soon) }
                 forecastOver = outlook?.over ?? false

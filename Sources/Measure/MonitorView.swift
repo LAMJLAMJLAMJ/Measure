@@ -72,7 +72,7 @@ struct SPLView: View {
                         .help("Add a meter")
                 }
             }
-            .frame(height: monitor.settings.meters.contains { $0.hasForecast(monitor.settings) } ? 250 : 170)
+            .frame(height: monitor.settings.meters.contains { $0.hasForecast(monitor.settings) } ? 205 : 170)
             HStack(spacing: 12) {
                 LimitField(title: "A limit", value: $monitor.settings.limitA, standard: 100,
                            help: "A level not to exceed on A-weighted meters: they turn red above it, and the history draws it as a line")
@@ -343,12 +343,12 @@ extension MeterSettings {
 }
 
 /// An Leq meter's forecast against its limit: the time until it reaches the limit at the Fast level
-/// now, or once over, until it is back under at that level and at 3 and 5 dB below the limit.
+/// now, or once over, until it is back under at that level.
 struct ForecastRows: View {
     let outlook: LeqOutlook?
 
     var body: some View {
-        let rows: [(label: String, time: String)] = outlook?.rows ?? [("Limit in", "–"), ("Under at −3 dB", "–"), ("Under at −5 dB", "–")]
+        let rows: [(label: String, time: String)] = outlook?.rows ?? [("Limit in", "–")]
         VStack(spacing: 3) {
             ForEach(rows.indices, id: \.self) { i in
                 HStack {
@@ -363,7 +363,7 @@ struct ForecastRows: View {
         }
         .font(.callout)
         .lineLimit(1)
-        .help("If the sound carries on at the Fast level now: how long until this Leq reaches the limit, or once over it, until it is back under. −3 dB and −5 dB: back under if the level is held that far below the limit from now.")
+        .help("If the sound carries on at the Fast level now: how long until this Leq reaches the limit, or once over it, until it is back under.")
     }
 
     /// The first row red while over the limit, orange when the limit is less than a minute away.
