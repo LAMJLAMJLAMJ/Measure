@@ -351,7 +351,7 @@ struct ForecastRows: View {
     let outlook: LeqOutlook?
 
     var body: some View {
-        let rows: [(label: String, time: String)] = outlook?.rows ?? [("Limit in", "–")]
+        let rows: [(label: String, time: String)] = outlook?.rows ?? [("Limit in (min:s)", "–")]
         VStack(spacing: 3) {
             ForEach(rows.indices, id: \.self) { i in
                 HStack {
