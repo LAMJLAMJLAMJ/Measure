@@ -6,6 +6,12 @@ import MeasureDSP
 import Observation
 
 /// Traces chosen for the impulse response export sheet.
+/// Measurements just made, to be named in the sheet that follows each measurement.
+struct NamingRequest: Identifiable {
+    let id = UUID()
+    let traces: [UUID]
+}
+
 struct ExportRequest: Identifiable {
     let id = UUID()
     let traces: [UUID]
@@ -300,6 +306,7 @@ final class AppModel {
             }.value
 
             for trace in made { add(trace) }
+            askForNames(made.map(\.id))
             selection = made.first?.id
             measurementWarning = MeasurementWarning(made, loopbackPeak: loopbackPeak)
             var text = "Measured \(made.count) mic\(made.count == 1 ? "" : "s")."
@@ -857,6 +864,14 @@ final class AppModel {
 
     /// Impulse responses waiting for the export sheet.
     var exportRequest: ExportRequest?
+    /// Measurements just made by a sweep or a live capture, for the sheet that names them.
+    var namingRequest: NamingRequest?
+
+    /// Asks for names for measurements just made, unless turned off (Measurement > Name Each Measurement).
+    func askForNames(_ ids: [UUID]) {
+        guard !ids.isEmpty, UserDefaults.standard.object(forKey: "nameEachMeasurement") as? Bool ?? true else { return }
+        namingRequest = NamingRequest(traces: ids)
+    }
 
     /// Opens the export sheet for the ticked impulse responses, or the selected one when none is ticked.
     func requestImpulseExport() {

@@ -270,6 +270,7 @@ final class LiveAnalyzer {
     /// mic's measurement; mics left out of the average stay beside it.
     func captureAll(_ model: AppModel) {
         let ids = capture(model)
+        model.askForNames(ids)
         let averaged = spectra.indices.filter { settings.isAveraged($0) && $0 < ids.count }
         guard averaged.count >= 2 else { return }
         let position = model.settings.position
