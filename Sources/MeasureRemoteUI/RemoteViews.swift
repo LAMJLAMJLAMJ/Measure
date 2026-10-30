@@ -678,6 +678,7 @@ struct MonitorTab: View {
 struct RTASection: View {
     let client: RemoteClient
     let state: RemoteState
+    @State private var zoom = RTAZoom()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -695,11 +696,15 @@ struct RTASection: View {
                 .pickerStyle(.segmented)
                 .fixedSize()
                 Spacer()
+                if zoom.isZoomed {
+                    Button("Reset Zoom") { withAnimation(.easeOut(duration: 0.2)) { zoom = RTAZoom() } }
+                        .buttonStyle(.bordered)
+                }
                 Button("Reset Peaks") { client.send(.resetRTAPeaks) }
                     .buttonStyle(.bordered)
             }
             if let rta = state.rta {
-                RTAChart(rta: rta, fraction: state.rtaFraction)
+                RTAChart(rta: rta, fraction: state.rtaFraction, zoom: $zoom)
                     .frame(height: 260)
             } else {
                 Text("Waiting for the analyser…").foregroundStyle(.secondary)
@@ -708,9 +713,13 @@ struct RTASection: View {
     }
 }
 
+/// The RTA bars and peaks. Pinch to zoom both axes around the fingers, drag to pan once zoomed, and
+/// double-tap to go back to the full view. The level axis follows the peaks until it is zoomed.
 struct RTAChart: View {
     let rta: RemoteRTA
     let fraction: Int
+    /// The shown frequencies as log10(Hz), and the shown levels; nil shows the default.
+    @Binding var zoom: RTAZoom
 
     private struct Bar: Identifiable {
         let id: Int
@@ -729,25 +738,27 @@ struct RTAChart: View {
         }
     }
 
-    private var yDomain: ClosedRange<Double> {
-        let top = ((rta.peaks.max() ?? 0) / 10).rounded(.up) * 10 + 5
-        return (top - 75)...top
-    }
+    /// The top of the default level range: 5 dB over the highest peak's next 10 dB.
+    private var top: Double { ((rta.peaks.max() ?? 0) / 10).rounded(.up) * 10 + 5 }
 
     var body: some View {
-        let domain = yDomain
+        let top = self.top
+        let yFull = (top - 150)...(top + 10)
+        let yShown = zoom.y ?? (top - 75)...top
+        let xShown = zoom.x ?? RTAZoom.xFull
+        let hz = pow(10, xShown.lowerBound)...pow(10, xShown.upperBound)
         Chart(bars) { bar in
             RectangleMark(xStart: .value("Low", bar.low), xEnd: .value("High", bar.high),
-                          yStart: .value("Bottom", domain.lowerBound), yEnd: .value("Level", max(bar.level, domain.lowerBound)))
+                          yStart: .value("Bottom", yFull.lowerBound), yEnd: .value("Level", max(bar.level, yFull.lowerBound)))
                 .foregroundStyle(Color.accentColor.opacity(0.8))
             RectangleMark(xStart: .value("Low", bar.low), xEnd: .value("High", bar.high),
                           yStart: .value("Peak", bar.peak - 0.4), yEnd: .value("Peak", bar.peak + 0.4))
                 .foregroundStyle(Color.secondary)
         }
-        .chartXScale(domain: 20.0...20_000.0, type: .log)
-        .chartYScale(domain: domain)
+        .chartXScale(domain: hz, type: .log)
+        .chartYScale(domain: yShown)
         .chartXAxis {
-            AxisMarks(values: [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16_000]) { value in
+            AxisMarks(values: RTAZoom.ticks.filter { hz.contains($0) }) { value in
                 AxisGridLine()
                 AxisValueLabel {
                     if let f = value.as(Double.self) {
@@ -758,6 +769,82 @@ struct RTAChart: View {
         }
         .chartYAxisLabel(rta.unit)
         .chartPlotStyle { $0.clipped() }
+        .chartOverlay { proxy in
+            GeometryReader { geo in
+                let plot = proxy.plotFrame.map { geo[$0] } ?? CGRect(origin: .zero, size: geo.size)
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .gesture(pinch(plot: plot, xShown: xShown, yShown: yShown, yFull: yFull))
+                    .simultaneousGesture(pan(plot: plot, xShown: xShown, yShown: yShown, yFull: yFull),
+                                         including: zoom.isZoomed ? .all : .subviews)
+                    .onTapGesture(count: 2) { withAnimation(.easeOut(duration: 0.2)) { zoom = RTAZoom() } }
+            }
+        }
+    }
+
+    private func pinch(plot: CGRect, xShown: ClosedRange<Double>, yShown: ClosedRange<Double>,
+                       yFull: ClosedRange<Double>) -> some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                if zoom.start == nil { zoom.start = (x: xShown, y: yShown) }
+                guard let start = zoom.start, plot.width > 0, plot.height > 0 else { return }
+                let fx = min(max((value.startLocation.x - plot.minX) / plot.width, 0), 1)
+                let fy = min(max((value.startLocation.y - plot.minY) / plot.height, 0), 1)
+                let scale = max(value.magnification, 0.01)
+                zoom.x = RTAZoom.scaled(start.x, by: scale, at: start.x.lowerBound + fx * span(start.x), fraction: fx,
+                                        within: RTAZoom.xFull, minSpan: 0.3)
+                zoom.y = RTAZoom.scaled(start.y, by: scale, at: start.y.upperBound - fy * span(start.y), fraction: 1 - fy,
+                                        within: yFull, minSpan: 6)
+            }
+            .onEnded { _ in zoom.start = nil }
+    }
+
+    private func pan(plot: CGRect, xShown: ClosedRange<Double>, yShown: ClosedRange<Double>,
+                     yFull: ClosedRange<Double>) -> some Gesture {
+        DragGesture(minimumDistance: 4)
+            .onChanged { value in
+                guard zoom.start == nil || zoom.panning, plot.width > 0, plot.height > 0 else { return }
+                if !zoom.panning { zoom.panning = true; zoom.start = (x: xShown, y: yShown) }
+                guard let start = zoom.start else { return }
+                let dx = -value.translation.width / plot.width * span(start.x)
+                let dy = value.translation.height / plot.height * span(start.y)
+                zoom.x = RTAZoom.shifted(start.x, by: dx, within: RTAZoom.xFull)
+                zoom.y = RTAZoom.shifted(start.y, by: dy, within: yFull)
+            }
+            .onEnded { _ in
+                if zoom.panning { zoom.panning = false; zoom.start = nil }
+            }
+    }
+
+    private func span(_ r: ClosedRange<Double>) -> Double { r.upperBound - r.lowerBound }
+}
+
+/// The RTA's zoom on the iPad: the shown frequencies (log10 Hz) and levels, nil for the default.
+struct RTAZoom {
+    var x: ClosedRange<Double>?
+    var y: ClosedRange<Double>?
+    /// The ranges when a pinch or a drag began.
+    var start: (x: ClosedRange<Double>, y: ClosedRange<Double>)?
+    var panning = false
+
+    var isZoomed: Bool { x != nil || y != nil }
+
+    static let xFull = log10(20.0)...log10(20_000.0)
+    static let ticks: [Double] = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16_000]
+
+    /// `range` scaled by 1/`scale` so that `value` stays at `fraction` of the way along, kept inside
+    /// `full` and no narrower than `minSpan`.
+    static func scaled(_ range: ClosedRange<Double>, by scale: Double, at value: Double, fraction: Double,
+                       within full: ClosedRange<Double>, minSpan: Double) -> ClosedRange<Double> {
+        let fullSpan = full.upperBound - full.lowerBound
+        let span = min(max((range.upperBound - range.lowerBound) / scale, minSpan), fullSpan)
+        return shifted((value - fraction * span)...(value - fraction * span + span), by: 0, within: full)
+    }
+
+    /// `range` moved by `delta`, stopping at the edges of `full`.
+    static func shifted(_ range: ClosedRange<Double>, by delta: Double, within full: ClosedRange<Double>) -> ClosedRange<Double> {
+        let span = range.upperBound - range.lowerBound
+        let lower = min(max(range.lowerBound + delta, full.lowerBound), full.upperBound - span)
+        return lower...(lower + span)
     }
 }
 
