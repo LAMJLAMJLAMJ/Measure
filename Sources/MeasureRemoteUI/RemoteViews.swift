@@ -888,7 +888,15 @@ struct MeterTile: View {
                 .fill(tint)
                 .frame(width: 5)
         }
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(meter.overLimit ? Color.red : Color.clear, lineWidth: 2))
+        .overlay(RoundedRectangle(cornerRadius: 12)
+            .strokeBorder(meter.overLimit ? Color.red : nearLimit ? Color.yellow : Color.clear,
+                          lineWidth: meter.overLimit ? 4 : 2.5))
+    }
+
+    /// Within 5 dB of the limit.
+    private var nearLimit: Bool {
+        guard let value = meter.value, let limit = meter.limit else { return false }
+        return value > limit - 5
     }
 
     /// The meter's colour on the Mac, which its history line carries.
@@ -902,19 +910,19 @@ struct MeterTile: View {
         return state.limitAColor.map { Color(remoteHex: $0) } ?? .red
     }
 
-    /// "Over limit", "Near limit" within 6 dB, "Overload" while clipping, otherwise the limit.
+    /// "Over limit", "Near limit" within 5 dB, "Overload" while clipping, otherwise the limit.
     private var statusText: String {
         if meter.clipping == true { return "Overload" }
         guard let limit = meter.limit else { return "No limit" }
         guard let value = meter.value else { return String(format: "Limit %.0f", limit) }
-        return value > limit ? "Over limit" : value > limit - 6 ? "Near limit" : String(format: "Limit %.0f", limit)
+        return value >= limit ? "Over limit" : value > limit - 5 ? "Near limit" : String(format: "Limit %.0f", limit)
     }
 
-    /// Secondary while the level is fine, yellow within 6 dB of the limit, red over it or while clipping.
+    /// Secondary while the level is fine, yellow within 5 dB of the limit, red over it or while clipping.
     private var statusColor: Color {
         guard let value = meter.value else { return .secondary }
         if meter.clipping == true || meter.overLimit { return .red }
-        if let limit = meter.limit, value > limit - 6 { return .yellow }
+        if let limit = meter.limit, value > limit - 5 { return .yellow }
         return .secondary
     }
 
@@ -969,7 +977,7 @@ struct MeterTile: View {
 }
 
 /// A horizontal scale from 30 to 130 dB SPL (or -100 to 0 dB): the level as a bar,
-/// green, yellow within 6 dB of the limit and red over it, a mark at the limit and a small triangle
+/// green, yellow within 5 dB of the limit and red over it, a mark at the limit and a small triangle
 /// over the maximum.
 struct RemoteScaleBar: View {
     let level: Double?
@@ -986,7 +994,7 @@ struct RemoteScaleBar: View {
 
     private var fill: Color {
         guard let level, let limit else { return .green }
-        return level > limit ? .red : level > limit - 6 ? .yellow : .green
+        return level >= limit ? .red : level > limit - 5 ? .yellow : .green
     }
 
     var body: some View {

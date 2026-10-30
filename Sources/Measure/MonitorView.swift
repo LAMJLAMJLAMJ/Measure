@@ -199,7 +199,8 @@ struct MeterCard: View {
         let level = mic.map { $0.level(meter.weighting, meter.average) + (offset ?? 0) }
         let maximum = self.maximum(mic).map { $0 + (offset ?? 0) }
         let limit = monitor.settings.limit(meter.weighting)
-        let over = limit.map { (level ?? -200) > $0 } ?? false
+        let over = limit.map { (level ?? -200) >= $0 } ?? false
+        let near = limit.map { (level ?? -200) > $0 - 5 } ?? false
         let clipping = (mic?.recentPeak ?? -200) > -1
 
         VStack(alignment: .leading, spacing: 6) {
@@ -241,7 +242,8 @@ struct MeterCard: View {
                 .fill(meterColor(meter, index))
                 .frame(width: 5)
         }
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(over ? Color.red : Color.clear, lineWidth: 2))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(over ? Color.red : near ? Color.yellow : Color.clear, lineWidth: over ? 4 : 2.5))
         .contextMenu {
             if monitor.settings.meters.count > 1 {
                 Button("Remove This Meter", role: .destructive) { monitor.settings.meters.removeAll { $0.id == meter.id } }
@@ -255,13 +257,13 @@ struct MeterCard: View {
         meter.mic < micNames.count ? micNames[meter.mic] : "Mic \(meter.mic + 1)"
     }
 
-    /// Secondary while the level is fine, yellow within 6 dB of the limit, red over it or when the input
+    /// Secondary while the level is fine, yellow within 5 dB of the limit, red over it or when the input
     /// clips.
     private func statusColor(level: Double?, limit: Double?, clipping: Bool) -> Color {
         guard let level, level > -150 else { return .secondary }
         if clipping { return .red }
         guard let limit else { return .secondary }
-        return level > limit ? .red : level > limit - 6 ? .yellow : .secondary
+        return level >= limit ? .red : level > limit - 5 ? .yellow : .secondary
     }
 
     /// "Under limit", "Near limit", "Over limit" or "Overload"; "No limit" when none is set.
@@ -269,13 +271,13 @@ struct MeterCard: View {
         if clipping { return "Overload" }
         guard let limit else { return "No limit" }
         guard let level, level > -150 else { return String(format: "Limit %.0f", limit) }
-        return level > limit ? "Over limit" : level > limit - 6 ? "Near limit" : String(format: "Limit %.0f", limit)
+        return level >= limit ? "Over limit" : level > limit - 5 ? "Near limit" : String(format: "Limit %.0f", limit)
     }
 
     private func statusHelp(level: Double?, limit: Double?, clipping: Bool) -> String {
         if clipping { return "The input is clipping: the levels are not valid. Turn the input gain down." }
         guard let limit else { return "No limit set for this weighting" }
-        return String(format: "Yellow within 6 dB of the %.0f dB limit, red above it", limit)
+        return String(format: "Yellow within 5 dB of the %.0f dB limit, red at or above it", limit)
     }
 
     /// Fast and Slow keep their maximum sample by sample; the Leqs take theirs from the history.
@@ -330,7 +332,7 @@ struct MeterCard: View {
 }
 
 /// A horizontal scale from 30 to 130 dB SPL (or -100 to 0 dBFS): the level as a bar,
-/// green, yellow within 6 dB of the limit and red over it, a mark at the limit and a small triangle
+/// green, yellow within 5 dB of the limit and red over it, a mark at the limit and a small triangle
 /// over the maximum.
 struct ScaleBar: View {
     let level: Double?
@@ -347,7 +349,7 @@ struct ScaleBar: View {
 
     private var fill: Color {
         guard let level, let limit else { return .green }
-        return level > limit ? .red : level > limit - 6 ? .yellow : .green
+        return level >= limit ? .red : level > limit - 5 ? .yellow : .green
     }
 
     var body: some View {

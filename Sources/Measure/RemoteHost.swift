@@ -401,7 +401,7 @@ final class RemoteHost {
                 maximum = top > -150 ? (top + offset).roundedTenth : nil
             }
             let limit = monitor.settings.limit(meter.weighting)
-            let over = limit.map { (level ?? -200) > $0 } ?? false
+            let over = limit.map { (level ?? -200) >= $0 } ?? false
             let name = meter.mic < micNames.count ? micNames[meter.mic] : "Mic \(meter.mic + 1)"
             let unit = monitor.unit(model, mic: meter.mic)
             return RemoteMeter(label: "\(name) · \(meter.average.label(meter.weighting))",
