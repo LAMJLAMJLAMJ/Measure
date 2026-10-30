@@ -172,9 +172,15 @@ public struct RemoteMeter: Codable, Equatable, Sendable {
     public var detail: String?
     public var limit: Double?
     public var clipping: Bool?
+    /// Leq meters with a limit: how long until the limit is reached, or once over, until it is back
+    /// under, as the Mac shows it. The first row is for the level now.
+    public var forecast: [RemoteForecastRow]?
+    /// The Leq is over its limit, so the forecast counts down to being back under.
+    public var forecastOver: Bool?
 
     public init(label: String, value: Double?, unit: String, maximum: Double? = nil, overLimit: Bool = false,
-                name: String? = nil, detail: String? = nil, limit: Double? = nil, clipping: Bool? = nil) {
+                name: String? = nil, detail: String? = nil, limit: Double? = nil, clipping: Bool? = nil,
+                forecast: [RemoteForecastRow]? = nil, forecastOver: Bool? = nil) {
         self.label = label
         self.value = value
         self.unit = unit
@@ -184,6 +190,22 @@ public struct RemoteMeter: Codable, Equatable, Sendable {
         self.detail = detail
         self.limit = limit
         self.clipping = clipping
+        self.forecast = forecast
+        self.forecastOver = forecastOver
+    }
+}
+
+/// One line of an SPL meter's forecast: "Limit in" and "2:31".
+public struct RemoteForecastRow: Codable, Equatable, Sendable {
+    public var label: String
+    public var time: String
+    /// The time is less than a minute away (first row only).
+    public var soon: Bool
+
+    public init(label: String, time: String, soon: Bool = false) {
+        self.label = label
+        self.time = time
+        self.soon = soon
     }
 }
 

@@ -81,6 +81,28 @@ struct MonitorSettings: Codable, Equatable {
     }
 }
 
+/// An Leq meter's forecast against its limit, in seconds; nil where the level never gets there.
+struct LeqOutlook: Equatable {
+    /// The Leq is at or over the limit.
+    var over: Bool
+    /// At the Fast level now: until it reaches the limit, or once over, until it is back under.
+    var atCurrent: Int?
+
+    /// "2:31", or "1:02:31" from an hour.
+    static func text(_ seconds: Int?) -> String {
+        guard let s = seconds else { return "–" }
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                         : String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    /// The row as shown: "Limit in (min:s)" or "Under in (min:s)", and the time; "Safe" or "Reduce level" when the level now never
+    /// crosses the limit.
+    var rows: [(label: String, time: String)] {
+        let never = over ? "Reduce level" : "Safe"
+        return [(over ? "Under in (min:s)" : "Limit in (min:s)", atCurrent.map { Self.text($0) } ?? never)]
+    }
+}
+
 /// What the views draw, copied from the engine about ten times a second.
 struct MonitorSnapshot {
     struct Mic {
@@ -284,6 +306,27 @@ final class MonitorAnalyzer {
         let typed = settings.micOffset(index)
         if cal == nil && typed == 0 { return nil }
         return (cal ?? 0) + typed
+    }
+
+    /// How an Leq meter stands against its limit if the sound carries on at the Fast level now: the
+    /// time until it reaches the limit, or once over it, until it is back under. Nil for Fast and Slow meters, without a limit, or when not measuring.
+    func outlook(_ model: AppModel, meter: MeterSettings) -> LeqOutlook? {
+        guard isRunning, !isPaused, meter.average != .fast, meter.average != .slow,
+              let limit = settings.limit(meter.weighting),
+              meter.mic < levelLogs.count, meter.mic < snapshot.mics.count,
+              let k = SoundLevel.FrequencyWeighting.allCases.firstIndex(of: meter.weighting),
+              k < levelLogs[meter.mic].energy.count else { return nil }
+        let offset = self.offset(model, mic: meter.mic) ?? 0
+        let mic = snapshot.mics[meter.mic]
+        let now = mic.level(meter.weighting, .fast)
+        guard now > -150 else { return nil }
+        let energies = levelLogs[meter.mic].energy[k]
+        let target = limit - offset
+        let over = mic.level(meter.weighting, meter.average) >= target
+        func seconds(at level: Double) -> Int? {
+            LeqForecast.secondsToCross(energies: energies, window: meter.average.window, nowLevel: level, targetLevel: target)
+        }
+        return LeqOutlook(over: over, atCurrent: seconds(at: now))
     }
 
     /// "dB SPL" for a calibrated mic, "dB" for one with only a typed offset, "dBFS" otherwise.

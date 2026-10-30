@@ -502,3 +502,53 @@ public struct LevelLog: Equatable {
         s.contains(",") || s.contains("\"") ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s
     }
 }
+
+/// How long until a moving or running Leq crosses a level if the sound stays as it is now: the
+/// forecast a monitor engineer reads against a limit.
+public enum LeqForecast {
+    /// Whole seconds until the Leq crosses `target` if every second from now has mean square `now`:
+    /// rising to it or above when the Leq is below it, falling below it when the Leq is at or above it.
+    /// `energies` are the mean squares of the whole seconds so far, oldest first; `window` is the
+    /// moving Leq's length in seconds (it covers the seconds so far while it fills), nil for the Leq
+    /// since the start. Nil when it never crosses at that level, or not within `limit` seconds.
+    public static func secondsToCross(energies: [Double], window: Int?, now: Double, target: Double,
+                                      limit: Int = 24 * 3600) -> Int? {
+        let history = window.map { Array(energies.suffix($0)) } ?? energies
+        let n = history.count
+        let sum = history.reduce(0, +)
+        let rising = n == 0 || sum / Double(n) < target
+        func crossed(_ mean: Double) -> Bool { rising ? mean >= target : mean < target }
+
+        guard let window else {
+            // The Leq since the start: (sum + t·now) / (n + t), solved for t.
+            if n == 0 { return crossed(now) ? 1 : nil }
+            let t: Double
+            if rising {
+                guard now > target else { return nil }
+                t = max(1, ((target * Double(n) - sum) / (now - target)).rounded(.up))
+            } else {
+                guard now < target else { return nil }
+                t = ((sum - target * Double(n)) / (target - now)).rounded(.down) + 1
+            }
+            return t <= Double(limit) ? Int(t) : nil
+        }
+
+        // A moving Leq: each second adds one at `now` and, once the window is full, drops the oldest.
+        var prefix = [0.0]
+        prefix.reserveCapacity(n + 1)
+        for e in history { prefix.append(prefix.last! + e) }
+        for t in 1...max(1, window) {
+            let count = min(window, n + t)
+            let kept = max(0, count - t)
+            let old = prefix[n] - prefix[n - kept]
+            let mean = (old + Double(min(t, count)) * now) / Double(count)
+            if crossed(mean) { return t <= limit ? t : nil }
+        }
+        return nil
+    }
+
+    /// `secondsToCross` with levels in dB instead of mean squares.
+    public static func secondsToCross(energies: [Double], window: Int?, nowLevel: Double, targetLevel: Double) -> Int? {
+        secondsToCross(energies: energies, window: window, now: pow(10, nowLevel / 10), target: pow(10, targetLevel / 10))
+    }
+}

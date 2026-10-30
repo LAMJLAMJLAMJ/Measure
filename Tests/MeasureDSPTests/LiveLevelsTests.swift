@@ -193,3 +193,69 @@ final class LiveLevelsTests: XCTestCase {
         XCTAssertEqual(SoundLevelMeter.exceeded(10, of: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])!, 10)
     }
 }
+
+final class LeqForecastTests: XCTestCase {
+    func ms(_ db: Double) -> Double { pow(10, db / 10) }
+
+    /// A 5 min Leq at 94 dB with a 96 dB limit and the level now 97 dB: it reaches the limit when
+    /// ((300 − t)·94 dB + t·97 dB) / 300 does.
+    func testMovingLeqRisesToTheLimit() {
+        let energies = [Double](repeating: ms(94), count: 300)
+        let t = LeqForecast.secondsToCross(energies: energies, window: 300, nowLevel: 97, targetLevel: 96)
+        let expected = Int((300 * (ms(96) - ms(94)) / (ms(97) - ms(94))).rounded(.up))
+        XCTAssertEqual(t, expected)
+        XCTAssertEqual(t, 177)
+    }
+
+    func testMovingLeqNeverReachesALimitAboveTheLevelNow() {
+        let energies = [Double](repeating: ms(94), count: 300)
+        XCTAssertNil(LeqForecast.secondsToCross(energies: energies, window: 300, nowLevel: 95, targetLevel: 96))
+    }
+
+    /// Over the limit at 98 dB; at 3 dB under the limit it comes back under when enough of the loud
+    /// seconds have left the window.
+    func testMovingLeqFallsBackUnder() {
+        let energies = [Double](repeating: ms(98), count: 300)
+        let t = LeqForecast.secondsToCross(energies: energies, window: 300, nowLevel: 93, targetLevel: 96)
+        // ((300 − t)·98 dB + t·93 dB) / 300 < 96 dB.
+        let exact = 300 * (ms(98) - ms(96)) / (ms(98) - ms(93))
+        XCTAssertEqual(t, Int(exact.rounded(.down)) + 1)
+        XCTAssertNil(LeqForecast.secondsToCross(energies: energies, window: 300, nowLevel: 97, targetLevel: 96))
+    }
+
+    /// Older seconds leave the window first: a loud start followed by quiet leaves sooner than the
+    /// average alone suggests.
+    func testMovingLeqDropsTheOldestSecondsFirst() {
+        let energies = [Double](repeating: ms(100), count: 120) + [Double](repeating: ms(90), count: 180)
+        // Under 96 dB once the 100 dB seconds that remain are few enough; the level now is 90 dB.
+        let t = LeqForecast.secondsToCross(energies: energies, window: 300, nowLevel: 90, targetLevel: 96)!
+        func mean(_ t: Int) -> Double { (Double(120 - t) * ms(100) + Double(180 + t) * ms(90)) / 300 }
+        XCTAssertEqual(t, 21)
+        XCTAssertGreaterThanOrEqual(mean(t - 1), ms(96))
+        XCTAssertLessThan(mean(t), ms(96))
+    }
+
+    /// While the window fills it covers the seconds so far.
+    func testMovingLeqWhileTheWindowFills() {
+        let energies = [Double](repeating: ms(90), count: 10)
+        let t = LeqForecast.secondsToCross(energies: energies, window: 300, nowLevel: 100, targetLevel: 96)!
+        func mean(_ t: Int) -> Double { (10 * ms(90) + Double(t) * ms(100)) / Double(10 + t) }
+        XCTAssertLessThan(mean(t - 1), ms(96))
+        XCTAssertGreaterThanOrEqual(mean(t), ms(96))
+    }
+
+    func testRunningLeq() {
+        let energies = [Double](repeating: ms(94), count: 600)
+        let up = LeqForecast.secondsToCross(energies: energies, window: nil, nowLevel: 97, targetLevel: 96)!
+        func mean(_ t: Int, _ now: Double) -> Double { (600 * ms(94) + Double(t) * ms(now)) / Double(600 + t) }
+        XCTAssertLessThan(mean(up - 1, 97), ms(96))
+        XCTAssertGreaterThanOrEqual(mean(up, 97), ms(96))
+
+        let loud = [Double](repeating: ms(98), count: 600)
+        let down = LeqForecast.secondsToCross(energies: loud, window: nil, nowLevel: 93, targetLevel: 96)!
+        func loudMean(_ t: Int) -> Double { (600 * ms(98) + Double(t) * ms(93)) / Double(600 + t) }
+        XCTAssertGreaterThanOrEqual(loudMean(down - 1), ms(96))
+        XCTAssertLessThan(loudMean(down), ms(96))
+        XCTAssertNil(LeqForecast.secondsToCross(energies: loud, window: nil, nowLevel: 96, targetLevel: 96))
+    }
+}

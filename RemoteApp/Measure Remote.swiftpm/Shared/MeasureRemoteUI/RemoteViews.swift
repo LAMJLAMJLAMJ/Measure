@@ -877,11 +877,15 @@ struct MeterTile: View {
                 Text(statusText).foregroundStyle(statusColor)
             }
             .font(.callout)
+            if let forecast = meter.forecast {
+                Divider()
+                RemoteForecastRows(rows: forecast, over: meter.forecastOver == true)
+            }
         }
         .padding(.vertical, 12)
         .padding(.leading, 18)
         .padding(.trailing, 12)
-        .frame(height: 170)
+        .frame(height: state.meters.contains { $0.forecast != nil } ? 215 : 170)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
         .overlay(alignment: .leading) {
             UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12)
@@ -910,12 +914,14 @@ struct MeterTile: View {
         return state.limitAColor.map { Color(remoteHex: $0) } ?? .red
     }
 
-    /// "Over limit", "Near limit" within 5 dB, "Overload" while clipping, otherwise the limit.
+    /// "1.2 dB over limit", "2.3 dB under limit" within 5 dB, "Overload" while clipping, otherwise the limit.
     private var statusText: String {
         if meter.clipping == true { return "Overload" }
         guard let limit = meter.limit else { return "No limit" }
         guard let value = meter.value else { return String(format: "Limit %.0f", limit) }
-        return value >= limit ? "Over limit" : value > limit - 5 ? "Near limit" : String(format: "Limit %.0f", limit)
+        if value >= limit { return String(format: "%.1f dB over limit", value - limit) }
+        if value > limit - 5 { return String(format: "%.1f dB under limit", limit - value) }
+        return String(format: "Limit %.0f", limit)
     }
 
     /// Secondary while the level is fine, yellow within 5 dB of the limit, red over it or while clipping.
@@ -973,6 +979,30 @@ struct MeterTile: View {
     private func chipText(_ detail: String) -> String {
         let rest = detail.hasPrefix(meter.unit + " ") ? String(detail.dropFirst(meter.unit.count + 1)) : detail
         return rest.replacingOccurrences(of: " ", with: " · ")
+    }
+}
+
+/// An Leq meter's forecast as the Mac sends it: until the limit, or once over, until back under at
+/// the level now.
+struct RemoteForecastRows: View {
+    let rows: [RemoteForecastRow]
+    let over: Bool
+
+    var body: some View {
+        VStack(spacing: 3) {
+            ForEach(rows.indices, id: \.self) { i in
+                HStack {
+                    Text(rows[i].label).foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Text(rows[i].time)
+                        .monospacedDigit()
+                        .font(i == 0 ? .title3.weight(.semibold) : .callout)
+                        .foregroundStyle(i == 0 && over ? Color.red : rows[i].soon ? Color.orange : Color.primary)
+                }
+            }
+        }
+        .font(.callout)
+        .lineLimit(1)
     }
 }
 

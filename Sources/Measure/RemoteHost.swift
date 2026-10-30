@@ -404,11 +404,22 @@ final class RemoteHost {
             let over = limit.map { (level ?? -200) >= $0 } ?? false
             let name = meter.mic < micNames.count ? micNames[meter.mic] : "Mic \(meter.mic + 1)"
             let unit = monitor.unit(model, mic: meter.mic)
+            var forecast: [RemoteForecastRow]?
+            var forecastOver: Bool?
+            if meter.hasForecast(monitor.settings) {
+                let outlook = monitor.outlook(model, meter: meter)
+                let rows: [(label: String, time: String)] = outlook?.rows
+                    ?? [("Limit in (min:s)", "–")]
+                let soon = outlook.map { !$0.over && ($0.atCurrent ?? Int.max) < 60 } ?? false
+                forecast = rows.enumerated().map { i, row in RemoteForecastRow(label: row.label, time: row.time, soon: i == 0 && soon) }
+                forecastOver = outlook?.over ?? false
+            }
             return RemoteMeter(label: "\(name) · \(meter.average.label(meter.weighting))",
                                value: level, unit: unit,
                                maximum: maximum, overLimit: over,
                                name: name, detail: "\(unit) \(meter.weighting.rawValue) \(meter.average.rawValue)",
-                               limit: limit, clipping: (mic?.recentPeak ?? -200) > -1)
+                               limit: limit, clipping: (mic?.recentPeak ?? -200) > -1,
+                               forecast: forecast, forecastOver: forecastOver)
         }
     }
 
