@@ -678,7 +678,11 @@ struct StatisticsRow: View {
 struct RTAView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("rtaRange") private var range: Double = 80
+    @AppStorage("rtaSpectrogram") private var showSpectrogram = true
+    @AppStorage("rtaSpectrogramSeconds") private var spectrogramSeconds = 30
     @State private var zoom = ChartZoom()
+    /// Where the RTA's plot area lies across the view, so the spectrogram lines up with its bands.
+    @State private var plotX: ClosedRange<CGFloat>?
 
     /// The whole frequency axis, Hz.
     private static let xFull: ClosedRange<Double> = 15...22_000
@@ -737,6 +741,17 @@ struct RTAView: View {
                 ZoomControls(zoom: $zoom, xFull: Self.xFull, yFull: yFull, xLog: true, yStart: (top - range)...top)
                 Button("Reset Peaks") { monitor.resetPeaks() }
                     .disabled(!monitor.isRunning)
+                Toggle("Spectrogram", isOn: $showSpectrogram)
+                    .help("A rolling spectrogram over the RTA, on the same frequency axis: the newest line at the bottom, moving up")
+                if showSpectrogram {
+                    Picker("Spectrogram length", selection: $spectrogramSeconds) {
+                        Text("10 s").tag(10)
+                        Text("30 s").tag(30)
+                        Text("60 s").tag(60)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
                 Spacer()
                 Text(summary(bars, offset: offset))
                     .font(.callout).monospacedDigit()
@@ -746,13 +761,24 @@ struct RTAView: View {
             if bars.isEmpty {
                 EmptyState(text: monitor.isRunning ? "Waiting for the first block" : "Start live monitoring to see the spectrum")
             } else {
+                if showSpectrogram {
+                    LiveSpectrogram(rows: monitor.spectrogram, bands: monitor.spectrogramBands,
+                                    shifts: shifts(monitor.spectrogramBands, offset: offset),
+                                    levels: yShown, frequencies: zoom.xDomain(Self.xFull), plotX: plotX,
+                                    seconds: spectrogramSeconds)
+                        .padding(.trailing, 12)
+                        .frame(minHeight: 100, maxHeight: .infinity)
+                }
                 chart(bars, y: yShown)
                     .zoomScrollBars($zoom, xFull: Self.xFull, yFull: yFull, xLog: true, yShown: yShown)
+                    .frame(minHeight: 180, maxHeight: .infinity)
             }
             Text("Bands from an FFT of the latest block (Hann window), each bin shared between the bands it overlaps. \(offset == nil ? "dB re full scale: calibrate the mic in Setup for dB SPL." : "Levels include the mic's calibration and offset.") Grey ticks: peak hold.")
                 .font(.caption).foregroundStyle(.secondary)
                 .lineLimit(2)
         }
+        .coordinateSpace(name: "rta")
+        .onPreferenceChange(RTAPlotKey.self) { plotX = $0 }
     }
 
     private struct Bar: Identifiable {
@@ -774,6 +800,15 @@ struct RTAView: View {
             let shift = SoundLevel.weightingDB(w, at: f) - (cal?.magnitude(at: f) ?? 0) + (offset ?? 0)
             return Bar(id: i, band: snap.bands[i], level: snap.rtaLevels[i] + shift, peak: snap.rtaPeaks[i] + shift)
         }
+    }
+
+    /// What each band gets added, as on the bars: the weighting, the mic's calibration curve and its offset.
+    private func shifts(_ bands: [RealTimeAnalyzer.Band], offset: Double?) -> [Double] {
+        let monitor = model.monitor
+        let mics = model.settings.mics
+        let cal = monitor.settings.rtaMic < mics.count ? model.calibration(mic: mics[monitor.settings.rtaMic].micName) : nil
+        let w = monitor.settings.rtaWeighting
+        return bands.map { SoundLevel.weightingDB(w, at: $0.center) - (cal?.magnitude(at: $0.center) ?? 0) + (offset ?? 0) }
     }
 
     private func summary(_ bars: [Bar], offset: Double?) -> String {
@@ -815,9 +850,130 @@ struct RTAView: View {
         }
         .chartXAxisLabel("Hz")
         .chartYAxisLabel("dB")
+        .chartBackground { proxy in
+            GeometryReader { geo in
+                let origin = geo.frame(in: .named("rta")).minX
+                let plot = proxy.plotFrame.map { geo[$0] }
+                Color.clear.preference(key: RTAPlotKey.self,
+                                       value: plot.map { (origin + $0.minX)...(origin + $0.maxX) })
+            }
+        }
         .chartZoomDrag($zoom)
         .clipped()
         .exportablePlot("RTA")
+    }
+}
+
+/// The RTA plot area's left and right edges in the RTA view.
+private struct RTAPlotKey: PreferenceKey {
+    static let defaultValue: ClosedRange<CGFloat>? = nil
+    static func reduce(value: inout ClosedRange<CGFloat>?, nextValue: () -> ClosedRange<CGFloat>?) {
+        value = nextValue() ?? value
+    }
+}
+
+/// A rolling spectrogram of the RTA's bands: the newest row at the bottom, rows moving up, each band
+/// under its bar on the RTA. Colours run over the RTA's level axis, so what is near the top of the RTA
+/// is hot here too.
+struct LiveSpectrogram: View {
+    let rows: [[Float]]
+    let bands: [RealTimeAnalyzer.Band]
+    /// dB added to each band, as on the bars.
+    let shifts: [Double]
+    /// The level range coloured, from cold to hot.
+    let levels: ClosedRange<Double>
+    /// The frequencies shown across, Hz, as on the RTA.
+    let frequencies: ClosedRange<Double>
+    /// Where the RTA's plot area lies across this view; until it is known, the whole width.
+    let plotX: ClosedRange<CGFloat>?
+    let seconds: Int
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// Rows a second, as the monitor updates.
+    private static let rate = 10
+
+    var body: some View {
+        Canvas { context, size in
+            let left = plotX?.lowerBound ?? 0
+            let right = min(plotX?.upperBound ?? size.width, size.width)
+            let plot = CGRect(x: left, y: 0, width: max(right - left, 1), height: size.height)
+            context.fill(Path(plot), with: .color(background))
+            let count = seconds * Self.rate
+            let shown = Array(rows.suffix(count))
+            if let image = image(shown), let first = bands.first, let last = bands.last {
+                let span = log(frequencies.upperBound / frequencies.lowerBound)
+                func x(_ f: Double) -> CGFloat { plot.minX + plot.width * CGFloat(log(f / frequencies.lowerBound) / span) }
+                let rowHeight = size.height / CGFloat(count)
+                let height = rowHeight * CGFloat(shown.count)
+                var clipped = context
+                clipped.clip(to: Path(plot))
+                clipped.draw(Image(decorative: image, scale: 1).interpolation(.none).resizable(),
+                             in: CGRect(x: x(first.lower), y: size.height - height,
+                                        width: x(last.upper) - x(first.lower), height: height))
+            }
+            // Seconds ago up the left edge, beside the plot.
+            let step = seconds <= 10 ? 2 : (seconds <= 30 ? 10 : 20)
+            for t in stride(from: 0, through: seconds, by: step) {
+                let y = size.height * (1 - CGFloat(t) / CGFloat(seconds))
+                context.stroke(Path { p in
+                    p.move(to: CGPoint(x: plot.minX - 4, y: y))
+                    p.addLine(to: CGPoint(x: plot.minX, y: y))
+                }, with: .color(.secondary))
+                let label = Text(t == 0 ? "now" : "−\(t) s").font(.caption2).foregroundStyle(.secondary)
+                let anchor: UnitPoint = t == 0 ? .bottomTrailing : (t == seconds ? .topTrailing : .trailing)
+                context.draw(label, at: CGPoint(x: plot.minX - 6, y: y), anchor: anchor)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            Text(String(format: "%.0f to %.0f dB", levels.lowerBound, levels.upperBound))
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(4)
+                .background(RoundedRectangle(cornerRadius: 3).fill(.regularMaterial))
+                .padding(4)
+        }
+    }
+
+    private var background: Color { colorScheme == .dark ? Color(white: 0.08) : Color(white: 0.97) }
+
+    /// One pixel per band and row, oldest row at the top.
+    private func image(_ shown: [[Float]]) -> CGImage? {
+        let width = bands.count, height = shown.count
+        guard width > 0, height > 0, shifts.count == width else { return nil }
+        let palette = colorScheme == .dark ? Self.darkPalette : Self.lightPalette
+        let low = levels.lowerBound, range = max(levels.upperBound - levels.lowerBound, 1)
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        for (r, row) in shown.enumerated() where row.count == width {
+            for c in 0..<width {
+                let t = (Double(row[c]) + shifts[c] - low) / range
+                let k = Int((max(0, min(1, t)) * 255).rounded())
+                let i = (r * width + c) * 4
+                pixels[i] = palette[k].r
+                pixels[i + 1] = palette[k].g
+                pixels[i + 2] = palette[k].b
+                pixels[i + 3] = 255
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+
+    private struct RGB { let r: UInt8, g: UInt8, b: UInt8 }
+
+    private static let darkPalette = palette(dark: true)
+    private static let lightPalette = palette(dark: false)
+
+    /// The spectrogram colours of the measurement view, cold to hot, in 256 steps.
+    private static func palette(dark: Bool) -> [RGB] {
+        (0...255).map { k in
+            let t = Double(k) / 255
+            let hue = 0.7 - 0.7 * t
+            let color = dark ? NSColor(hue: hue, saturation: 0.9, brightness: 0.15 + 0.85 * t, alpha: 1)
+                             : NSColor(hue: hue, saturation: 0.1 + 0.9 * t, brightness: 1 - 0.15 * t, alpha: 1)
+            let rgb = color.usingColorSpace(.deviceRGB) ?? color
+            return RGB(r: UInt8(rgb.redComponent * 255), g: UInt8(rgb.greenComponent * 255), b: UInt8(rgb.blueComponent * 255))
+        }
     }
 }
 #endif
