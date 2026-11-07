@@ -78,6 +78,29 @@ public struct EQFilter: Codable, Hashable, Identifiable {
     }
 }
 
+/// How a processor counts the Q of a peak filter. The app keeps the Audio EQ Cookbook's Q; the
+/// L-Acoustics ("French") Q of LA Network Manager is that Q times 10^(|gain| / 40), so the two agree
+/// at 0 dB and the L-Acoustics figure is larger the more the filter boosts or cuts. Only peaks
+/// differ; other filters' Q is the same in both.
+public enum QStyle: String, Codable, CaseIterable, Identifiable {
+    case standard = "Standard"
+    case lAcoustics = "L-Acoustics"
+    public var id: String { rawValue }
+
+    /// The factor from the Cookbook Q to this style's Q for a filter of `kind` and `gain` dB.
+    public func factor(_ kind: EQFilter.Kind, gain: Double) -> Double {
+        self == .lAcoustics && kind == .peak ? pow(10, abs(gain) / 40) : 1
+    }
+
+    /// The filter's Q as this style counts it.
+    public func q(of filter: EQFilter) -> Double { filter.q * factor(filter.kind, gain: filter.gain) }
+
+    /// The Cookbook Q for a Q given in this style.
+    public func cookbookQ(_ shown: Double, kind: EQFilter.Kind, gain: Double) -> Double {
+        shown / factor(kind, gain: gain)
+    }
+}
+
 public enum ParametricEQ {
     /// Combined gain in dB of the enabled filters at `f`.
     public static func gainDB(_ filters: [EQFilter], at f: Double, sampleRate fs: Double) -> Double {
@@ -91,14 +114,16 @@ public enum ParametricEQ {
                           magnitude: zip(response.frequencies, response.magnitude).map { $1 + gainDB(filters, at: $0, sampleRate: fs) })
     }
 
-    /// The filters as text, one per line, for typing into a processor.
-    public static func description(_ filters: [EQFilter]) -> String {
-        filters.enumerated().map { i, f in
+    /// The filters as text, one per line, for typing into a processor, with Q counted as `style` does.
+    public static func description(_ filters: [EQFilter], qStyle style: QStyle = .standard) -> String {
+        let lines = filters.enumerated().map { i, f in
             var line = "\(i + 1). \(f.kind.rawValue)  \(String(format: f.frequency >= 1000 ? "%.0f" : "%.1f", f.frequency)) Hz"
             if f.kind.hasGain { line += String(format: "  %+.1f dB", f.gain) }
-            line += String(format: "  Q %.2f", f.q)
+            line += String(format: "  Q %.2f", style.q(of: f))
             if !f.enabled { line += "  (off)" }
             return line
-        }.joined(separator: "\n")
+        }
+        let note = style == .standard || !filters.contains { $0.kind == .peak } ? [] : ["Q as in LA Network Manager (L-Acoustics)"]
+        return (lines + note).joined(separator: "\n")
     }
 }

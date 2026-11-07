@@ -9,6 +9,8 @@ import SwiftUI
 struct VirtualEQPanel: View {
     @Environment(AppModel.self) private var model
     @AppStorage("tuningSource") private var source: TuningSource = .sweep
+    /// How peak filters' Q is shown, typed and copied: the Cookbook's or LA Network Manager's.
+    @AppStorage("qStyle") private var qStyle: QStyle = .standard
 
     /// What the panel edits: the selected trace's EQ, or the live curves' EQ.
     private struct Target {
@@ -57,10 +59,17 @@ struct VirtualEQPanel: View {
                 Text(target.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             eqCurve(target).frame(height: 110)
+            Picker("Q", selection: $qStyle) {
+                Text("Standard Q").tag(QStyle.standard)
+                Text("L-Acoustics Q").tag(QStyle.lAcoustics)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .help("L-Acoustics Q is the Q LA Network Manager shows for a peak: the standard Q × 10^(|gain| / 40), larger the more the peak boosts or cuts. Shelves, pass filters and notches are the same in both. The curves don't change, only how Q is counted.")
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(filters) { filter in
-                        FilterRow(filter: binding(filter), index: (filters.firstIndex { $0.id == filter.id } ?? 0) + 1) {
+                        FilterRow(filter: binding(filter), index: (filters.firstIndex { $0.id == filter.id } ?? 0) + 1, qStyle: qStyle) {
                             target.set(filters.filter { $0.id != filter.id })
                         }
                     }
@@ -85,7 +94,7 @@ struct VirtualEQPanel: View {
                 Menu("More") {
                     Button("Copy Parameters") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString("\(target.title)\n" + ParametricEQ.description(filters), forType: .string)
+                        NSPasteboard.general.setString("\(target.title)\n" + ParametricEQ.description(filters, qStyle: qStyle), forType: .string)
                     }
                     if let add = target.addPrediction {
                         Button("Add Predicted Response as Trace") { add() }
@@ -167,6 +176,7 @@ struct VirtualEQPanel: View {
 private struct FilterRow: View {
     @Binding var filter: EQFilter
     let index: Int
+    let qStyle: QStyle
     let remove: () -> Void
 
     var body: some View {
@@ -192,14 +202,31 @@ private struct FilterRow: View {
             }
             HStack(spacing: 6) {
                 field("Hz", value: $filter.frequency, format: .number.precision(.fractionLength(0...1)))
-                field("dB", value: $filter.gain, format: .number.precision(.fractionLength(1)))
+                field("dB", value: gain, format: .number.precision(.fractionLength(1)))
                     .disabled(!filter.kind.hasGain)
                     .opacity(filter.kind.hasGain ? 1 : 0.4)
-                field("Q", value: $filter.q, format: .number.precision(.fractionLength(2)))
+                field(qStyle == .lAcoustics && filter.kind == .peak ? "Q LA" : "Q", value: q,
+                      format: .number.precision(.fractionLength(2)))
             }
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.5)))
+    }
+
+    /// The Q as the chosen style counts it; typing one sets the Cookbook Q that gives it.
+    private var q: Binding<Double> {
+        Binding(get: { qStyle.q(of: filter) },
+                set: { filter.q = qStyle.cookbookQ($0, kind: filter.kind, gain: filter.gain) })
+    }
+
+    /// The gain. With L-Acoustics Q a new gain keeps the Q shown, as LA Network Manager does.
+    private var gain: Binding<Double> {
+        Binding(get: { filter.gain },
+                set: { new in
+                    let shown = qStyle.q(of: filter)
+                    filter.gain = new
+                    filter.q = qStyle.cookbookQ(shown, kind: filter.kind, gain: new)
+                })
     }
 
     private func field(_ unit: String, value: Binding<Double>, format: FloatingPointFormatStyle<Double>) -> some View {
