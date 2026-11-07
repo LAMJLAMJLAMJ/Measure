@@ -147,6 +147,14 @@ final class MonitorAnalyzer {
     @ObservationIgnored private(set) var pauses: [LevelLog.Pause] = []
     @ObservationIgnored private var pausedAt: Date?
     var snapshot = MonitorSnapshot()
+    /// The RTA's recent band levels for the rolling spectrogram, oldest first, a row each time the
+    /// analyser updates (about ten a second), dB re full scale without weighting or calibration.
+    private(set) var spectrogram: [[Float]] = []
+    /// The bands of the spectrogram's rows; a change of bands, mic or FFT size starts it again.
+    @ObservationIgnored private(set) var spectrogramBands: [RealTimeAnalyzer.Band] = []
+    @ObservationIgnored private var spectrogramKey = ""
+    /// Rows kept: a minute at ten a second.
+    static let spectrogramRows = 600
     /// One value a second per meter on the SPL view, by meter id, dB re full scale.
     var histories: [UUID: [Double]] = [:]
     /// L10, L50 and L90 per meter over the history range, by meter id and percent, dB re full scale.
@@ -210,6 +218,7 @@ final class MonitorAnalyzer {
         levelLogs = []
         pauses = []
         markers = []
+        spectrogram = []
         pausedAt = nil
         isPaused = false
         startDate = Date()
@@ -239,9 +248,24 @@ final class MonitorAnalyzer {
                        logs: [LevelLog]?) {
         guard isRunning else { return }
         snapshot = snap
+        if !isPaused { addSpectrogramRow(snap) }
         if let histories { self.histories = histories }
         if let statistics { self.statistics = statistics }
         if let logs { levelLogs = logs }
+    }
+
+    private func addSpectrogramRow(_ snap: MonitorSnapshot) {
+        guard !snap.bands.isEmpty, snap.rtaLevels.count == snap.bands.count else { return }
+        let key = "\(settings.rtaMic)-\(settings.rtaFFTSize)"
+        if snap.bands != spectrogramBands || key != spectrogramKey {
+            spectrogram = []
+            spectrogramBands = snap.bands
+            spectrogramKey = key
+        }
+        var rows = spectrogram
+        rows.append(snap.rtaLevels.map { Float($0) })
+        if rows.count > Self.spectrogramRows { rows.removeFirst(rows.count - Self.spectrogramRows) }
+        spectrogram = rows
     }
 
     /// The level log as CSV, a row per second, with each mic's calibration and offset applied.
@@ -299,6 +323,7 @@ final class MonitorAnalyzer {
         levelLogs = []
         pauses = []
         markers = []
+        spectrogram = []
         startDate = Date()
         if isPaused { pausedAt = startDate }
     }
