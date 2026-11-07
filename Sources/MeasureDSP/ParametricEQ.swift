@@ -79,17 +79,17 @@ public struct EQFilter: Codable, Hashable, Identifiable {
 }
 
 /// How a processor counts the Q of a peak filter. The app keeps the Audio EQ Cookbook's Q; the
-/// L-Acoustics ("French") Q of LA Network Manager is that Q times 10^(|gain| / 40), so the two agree
-/// at 0 dB and the L-Acoustics figure is larger the more the filter boosts or cuts. Only peaks
+/// French Q of L-Acoustics LA Network Manager is that Q times 10^(|gain| / 40), so the two agree
+/// at 0 dB and the French figure is larger the more the filter boosts or cuts. Only peaks
 /// differ; other filters' Q is the same in both.
 public enum QStyle: String, Codable, CaseIterable, Identifiable {
     case standard = "Standard"
-    case lAcoustics = "L-Acoustics"
+    case french = "French"
     public var id: String { rawValue }
 
     /// The factor from the Cookbook Q to this style's Q for a filter of `kind` and `gain` dB.
     public func factor(_ kind: EQFilter.Kind, gain: Double) -> Double {
-        self == .lAcoustics && kind == .peak ? pow(10, abs(gain) / 40) : 1
+        self == .french && kind == .peak ? pow(10, abs(gain) / 40) : 1
     }
 
     /// The filter's Q as this style counts it.
@@ -123,7 +123,7 @@ public enum ParametricEQ {
             if !f.enabled { line += "  (off)" }
             return line
         }
-        let note = style == .standard || !filters.contains { $0.kind == .peak } ? [] : ["Q as in LA Network Manager (L-Acoustics)"]
+        let note = style == .standard || !filters.contains { $0.kind == .peak } ? [] : ["French Q, as in LA Network Manager"]
         return (lines + note).joined(separator: "\n")
     }
 }

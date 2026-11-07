@@ -61,11 +61,11 @@ struct VirtualEQPanel: View {
             eqCurve(target).frame(height: 110)
             Picker("Q", selection: $qStyle) {
                 Text("Standard Q").tag(QStyle.standard)
-                Text("L-Acoustics Q").tag(QStyle.lAcoustics)
+                Text("French Q").tag(QStyle.french)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .help("L-Acoustics Q is the Q LA Network Manager shows for a peak: the standard Q × 10^(|gain| / 40), larger the more the peak boosts or cuts. Shelves, pass filters and notches are the same in both. The curves don't change, only how Q is counted.")
+            .help("French Q is the Q L-Acoustics LA Network Manager shows for a peak: the standard Q × 10^(|gain| / 40), larger the more the peak boosts or cuts. Shelves, pass filters and notches are the same in both. The curves don't change, only how Q is counted.")
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(filters) { filter in
@@ -205,7 +205,7 @@ private struct FilterRow: View {
                 field("dB", value: gain, format: .number.precision(.fractionLength(1)))
                     .disabled(!filter.kind.hasGain)
                     .opacity(filter.kind.hasGain ? 1 : 0.4)
-                field(qStyle == .lAcoustics && filter.kind == .peak ? "Q LA" : "Q", value: q,
+                field(qStyle == .french && filter.kind == .peak ? "Q Fr" : "Q", value: q,
                       format: .number.precision(.fractionLength(2)))
             }
         }
@@ -219,7 +219,7 @@ private struct FilterRow: View {
                 set: { filter.q = qStyle.cookbookQ($0, kind: filter.kind, gain: filter.gain) })
     }
 
-    /// The gain. With L-Acoustics Q a new gain keeps the Q shown, as LA Network Manager does.
+    /// The gain. With French Q a new gain keeps the Q shown, as LA Network Manager does.
     private var gain: Binding<Double> {
         Binding(get: { filter.gain },
                 set: { new in

@@ -56,13 +56,13 @@ final class ParametricEQTests: XCTestCase {
     /// L's worked example: Q 1 at -5 dB is Q 1.33 in LA Network Manager.
     func testLAcousticsQ() {
         let peak = EQFilter(kind: .peak, frequency: 1000, gain: -5, q: 1)
-        XCTAssertEqual(QStyle.lAcoustics.q(of: peak), 1.334, accuracy: 0.001)
+        XCTAssertEqual(QStyle.french.q(of: peak), 1.334, accuracy: 0.001)
         XCTAssertEqual(QStyle.standard.q(of: peak), 1)
-        XCTAssertEqual(QStyle.lAcoustics.cookbookQ(1.334, kind: .peak, gain: 5), 1, accuracy: 0.001)
+        XCTAssertEqual(QStyle.french.cookbookQ(1.334, kind: .peak, gain: 5), 1, accuracy: 0.001)
         // Only peaks differ.
         let shelf = EQFilter(kind: .lowShelf, frequency: 100, gain: -5, q: 0.707)
-        XCTAssertEqual(QStyle.lAcoustics.q(of: shelf), 0.707)
-        let text = ParametricEQ.description([peak], qStyle: .lAcoustics)
-        XCTAssertEqual(text, "1. Peak  1000 Hz  -5.0 dB  Q 1.33\nQ as in LA Network Manager (L-Acoustics)")
+        XCTAssertEqual(QStyle.french.q(of: shelf), 0.707)
+        let text = ParametricEQ.description([peak], qStyle: .french)
+        XCTAssertEqual(text, "1. Peak  1000 Hz  -5.0 dB  Q 1.33\nFrench Q, as in LA Network Manager")
     }
 }
