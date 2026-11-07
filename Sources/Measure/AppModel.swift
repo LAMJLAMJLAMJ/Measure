@@ -666,7 +666,7 @@ final class AppModel {
         let predicted = ParametricEQ.apply(filters, to: measured, sampleRate: trace.eqSampleRate)
         let info = TraceInfo(name: "\(trace.info.name) + EQ", source: .eqPrediction, sampleRate: trace.info.sampleRate,
                              position: trace.info.position,
-                             notes: "Predicted with Virtual EQ (\(Int(trace.eqSampleRate)) Hz biquads):\n" + ParametricEQ.description(filters),
+                             notes: "Predicted with Virtual EQ (\(Int(trace.eqSampleRate)) Hz biquads):\n" + ParametricEQ.description(filters, qStyle: QStyle(rawValue: UserDefaults.standard.string(forKey: "qStyle") ?? "") ?? .standard),
                              colorIndex: traces.count)
         let made = Trace(info: info, frequencyResponse: predicted)
         add(made)
