@@ -103,6 +103,7 @@ struct ContentView: View {
         case .alignment: AlignmentView()
         case .distortion: DistortionView()
         case .sti: STIView()
+        case .polarity: PolarityView()
         }
     }
 
