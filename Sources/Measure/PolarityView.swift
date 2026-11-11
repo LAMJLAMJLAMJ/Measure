@@ -24,7 +24,8 @@ struct PolarityView: View {
             }
             Text("Each mic reads the polarity pulse from the generator (or another polarity checker's generator): positive means the speaker pushed first. The last \(PolarityDetector.votes) pulses vote. Put the mic close to the driver you are checking, as reflections arrive later and are not counted.")
                 .font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
             if !meters.enabled {
                 EmptyState(text: "Turn on Input Meters in the Measurement menu: the polarity check listens on their input.")
             } else if let problem = meters.problem {
@@ -41,7 +42,7 @@ struct PolarityView: View {
                 }
             }
         }
-        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { meters.polarityOn = true }
         .onDisappear { meters.polarityOn = false }
     }
