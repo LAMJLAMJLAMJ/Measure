@@ -231,7 +231,7 @@ private struct SignalControls: View {
                     field("Gap", signal.sweepGap, unit: "s", digits: 1)
                 case .polarity:
                     field("Every", signal.pulseInterval, unit: "s", digits: 2)
-                    Text("A 1 ms positive pulse").font(.caption).foregroundStyle(.secondary)
+                    Text("A 0.25 ms positive pulse, for the Polarity view").font(.caption).foregroundStyle(.secondary)
                 }
             }
             LevelControl()

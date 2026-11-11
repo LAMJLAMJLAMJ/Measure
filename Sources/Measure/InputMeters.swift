@@ -4,6 +4,14 @@ import MeasureDSP
 import Observation
 import SwiftUI
 
+/// One mic's polarity readings, as the Polarity view shows them.
+struct PolarityReport: Equatable {
+    var readings: [PolarityDetector.Band: PolarityDetector.Reading]
+    var pulses: Int
+    /// The last pulse, full range, scaled to a peak of 1.
+    var lastPulse: [Double]
+}
+
 /// Meters every mic input and the loopback input from Measurement Setup, all the time, as Smaart
 /// does beside each engine, so a dead mic, a gain set too low or a clipping input shows before and
 /// while measuring. It listens on a stream of its own, alongside whatever else is running (sweeps,
@@ -34,6 +42,14 @@ final class InputMeters {
     private(set) var isRunning = false
     /// Why the meters are not running, when they should be.
     private(set) var problem: String?
+    /// While on (the Polarity view is open), each mic's input is read for polarity pulses.
+    var polarityOn = false {
+        didSet { if !polarityOn { resetPolarity() } }
+    }
+    /// What each mic's pulses say, by mic index of Measurement Setup.
+    private(set) var polarity: [Int: PolarityReport] = [:]
+    @ObservationIgnored private var detectors: [Int: PolarityDetector] = [:]
+    @ObservationIgnored private var sampleRate = 48_000.0
 
     @ObservationIgnored private let stream = LiveStream()
     @ObservationIgnored private var loop: Task<Void, Never>?
@@ -98,7 +114,25 @@ final class InputMeters {
         }
         for i in mics.indices {
             let c = channel + i
-            update(&mics[i], channel: c, samples: read(c) { stream.samples(mic: i, from: $0) })
+            let samples = read(c) { stream.samples(mic: i, from: $0) }
+            update(&mics[i], channel: c, samples: samples)
+            if polarityOn { readPolarity(mic: mics[i].id, samples: samples) }
+        }
+    }
+
+    /// Clears the polarity readings, to start counting pulses again.
+    func resetPolarity() {
+        detectors = [:]
+        polarity = [:]
+    }
+
+    private func readPolarity(mic: Int, samples: [Double]) {
+        let detector = detectors[mic] ?? PolarityDetector(sampleRate: sampleRate)
+        detectors[mic] = detector
+        let before = detector.pulses
+        detector.process(samples)
+        if detector.pulses != before || polarity[mic] == nil {
+            polarity[mic] = PolarityReport(readings: detector.readings, pulses: detector.pulses, lastPulse: detector.lastPulse)
         }
     }
 
@@ -117,6 +151,7 @@ final class InputMeters {
         stream.stop()
         isRunning = false
         problem = nil
+        resetPolarity()
         guard enabled else {
             mics = []
             loopback = nil
@@ -159,6 +194,7 @@ final class InputMeters {
             // Start reading from now, not from the start of the buffer.
             positions = Array(repeating: stream.capturedFrames, count: channels)
             recent = Array(repeating: [], count: channels)
+            sampleRate = s.sampleRate
             isRunning = true
         }
     }

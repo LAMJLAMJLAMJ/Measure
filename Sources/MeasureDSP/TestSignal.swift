@@ -73,9 +73,11 @@ public struct TestSignal: Codable, Equatable {
                                          sampleRate: fs, amplitude: 1, fadeIn: 0.02, fadeOut: 0.01)
             x = sweep.samples(silence: min(max(sweepGap, 0), 10))
         case .polarity:
-            // A raised-cosine bump 1 ms wide: all positive, so a speaker moving the right way pushes first.
+            // A raised-cosine bump 0.25 ms wide: all positive, so a speaker moving the right way pushes
+            // first, and short enough to reach the tweeters (its spectrum is flat to about 2 kHz and
+            // falls to its first null at 8 kHz).
             let n = max(Int((min(max(pulseInterval, 0.05), 5) * fs).rounded()), 2)
-            let width = max(Int((0.001 * fs).rounded()), 2)
+            let width = max(Int((0.00025 * fs).rounded()), 2)
             var pulse = [Double](repeating: 0, count: n)
             for i in 0..<min(width, n) {
                 pulse[i] = 0.5 * (1 - cos(2 * Double.pi * Double(i) / Double(width)))

@@ -28,6 +28,7 @@ enum TuningTab: String, CaseIterable, Identifiable {
     case alignment = "Alignment"
     case distortion = "Distortion"
     case sti = "STI"
+    case polarity = "Polarity"
     var id: String { rawValue }
 }
 
