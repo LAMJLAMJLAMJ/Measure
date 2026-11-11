@@ -65,28 +65,4 @@ final class ParametricEQTests: XCTestCase {
         let text = ParametricEQ.description([peak], qStyle: .french)
         XCTAssertEqual(text, "1. Peak  1000 Hz  -5.0 dB  Q 1.33\nFrench Q, as in LA Network Manager")
     }
-
-    /// The paste format from L's 16-filter LA Network Manager bank.
-    func testLANetworkManagerExport() {
-        // -17.2 dB at 323 Hz with French Q 0.5, given here as its Cookbook Q.
-        let first = EQFilter(kind: .peak, frequency: 323, gain: -17.2,
-                             q: QStyle.french.cookbookQ(0.5, kind: .peak, gain: -17.2))
-        var off = EQFilter(kind: .peak, frequency: 5047, gain: -3.6, q: QStyle.french.cookbookQ(1.343, kind: .peak, gain: -3.6))
-        off.enabled = false
-        let narrow = EQFilter(kind: .peak, frequency: 187, gain: -4.5, q: 20)
-        let shelf = EQFilter(kind: .lowShelf, frequency: 100, gain: 3, q: 0.707)
-        let export = LANetworkManager.export([first, shelf, off, narrow])
-        XCTAssertEqual(export.written, 3)
-        XCTAssertEqual(export.skipped, 1)
-        XCTAssertEqual(export.capped, 1)
-        let lines = export.xml.components(separatedBy: "\n")
-        XCTAssertEqual(lines.first, "<?xml version=\"1.0\" encoding=\"utf-8\"?>")
-        XCTAssertTrue(lines.contains("      <iir F=\"323\" G=\"-172\" On=\"1\" Q=\"500\" T=\"1\" index=\"0\"/>"))
-        XCTAssertTrue(lines.contains("      <iir F=\"5047\" G=\"-36\" On=\"0\" Q=\"1343\" T=\"1\" index=\"1\"/>"))
-        XCTAssertTrue(lines.contains("      <iir F=\"187\" G=\"-45\" On=\"1\" Q=\"10000\" T=\"1\" index=\"2\"/>"))
-        XCTAssertTrue(lines.contains("      <iir F=\"1000\" G=\"0\" On=\"0\" Q=\"1000\" T=\"1\" index=\"15\"/>"))
-        XCTAssertEqual(lines.filter { $0.contains("<iir ") }.count, 16)
-        XCTAssertEqual(lines.last, "</LAGROUP>")
-    }
 }
-

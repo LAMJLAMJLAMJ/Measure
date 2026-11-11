@@ -96,9 +96,6 @@ struct VirtualEQPanel: View {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString("\(target.title)\n" + ParametricEQ.description(filters, qStyle: qStyle), forType: .string)
                     }
-                    Button("Copy for LA Network Manager") { copyForNetworkManager(filters) }
-                        .disabled(qStyle != .french)
-                        .help("Copies the peaks as an LA Network Manager group with a 16-filter EQ bank, to paste there. Needs French Q.")
                     if let add = target.addPrediction {
                         Button("Add Predicted Response as Trace") { add() }
                     }
@@ -113,23 +110,6 @@ struct VirtualEQPanel: View {
         }
         .padding(12)
         .frame(maxHeight: .infinity, alignment: .top)
-    }
-
-    /// The peaks as LA Network Manager pastes them, and what was left out or changed.
-    private func copyForNetworkManager(_ filters: [EQFilter]) {
-        let export = LANetworkManager.export(filters)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(export.xml, forType: .string)
-        var notes: [String] = []
-        if export.skipped > 0 {
-            notes.append("\(export.skipped) left out (only peaks, up to 16)")
-        }
-        if export.capped > 0 {
-            notes.append("\(export.capped) Q capped at \(Int(LANetworkManager.maxQ))")
-        }
-        let filtersCopied = "\(export.written) peak\(export.written == 1 ? "" : "s")"
-        let detail = notes.isEmpty ? "" : ": " + notes.joined(separator: ", ")
-        model.status = "Copied \(filtersCopied) for LA Network Manager\(detail)"
     }
 
     private func footnote(_ target: Target) -> String {
