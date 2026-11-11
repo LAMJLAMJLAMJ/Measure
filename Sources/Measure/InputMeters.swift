@@ -10,6 +10,8 @@ struct PolarityReport: Equatable {
     var pulses: Int
     /// The last pulse, full range, scaled to a peak of 1.
     var lastPulse: [Double]
+    /// The last pulse in each band, scaled to its own peak of 1.
+    var bandPulses: [PolarityDetector.Band: [Double]]
 }
 
 /// Meters every mic input and the loopback input from Measurement Setup, all the time, as Smaart
@@ -45,6 +47,20 @@ final class InputMeters {
     /// While on (the Polarity view is open), each mic's input is read for polarity pulses.
     var polarityOn = false {
         didSet { if !polarityOn { resetPolarity() } }
+    }
+    /// Edges of the polarity check's low, mid and high bands. Remembered between launches; changing
+    /// them starts the count again.
+    var crossovers: PolarityDetector.Crossovers = {
+        let d = UserDefaults.standard
+        guard let data = d.data(forKey: "polarityCrossovers"),
+              let c = try? JSONDecoder().decode(PolarityDetector.Crossovers.self, from: data) else { return .standard }
+        return c
+    }() {
+        didSet {
+            guard crossovers != oldValue else { return }
+            if let data = try? JSONEncoder().encode(crossovers) { UserDefaults.standard.set(data, forKey: "polarityCrossovers") }
+            resetPolarity()
+        }
     }
     /// What each mic's pulses say, by mic index of Measurement Setup.
     private(set) var polarity: [Int: PolarityReport] = [:]
@@ -127,12 +143,13 @@ final class InputMeters {
     }
 
     private func readPolarity(mic: Int, samples: [Double]) {
-        let detector = detectors[mic] ?? PolarityDetector(sampleRate: sampleRate)
+        let detector = detectors[mic] ?? PolarityDetector(sampleRate: sampleRate, crossovers: crossovers)
         detectors[mic] = detector
         let before = detector.pulses
         detector.process(samples)
         if detector.pulses != before || polarity[mic] == nil {
-            polarity[mic] = PolarityReport(readings: detector.readings, pulses: detector.pulses, lastPulse: detector.lastPulse)
+            polarity[mic] = PolarityReport(readings: detector.readings, pulses: detector.pulses, lastPulse: detector.lastPulse,
+                                            bandPulses: detector.bandPulses)
         }
     }
 
