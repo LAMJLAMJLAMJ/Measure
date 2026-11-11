@@ -34,8 +34,8 @@ final class PolarityTests: XCTestCase {
         return y
     }
 
-    func check(_ x: [Double], expect: PolarityDetector.Polarity) {
-        let detector = PolarityDetector(sampleRate: fs)
+    func check(_ x: [Double], expect: PolarityDetector.Polarity, crossovers: PolarityDetector.Crossovers = .standard) {
+        let detector = PolarityDetector(sampleRate: fs, crossovers: crossovers)
         // In the blocks the app reads, a tenth of a second at a time.
         for start in stride(from: 0, to: x.count, by: 4800) { detector.process(Array(x[start..<min(start + 4800, x.count)])) }
         XCTAssertEqual(detector.pulses, 6)
@@ -44,6 +44,10 @@ final class PolarityTests: XCTestCase {
             XCTAssertEqual(reading.polarity, expect, "\(band)")
             XCTAssertEqual(reading.agreeing, reading.count, "\(band)")
             XCTAssertEqual(reading.count, 6, "\(band)")
+            let trace = detector.bandPulses[band] ?? []
+            XCTAssertFalse(trace.isEmpty, "\(band)")
+            XCTAssertLessThanOrEqual(trace.count, PolarityDetector.maxTracePoints, "\(band)")
+            XCTAssertEqual(trace.map(abs).max() ?? 0, 1, accuracy: 0.05, "\(band)")
         }
     }
 
@@ -52,6 +56,23 @@ final class PolarityTests: XCTestCase {
     func testThroughASpeakersHighPass() {
         check(speaker(pulses(sign: 1)), expect: .positive)
         check(speaker(pulses(sign: -1)), expect: .negative)
+    }
+
+    func testOtherBandEdges() {
+        for c in [PolarityDetector.Crossovers(low: 100, high: 5000), .init(low: 40, high: 500), .init(low: 1000, high: 16000)] {
+            check(speaker(pulses(sign: 1)), expect: .positive, crossovers: c)
+            check(speaker(pulses(sign: -1)), expect: .negative, crossovers: c)
+        }
+    }
+
+    func testBandEdgesKeptSensible() {
+        let c = PolarityDetector.Crossovers(low: 5, high: 30_000)
+        XCTAssertEqual(c.low, 40)
+        XCTAssertEqual(c.high, 16_000)
+        // The mid band stays at least an octave wide.
+        XCTAssertEqual(PolarityDetector.Crossovers(low: 800, high: 900).high, 1600)
+        XCTAssertEqual(PolarityDetector.Band.mid.range(.standard), "250 Hz to 2.5 kHz")
+        XCTAssertEqual(PolarityDetector.Band.high.range(.init(low: 100, high: 4000)), "above 4 kHz")
     }
 
     func testNothingInNoise() {
