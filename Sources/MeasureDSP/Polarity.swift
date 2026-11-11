@@ -53,18 +53,21 @@ public final class PolarityDetector {
     /// The last pulse, full range, from 1 ms before it to 10 ms after, scaled to a peak of 1.
     public private(set) var lastPulse: [Double] = []
 
-    private var chains: [Band: [Section]]
-    /// Each band's recent output, `history` samples, oldest first, ending at sample `index`.
-    private var buffers: [Band: [Double]]
+    /// Everything per band is kept in arrays in `Band.allCases` order, as dictionaries are too slow
+    /// for every sample of every mic.
+    private static let bands = Band.allCases
+    private var chains: [[Section]]
+    /// Each band's recent output, a ring of `history` samples; the next write goes at `write`.
+    private var buffers: [[Double]]
     private var write = 0
     private let history: Int
     /// Mean square of each band over about the last 20 ms, before the current sample.
-    private var envelope: [Band: Double]
+    private var envelope: [Double]
     private let envelopeCoefficient: Double
     private var index = 0
     private var holdUntil = 0
     /// The sample where the pulse being read started, and each band's background then.
-    private var pending: (start: Int, background: [Band: Double])?
+    private var pending: (start: Int, background: [Double])?
     private var signs: [Band: [Polarity]] = [:]
     private let pre: Int
     private let window: Int
@@ -74,17 +77,19 @@ public final class PolarityDetector {
         func pass(_ kind: EQFilter.Kind, _ f: Double) -> Section {
             Section(EQFilter(kind: kind, frequency: f, q: 0.7071).biquad(sampleRate: fs))
         }
-        chains = [
-            .full: [pass(.highPass, 20)],
-            .low: [pass(.highPass, 20), pass(.lowPass, 250)],
-            .mid: [pass(.highPass, 250), pass(.lowPass, 2500)],
-            .high: [pass(.highPass, 2500)],
-        ]
+        chains = Self.bands.map { band in
+            switch band {
+            case .full: return [pass(.highPass, 20)]
+            case .low: return [pass(.highPass, 20), pass(.lowPass, 250)]
+            case .mid: return [pass(.highPass, 250), pass(.lowPass, 2500)]
+            case .high: return [pass(.highPass, 2500)]
+            }
+        }
         pre = max(Int(0.001 * fs), 1)
         window = Int(0.015 * fs)
         history = Int(0.1 * fs)
-        buffers = Dictionary(uniqueKeysWithValues: Band.allCases.map { ($0, [Double](repeating: 0, count: Int(0.1 * fs))) })
-        envelope = Dictionary(uniqueKeysWithValues: Band.allCases.map { ($0, 0) })
+        buffers = Self.bands.map { _ in [Double](repeating: 0, count: Int(0.1 * fs)) }
+        envelope = Self.bands.map { _ in 0 }
         envelopeCoefficient = exp(-1 / (0.02 * fs))
         // Let the filters and the background settle before looking for pulses.
         holdUntil = Int(0.05 * fs)
@@ -101,24 +106,32 @@ public final class PolarityDetector {
 
     /// Adds the next samples from the mic.
     public func process(_ samples: [Double]) {
+        let count = Self.bands.count
+        let k = envelopeCoefficient
+        let threshold = Self.triggerRatio * Self.triggerRatio
         for x in samples {
-            var full = 0.0
-            for band in Band.allCases {
+            var outputs = (0.0, 0.0, 0.0, 0.0)
+            for b in 0..<count {
                 var y = x
-                for k in chains[band]!.indices { y = chains[band]![k].process(y) }
-                buffers[band]![write] = y
-                if band == .full { full = y }
+                for s in chains[b].indices { y = chains[b][s].process(y) }
+                buffers[b][write] = y
+                switch b {
+                case 0: outputs.0 = y
+                case 1: outputs.1 = y
+                case 2: outputs.2 = y
+                default: outputs.3 = y
+                }
             }
             // Look for a pulse against the background before this sample, then let this one in.
-            if pending == nil, index >= holdUntil, abs(full) > Self.floor,
-               full * full > Self.triggerRatio * Self.triggerRatio * envelope[.full]! {
+            let full = outputs.0
+            if pending == nil, index >= holdUntil, abs(full) > Self.floor, full * full > threshold * envelope[0] {
                 pending = (index, envelope)
                 holdUntil = index + Int(0.04 * sampleRate)
             }
-            for band in Band.allCases {
-                let y = buffers[band]![write]
-                envelope[band] = envelopeCoefficient * envelope[band]! + (1 - envelopeCoefficient) * y * y
-            }
+            envelope[0] = k * envelope[0] + (1 - k) * outputs.0 * outputs.0
+            envelope[1] = k * envelope[1] + (1 - k) * outputs.1 * outputs.1
+            envelope[2] = k * envelope[2] + (1 - k) * outputs.2 * outputs.2
+            envelope[3] = k * envelope[3] + (1 - k) * outputs.3 * outputs.3
             write = (write + 1) % history
             index += 1
             if let p = pending, index >= p.start + window {
@@ -130,16 +143,16 @@ public final class PolarityDetector {
 
     /// Band `band` from sample `from` for `count` samples, from the history.
     private func segment(_ band: Band, from: Int, count: Int) -> [Double] {
-        let buffer = buffers[band]!
+        let buffer = buffers[Self.bands.firstIndex(of: band)!]
         return (0..<count).map { i in
             let age = index - (from + i)
             return buffer[((write - age) % history + history) % history]
         }
     }
 
-    private func read(_ start: Int, background: [Band: Double]) {
+    private func read(_ start: Int, background: [Double]) {
         pulses += 1
-        for band in Band.allCases {
+        for (b, band) in Self.bands.enumerated() {
             let s = segment(band, from: start - pre, count: pre + window)
             let peak = s.map(abs).max() ?? 0
             readings[band]!.level = 20 * log10(max(peak, 1e-10))
@@ -148,7 +161,7 @@ public final class PolarityDetector {
                 lastPulse = peak > 0 ? shown.map { $0 / peak } : shown
             }
             // Too weak in this band to say: a speaker that does not reproduce it, or noise.
-            guard peak > Self.floor / 4, peak * peak > 16 * background[band]! else { continue }
+            guard peak > Self.floor / 4, peak * peak > 16 * background[b] else { continue }
             guard let first = s.first(where: { abs($0) >= 0.5 * peak }) else { continue }
             var votes = signs[band] ?? []
             votes.append(first > 0 ? .positive : .negative)
